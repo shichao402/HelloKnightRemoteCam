@@ -19,6 +19,10 @@ if [ "$BUILD_TYPE" = "macos" ]; then
         echo "请先运行构建脚本"
         exit 1
     fi
+    # 确保移除隔离属性（如果存在）
+    echo "检查并移除隔离属性..."
+    xattr -d com.apple.quarantine "$APP_PATH" 2>/dev/null || true
+    xattr -d com.apple.provenance "$APP_PATH" 2>/dev/null || true
     echo "启动应用: $APP_PATH"
     open "$APP_PATH"
 else

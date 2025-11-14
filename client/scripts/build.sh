@@ -86,6 +86,11 @@ fi
 if [ "$BUILD_TYPE" = "macos" ]; then
     APP_PATH="$BUILD_PATH/remote_cam_client.app"
     if [ -d "$APP_PATH" ]; then
+        # 移除 macOS Gatekeeper 隔离属性（允许未签名应用运行）
+        echo "移除 macOS 隔离属性..."
+        xattr -d com.apple.quarantine "$APP_PATH" 2>/dev/null || true
+        xattr -d com.apple.provenance "$APP_PATH" 2>/dev/null || true
+        echo "✓ 已移除隔离属性"
         echo "========================================"
         echo "构建成功！"
         echo "应用位置: $APP_PATH"

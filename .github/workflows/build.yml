@@ -96,7 +96,7 @@ jobs:
           cd client/build/windows/x64/runner/Release
           $version = "${{ steps.get_version.outputs.FULL_VERSION }}"
           Compress-Archive -Path * -DestinationPath remote_cam_client_windows_${version}.zip -Force
-          Move-Item -Path remote_cam_client_windows_${version}.zip -Destination ../../../../../../
+          Move-Item -Path remote_cam_client_windows_${version}.zip -Destination ../../../../../
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
