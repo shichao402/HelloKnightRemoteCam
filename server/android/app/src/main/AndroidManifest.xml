@@ -17,7 +17,7 @@
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
     
     <application
-        android:label="远程相机服务端"
+        android:label="HelloKnightRCC"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
