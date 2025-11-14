@@ -4,28 +4,23 @@ import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
-import 'package:image/image.dart' as img;
 import '../models/camera_status.dart';
 import '../models/camera_settings.dart';
 import '../models/file_info.dart';
 import 'logger_service.dart';
 import 'file_index_service.dart';
 import 'media_scanner_service.dart';
+import 'native_camera_service.dart';
 
 class CameraService {
-  CameraController? controller;
   CameraStatus status = CameraStatus.idle;
   CameraSettings settings = const CameraSettings();
   final LoggerService _logger = LoggerService();
   final FileIndexService _fileIndex = FileIndexService();
+  NativeCameraService? _nativeCamera; // 原生相机服务（用于录制、预览和拍照）
   
   bool _isRecording = false;
-  bool _isTakingPhoto = false;
-  String? _currentVideoPath;
   Uint8List? _lastPreviewFrame;
-  
-  // 预览流相关
-  bool _isImageStreamActive = false;
   
   // 互斥锁，确保同一时间只有一个操作调用 takePicture()
   Future<void>? _takePictureLock;
@@ -36,182 +31,42 @@ class CameraService {
   }
 
   bool get isRecording => _isRecording;
-  bool get isInitialized => controller?.value.isInitialized ?? false;
+  bool get isInitialized => _nativeCamera?.isInitialized ?? false;
   Uint8List? get lastPreviewFrame => _lastPreviewFrame;
 
   // 初始化相机
+  // camera: 主相机（使用原生相机进行录制、预览和拍照）
   Future<void> initialize(CameraDescription camera, [CameraSettings? initialSettings]) async {
     if (initialSettings != null) {
       settings = initialSettings;
     }
 
-    controller = CameraController(
-      camera,
-      settings.videoResolutionPreset,
-      enableAudio: settings.enableAudio,
+    // 初始化原生相机服务（用于录制、预览和拍照，支持同时进行）
+    _nativeCamera = NativeCameraService();
+    _nativeCamera!.onPreviewFrame = (Uint8List frame) {
+      _lastPreviewFrame = frame;
+    };
+    
+    // 获取相机ID（camera.name通常是数字字符串，如"0", "1"）
+    final cameraId = camera.name;
+    final success = await _nativeCamera!.initialize(
+      cameraId,
+      previewWidth: 640,
+      previewHeight: 480,
     );
     
-    await controller!.initialize();
+    if (!success) {
+      _nativeCamera?.release();
+      _nativeCamera = null;
+      throw Exception('原生相机初始化失败：返回false');
+    }
     
-    // 启动预览流以获取预览帧（不触发闪光灯）
-    _startImageStream();
+    _logger.logCamera('原生相机初始化成功', details: '相机ID: $cameraId');
+    _logger.logCamera('原生相机支持同时录制和预览', details: '');
     
     status = CameraStatus.idle;
   }
   
-  // 启动图像流用于预览
-  Future<void> _startImageStream() async {
-    if (controller == null || !controller!.value.isInitialized) {
-      _logger.log('无法启动预览流：相机未初始化', tag: 'PREVIEW');
-      return;
-    }
-    
-    if (_isImageStreamActive) {
-      _logger.log('预览流已在运行', tag: 'PREVIEW');
-      return;
-    }
-    
-    try {
-      _isImageStreamActive = true;
-      await controller!.startImageStream((CameraImage image) {
-        try {
-          // 将 CameraImage 转换为 JPEG 字节
-          // 使用 try-catch 包裹，避免回调中的错误导致崩溃
-          _processCameraImage(image);
-        } catch (e, stackTrace) {
-          _logger.logError('图像流回调错误', error: e, stackTrace: stackTrace);
-        }
-      });
-      _logger.logCamera('预览流已启动');
-    } catch (e, stackTrace) {
-      _logger.logError('启动预览流失败', error: e, stackTrace: stackTrace);
-      _isImageStreamActive = false;
-    }
-  }
-  
-  // 停止图像流
-  Future<void> _stopImageStream() async {
-    if (!_isImageStreamActive || controller == null) {
-      return;
-    }
-    
-    try {
-      await controller!.stopImageStream();
-      _isImageStreamActive = false;
-      _logger.logCamera('预览流已停止');
-    } catch (e) {
-      _logger.logError('停止预览流失败', error: e);
-      _isImageStreamActive = false;
-    }
-  }
-  
-  // 处理相机图像，转换为 JPEG
-  // 使用异步处理，避免阻塞图像流回调
-  void _processCameraImage(CameraImage cameraImage) {
-    // 异步处理，不阻塞图像流回调
-    Future.microtask(() async {
-      try {
-        // 将 CameraImage (YUV420) 转换为 RGB Image
-        final img.Image? rgbImage = _convertYUV420ToImage(cameraImage);
-        if (rgbImage == null) {
-          return;
-        }
-        
-        // 编码为 JPEG
-        final jpegBytes = img.encodeJpg(rgbImage, quality: settings.previewQuality);
-        _lastPreviewFrame = Uint8List.fromList(jpegBytes);
-      } catch (e, stackTrace) {
-        _logger.logError('处理预览帧失败', error: e, stackTrace: stackTrace);
-      }
-    });
-  }
-  
-  // 将 YUV420 格式的 CameraImage 转换为 RGB Image
-  img.Image? _convertYUV420ToImage(CameraImage cameraImage) {
-    try {
-      if (cameraImage.planes.length < 3) {
-        _logger.log('图像平面数不足: ${cameraImage.planes.length}', tag: 'PREVIEW');
-        return null;
-      }
-      
-      final yPlane = cameraImage.planes[0];
-      final uPlane = cameraImage.planes[1];
-      final vPlane = cameraImage.planes[2];
-      
-      final width = cameraImage.width;
-      final height = cameraImage.height;
-      
-      // 检查图像尺寸是否合理
-      if (width <= 0 || height <= 0 || width > 10000 || height > 10000) {
-        _logger.log('无效的图像尺寸: $width x $height', tag: 'PREVIEW');
-        return null;
-      }
-      
-      // 检查字节数组边界
-      final ySize = yPlane.bytes.length;
-      final uSize = uPlane.bytes.length;
-      final vSize = vPlane.bytes.length;
-      
-      if (ySize == 0 || uSize == 0 || vSize == 0) {
-        _logger.log('图像数据为空', tag: 'PREVIEW');
-        return null;
-      }
-      
-      // 创建 RGB 图像
-      final rgbImage = img.Image(width: width, height: height);
-      
-      // YUV420 到 RGB 转换（添加边界检查）
-      for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-          try {
-            final yIndex = y * yPlane.bytesPerRow + x;
-            final uvIndex = (y ~/ 2) * uPlane.bytesPerRow + (x ~/ 2);
-            
-            // 边界检查
-            if (yIndex >= ySize || uvIndex >= uSize || uvIndex >= vSize) {
-              continue;
-            }
-            
-            final yValue = yPlane.bytes[yIndex];
-            final uValue = uPlane.bytes[uvIndex];
-            final vValue = vPlane.bytes[uvIndex];
-            
-            // YUV 到 RGB 转换
-            final r = _yuvToR(yValue, uValue, vValue);
-            final g = _yuvToG(yValue, uValue, vValue);
-            final b = _yuvToB(yValue, uValue, vValue);
-            
-            rgbImage.setPixel(x, y, img.ColorRgb8(r, g, b));
-          } catch (e) {
-            // 单个像素转换失败，继续处理下一个
-            continue;
-          }
-        }
-      }
-      
-      return rgbImage;
-    } catch (e, stackTrace) {
-      _logger.logError('YUV420转换失败', error: e, stackTrace: stackTrace);
-      return null;
-    }
-  }
-  
-  // YUV 到 RGB 转换辅助函数
-  int _yuvToR(int y, int u, int v) {
-    final r = (y + 1.402 * (v - 128)).round().clamp(0, 255);
-    return r;
-  }
-  
-  int _yuvToG(int y, int u, int v) {
-    final g = (y - 0.344 * (u - 128) - 0.714 * (v - 128)).round().clamp(0, 255);
-    return g;
-  }
-  
-  int _yuvToB(int y, int u, int v) {
-    final b = (y + 1.772 * (u - 128)).round().clamp(0, 255);
-    return b;
-  }
-
   // 重新配置相机（用于更改设置）
   Future<void> reconfigure(CameraSettings newSettings, CameraDescription camera) async {
     if (status == CameraStatus.recording) {
@@ -220,49 +75,20 @@ class CameraService {
 
     status = CameraStatus.reconfiguring;
     settings = newSettings;
-
-    // 停止预览流
-    await _stopImageStream();
     
-    // 释放旧的控制器
-    await controller?.dispose();
-
-    // 创建新的控制器
-    controller = CameraController(
-      camera,
-      settings.videoResolutionPreset,
-      enableAudio: settings.enableAudio,
-    );
-    
-    await controller!.initialize();
-    
-    // 启动预览流
-    _startImageStream();
-    
+    // 原生相机不需要重新配置，设置更改会在下次操作时生效
     status = CameraStatus.idle;
   }
 
   // 拍照
   Future<String> takePicture() async {
-    if (controller == null) {
-      _logger.logError('拍照失败', error: Exception('相机控制器为null'));
-      throw Exception('相机未初始化');
-    }
-
-    // 检查相机状态
-    if (!controller!.value.isInitialized) {
+    // 检查相机是否已初始化
+    if (!isInitialized) {
       _logger.logError('拍照失败', error: Exception('相机未初始化'));
       throw Exception('相机未初始化');
     }
 
-    // 检查是否有错误
-    if (controller!.value.hasError) {
-      final error = controller!.value.errorDescription ?? '未知错误';
-      _logger.logError('拍照失败', error: Exception('相机错误: $error'));
-      throw Exception('相机错误: $error');
-    }
-
-    _logger.logCamera('开始拍照', details: '相机状态: isInitialized=${controller!.value.isInitialized}, hasError=${controller!.value.hasError}');
+    _logger.logCamera('开始拍照', details: '');
 
     // 等待之前的操作完成
     if (_takePictureLock != null) {
@@ -276,58 +102,58 @@ class CameraService {
 
     try {
       status = CameraStatus.takingPhoto;
-      _isTakingPhoto = true;
 
       final String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
       final String fileName = 'IMG_$timestamp.jpg';
 
       _logger.logCamera('调用takePicture', details: '文件名: $fileName');
-      
-      // 再次检查相机状态（可能在等待期间状态改变）
-      if (!controller!.value.isInitialized || controller!.value.hasError) {
-        throw Exception('相机状态异常: isInitialized=${controller!.value.isInitialized}, hasError=${controller!.value.hasError}');
+
+      // 使用原生相机拍照
+      if (_nativeCamera == null || !_nativeCamera!.isInitialized) {
+        completer.complete();
+        throw Exception('原生相机未初始化');
       }
 
-      final XFile image = await controller!.takePicture();
-      _logger.logCamera('拍照成功', details: '临时文件: ${image.path}');
-      
-      // 保存到公共存储目录（Pictures/RemoteCam）
-      // 从应用目录获取外部存储根目录
-      final Directory? externalDir = await getExternalStorageDirectory();
+      // 获取图片保存路径
+      final externalDir = await getExternalStorageDirectory();
       if (externalDir == null) {
+        completer.complete();
         throw Exception('无法获取外部存储目录');
       }
       
-      // 从 /storage/emulated/0/Android/data/.../files 回到 /storage/emulated/0
-      final String storageRoot = externalDir.path.split('/Android/data')[0];
-      final String publicPicturesPath = path.join(storageRoot, 'Pictures', 'RemoteCam');
-      await Directory(publicPicturesPath).create(recursive: true);
-      final String savedPath = path.join(publicPicturesPath, fileName);
-      
-      _logger.logCamera('构建公共存储路径', details: '存储根目录: $storageRoot, 图片目录: $publicPicturesPath');
-      
-      // 复制文件到公共存储目录（Pictures/RemoteCam）
-      await File(image.path).copy(savedPath);
-      _logger.logCamera('文件已保存到公共存储目录', details: savedPath);
-      
-      // 通知MediaStore扫描新文件（Android 10+需要）
-      try {
-        await MediaScannerService.scanFile(savedPath);
-        _logger.logCamera('已通知MediaStore扫描文件', details: savedPath);
-      } catch (e, stackTrace) {
-        _logger.logError('MediaStore扫描失败', error: e, stackTrace: stackTrace);
-        // 扫描失败不影响主流程
+      final storageRoot = externalDir.path.split('/Android')[0];
+      final picturesDir = Directory(path.join(storageRoot, 'Pictures', 'RemoteCam'));
+      if (!await picturesDir.exists()) {
+        await picturesDir.create(recursive: true);
       }
       
-      // 记录文件信息到索引
+      final savedPath = path.join(picturesDir.path, fileName);
+      
+      final picturePath = await _nativeCamera!.takePicture(savedPath);
+      if (picturePath == null || picturePath.isEmpty) {
+        completer.complete();
+        throw Exception('原生相机拍照失败：返回null或空路径');
+      }
+      
+      _logger.logCamera('拍照成功', details: '文件路径: $picturePath');
+      
+      // 通知MediaStore扫描新文件
       try {
-        final savedFile = File(savedPath);
+        await MediaScannerService.scanFile(picturePath);
+        _logger.logCamera('已通知MediaStore扫描文件', details: picturePath);
+      } catch (e, stackTrace) {
+        _logger.logError('MediaStore扫描失败', error: e, stackTrace: stackTrace);
+      }
+      
+      // 添加到文件索引
+      try {
+        final savedFile = File(picturePath);
         final fileSize = await savedFile.length();
         final now = DateTime.now();
         
         await _fileIndex.addFile(
           name: fileName,
-          galleryPath: savedPath, // 使用外部存储路径
+          galleryPath: picturePath,
           fileType: 'image',
           size: fileSize,
           createdTime: now,
@@ -336,23 +162,24 @@ class CameraService {
         _logger.logCamera('文件索引已添加', details: fileName);
       } catch (e, stackTrace) {
         _logger.logError('添加文件索引失败', error: e, stackTrace: stackTrace);
-        // 索引失败不影响主流程
       }
       
-      await File(image.path).delete();
-      _logger.logCamera('临时文件已删除');
-
       status = CameraStatus.idle;
-      _isTakingPhoto = false;
-      return savedPath;
+      completer.complete();
+      return picturePath;
     } catch (e, stackTrace) {
       _logger.logError('拍照失败', error: e, stackTrace: stackTrace);
       status = CameraStatus.idle;
-      _isTakingPhoto = false;
+      // 如果completer还没有完成，在这里完成它
+      if (!completer.isCompleted) {
+        completer.complete();
+      }
       rethrow;
     } finally {
-      // 释放锁
-      completer.complete();
+      // 释放锁（如果completer还没有完成）
+      if (!completer.isCompleted) {
+        completer.complete();
+      }
       if (_takePictureLock == completer.future) {
         _takePictureLock = null;
       }
@@ -361,7 +188,7 @@ class CameraService {
 
   // 开始录像
   Future<String> startRecording() async {
-    if (controller == null || !controller!.value.isInitialized) {
+    if (!isInitialized) {
       throw Exception('相机未初始化');
     }
 
@@ -374,13 +201,34 @@ class CameraService {
 
     _logger.logCamera('开始录像', details: '文件名: $fileName');
     
-    // 开始录像（camera包会在cache目录创建临时文件）
-    await controller!.startVideoRecording();
+    if (_nativeCamera == null || !_nativeCamera!.isInitialized) {
+      throw Exception('原生相机未初始化');
+    }
+    
+    // 获取视频保存路径
+    final externalDir = await getExternalStorageDirectory();
+    if (externalDir == null) {
+      throw Exception('无法获取外部存储目录');
+    }
+    
+    final storageRoot = externalDir.path.split('/Android')[0];
+    final videoDir = Directory(path.join(storageRoot, 'Movies', 'RemoteCam'));
+    if (!await videoDir.exists()) {
+      await videoDir.create(recursive: true);
+    }
+    
+    final videoPath = path.join(videoDir.path, fileName);
+    
+    final success = await _nativeCamera!.startRecording(videoPath);
+    if (!success) {
+      throw Exception('原生相机开始录制失败');
+    }
+    
     _isRecording = true;
-    _currentVideoPath = fileName; // 只保存文件名，不保存路径
     status = CameraStatus.recording;
-
-    _logger.logCamera('录像已开始', details: '文件名: $fileName');
+    _logger.logCamera('录像已开始', details: '文件路径: $videoPath');
+    _logger.logCamera('原生相机支持同时录制和预览', details: '预览将继续更新');
+    
     return fileName;
   }
 
@@ -390,21 +238,25 @@ class CameraService {
       throw Exception('未在录像中');
     }
 
-    if (_currentVideoPath == null) {
-      throw Exception('录像文件名未设置');
+    if (_nativeCamera == null || !_nativeCamera!.isRecording) {
+      throw Exception('原生相机未在录制中');
     }
 
-    final String fileName = _currentVideoPath!;
-    _logger.logCamera('停止录像', details: '文件名: $fileName');
+    _logger.logCamera('停止录像', details: '');
     
-    final XFile video = await controller!.stopVideoRecording();
+    final savedPath = await _nativeCamera!.stopRecording();
+    if (savedPath == null || savedPath.isEmpty) {
+      throw Exception('原生相机停止录制返回null或空路径');
+    }
+    
     _isRecording = false;
     status = CameraStatus.idle;
-
-    _logger.logCamera('录像已停止', details: '临时文件: ${video.path}');
-
+    
+    _logger.logCamera('录像已停止', details: '文件路径: $savedPath');
+    _logger.logCamera('原生相机预览继续运行', details: '预览未中断');
+    
     // 等待文件完全写入
-    final videoFile = File(video.path);
+    final videoFile = File(savedPath);
     int retries = 0;
     while (!await videoFile.exists() && retries < 20) {
       await Future.delayed(const Duration(milliseconds: 100));
@@ -412,30 +264,13 @@ class CameraService {
     }
     
     if (!await videoFile.exists()) {
-      _logger.logError('录像文件不存在', error: Exception('源文件不存在: ${video.path}'));
-      throw Exception('录像文件不存在: ${video.path}');
+      _logger.logError('录像文件不存在', error: Exception('文件不存在: $savedPath'));
+      throw Exception('录像文件不存在: $savedPath');
     }
     
-    _logger.logCamera('源文件已存在', details: '文件大小: ${await videoFile.length()} bytes');
+    _logger.logCamera('录像文件已存在', details: '文件大小: ${await videoFile.length()} bytes');
     
-    // 保存到公共存储目录（Movies/RemoteCam）
-    // 从应用目录获取外部存储根目录
-    final Directory? externalDir = await getExternalStorageDirectory();
-    if (externalDir == null) {
-      throw Exception('无法获取外部存储目录');
-    }
-    
-    // 从 /storage/emulated/0/Android/data/.../files 回到 /storage/emulated/0
-    final String storageRoot = externalDir.path.split('/Android/data')[0];
-    final String publicMoviesPath = path.join(storageRoot, 'Movies', 'RemoteCam');
-    await Directory(publicMoviesPath).create(recursive: true);
-    final String savedPath = path.join(publicMoviesPath, fileName);
-    
-    _logger.logCamera('构建公共存储路径', details: '存储根目录: $storageRoot, 视频目录: $publicMoviesPath');
-    
-    // 复制文件到公共存储目录（Movies/RemoteCam）
-    await videoFile.copy(savedPath);
-    _logger.logCamera('文件已保存到公共存储目录', details: savedPath);
+    final String fileName = path.basename(savedPath);
     
     // 通知MediaStore扫描新文件（Android 10+需要）
     try {
@@ -443,68 +278,41 @@ class CameraService {
       _logger.logCamera('已通知MediaStore扫描文件', details: savedPath);
     } catch (e, stackTrace) {
       _logger.logError('MediaStore扫描失败', error: e, stackTrace: stackTrace);
-      // 扫描失败不影响主流程
     }
     
-    // 记录文件信息到索引
+    // 添加到文件索引
     try {
-      final savedFile = File(savedPath);
-      final fileSize = await savedFile.length();
+      final fileSize = await videoFile.length();
       final now = DateTime.now();
-      
       await _fileIndex.addFile(
         name: fileName,
-        galleryPath: savedPath, // 使用外部存储路径
+        galleryPath: savedPath,
         fileType: 'video',
         size: fileSize,
         createdTime: now,
         modifiedTime: now,
       );
-      _logger.logCamera('文件索引已添加', details: fileName);
+      _logger.logCamera('已添加到文件索引', details: '文件名: $fileName');
     } catch (e, stackTrace) {
       _logger.logError('添加文件索引失败', error: e, stackTrace: stackTrace);
-      // 索引失败不影响主流程
     }
     
-    // 删除临时文件
-    try {
-      await videoFile.delete();
-      _logger.logCamera('临时文件已删除', details: video.path);
-    } catch (e) {
-      // 忽略删除临时文件失败的错误
-      _logger.log('删除临时文件失败: $e', tag: 'CAMERA');
-    }
-
-    _currentVideoPath = null;
     _logger.logCamera('录像停止成功', details: savedPath);
     return savedPath;
   }
 
   // 捕获预览帧（用于实时预览）
-  // 现在使用图像流，不会触发闪光灯
   Future<Uint8List?> capturePreviewFrame() async {
-    if (controller == null || !controller!.value.isInitialized) {
-      // 相机未初始化，返回null
+    if (_nativeCamera == null || !_nativeCamera!.isInitialized) {
+      _logger.log('预览帧获取失败：原生相机未初始化', tag: 'PREVIEW');
       return null;
     }
-
-    // 如果预览流未启动，启动它
-    if (!_isImageStreamActive) {
-      _startImageStream();
+    
+    final frame = _nativeCamera!.getLastPreviewFrame();
+    if (frame == null) {
+      _logger.log('原生相机预览帧为null', tag: 'PREVIEW');
     }
-
-    // 如果正在录像，返回最后一帧
-    if (_isRecording) {
-      return _lastPreviewFrame;
-    }
-
-    // 如果正在拍照，返回最后一帧，避免冲突
-    if (_isTakingPhoto) {
-      return _lastPreviewFrame;
-    }
-
-    // 直接返回最后一帧（从图像流中获取，不触发闪光灯）
-    return _lastPreviewFrame;
+    return frame;
   }
 
   // 获取文件列表（从文件索引读取）
@@ -541,9 +349,10 @@ class CameraService {
   }
 
   // 释放资源
-  void dispose() {
-    controller?.dispose();
-    controller = null;
+  Future<void> dispose() async {
+    // 释放原生相机资源
+    await _nativeCamera?.release();
+    _nativeCamera = null;
   }
 }
 

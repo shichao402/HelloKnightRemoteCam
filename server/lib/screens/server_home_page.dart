@@ -58,9 +58,33 @@ class _ServerHomePageState extends State<ServerHomePage> {
       await _cameraService.initializeFileIndex();
       _logger.log('文件索引服务已初始化', tag: 'INIT');
       
-      // 初始化相机
-      await _cameraService.initialize(cameras.first, settings);
-      _logger.logCamera('相机初始化成功');
+      // 选择相机：优先使用后置相机作为主相机
+      // 注意：根据搜索结果，大多数Android设备不支持同时使用前后摄像头
+      // 因此我们使用单相机模式，尝试在录制时继续使用图像流进行预览
+      CameraDescription mainCamera;
+      
+      // 列出所有可用相机
+      _logger.log('可用相机列表:', tag: 'INIT');
+      for (var camera in cameras) {
+        _logger.log('  - ${camera.name}, 方向: ${camera.lensDirection}', tag: 'INIT');
+      }
+      
+      // 查找后置相机（主相机）
+      try {
+        mainCamera = cameras.firstWhere(
+          (camera) => camera.lensDirection == CameraLensDirection.back,
+        );
+        _logger.log('找到后置相机作为主相机: ${mainCamera.name}', tag: 'INIT');
+      } catch (e) {
+        // 如果没有后置相机，使用第一个相机（可能是前置）
+        mainCamera = cameras.first;
+        _logger.log('未找到后置相机，使用第一个相机作为主相机: ${mainCamera.name}, 方向: ${mainCamera.lensDirection}', tag: 'INIT');
+      }
+      
+      // 使用单相机模式（原生相机支持同时录制和预览）
+      await _cameraService.initialize(mainCamera, settings);
+      _logger.logCamera('相机初始化成功（单相机模式）', details: '相机: ${mainCamera.name} (${mainCamera.lensDirection})');
+      _logger.log('注意：录制时预览可能停止，取决于设备硬件支持', tag: 'INIT');
 
       // 创建HTTP服务器
       _httpServer = HttpServerService(
@@ -380,14 +404,18 @@ class _ServerHomePageState extends State<ServerHomePage> {
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: _cameraService.controller?.value.isInitialized ?? false
+                child: _cameraService.isInitialized
                     ? Stack(
                         children: [
                           Center(
-                            child: AspectRatio(
-                              aspectRatio:
-                                  _cameraService.controller!.value.aspectRatio,
-                              child: CameraPreview(_cameraService.controller!),
+                            child: Container(
+                              color: Colors.black,
+                              child: const Center(
+                                child: Text(
+                                  '预览通过客户端查看',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                              ),
                             ),
                           ),
                           if (_cameraService.isRecording)

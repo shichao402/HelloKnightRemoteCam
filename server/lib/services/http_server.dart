@@ -424,7 +424,7 @@ class HttpServerService {
               if (frameData == null) {
                 logger.log('预览帧为null (帧计数: $frameCount)', tag: 'PREVIEW');
                 // 如果相机未初始化，等待一段时间后重试
-                await Future.delayed(const Duration(milliseconds: 500));
+                await Future.delayed(const Duration(milliseconds: 100));
                 continue;
               }
               

@@ -84,7 +84,8 @@ echo "========================================"
 
 # 根据参数决定是否启动应用
 if [ "$AUTO_START" = true ]; then
-    echo "自动启动应用..."
+    echo "等待1秒后自动启动应用..."
+    sleep 1
     adb shell am start -n com.example.remote_cam_server/.MainActivity
     echo "应用已启动"
 else
@@ -92,6 +93,8 @@ else
     read -p "是否启动应用? (y/n) " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "等待1秒后启动应用..."
+        sleep 1
         adb shell am start -n com.example.remote_cam_server/.MainActivity
         echo "应用已启动"
     fi
