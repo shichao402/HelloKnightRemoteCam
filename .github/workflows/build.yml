@@ -3,6 +3,8 @@ name: Build Applications
 on:
   push:
     branches: [ main, master, develop ]
+    tags:
+      - 'v*'  # 当推送版本标签时触发
   pull_request:
     branches: [ main, master, develop ]
 
@@ -21,6 +23,19 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Extract version from pubspec.yaml
+        id: get_version
+        run: |
+          cd client
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
+          BUILD_NUMBER=$(grep '^version:' pubspec.yaml | sed 's/.*+//')
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+          echo "FULL_VERSION=${VERSION}+${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+          echo "TAG_VERSION=v${VERSION}" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+          echo "Build Number: $BUILD_NUMBER"
+
       - name: Get dependencies (Client)
         run: |
           cd client
@@ -34,14 +49,14 @@ jobs:
       - name: Archive macOS app
         run: |
           cd client/build/macos/Build/Products/Release
-          zip -r remote_cam_client_macos.zip remote_cam_client.app
-          mv remote_cam_client_macos.zip ../../../../../
+          zip -r remote_cam_client_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip remote_cam_client.app
+          mv remote_cam_client_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip ../../../../../
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: remote_cam_client_macos
-          path: client/remote_cam_client_macos.zip
+          path: client/remote_cam_client_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip
           retention-days: 30
 
   build-client-windows:
@@ -58,6 +73,23 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Extract version from pubspec.yaml
+        id: get_version
+        shell: powershell
+        run: |
+          cd client
+          $versionLine = Get-Content pubspec.yaml | Select-String -Pattern '^version:'
+          $version = $versionLine -replace 'version: ', '' -replace '\+.*', ''
+          $buildNumber = $versionLine -replace '.*\+', ''
+          $fullVersion = "${version}+${buildNumber}"
+          $tagVersion = "v${version}"
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "BUILD_NUMBER=$buildNumber" >> $env:GITHUB_OUTPUT
+          echo "FULL_VERSION=$fullVersion" >> $env:GITHUB_OUTPUT
+          echo "TAG_VERSION=$tagVersion" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $version"
+          Write-Host "Build Number: $buildNumber"
+
       - name: Get dependencies (Client)
         run: |
           cd client
@@ -72,14 +104,15 @@ jobs:
         shell: powershell
         run: |
           cd client/build/windows/x64/runner/Release
-          Compress-Archive -Path * -DestinationPath remote_cam_client_windows.zip -Force
-          Move-Item -Path remote_cam_client_windows.zip -Destination ../../../../../../
+          $version = "${{ steps.get_version.outputs.FULL_VERSION }}"
+          Compress-Archive -Path * -DestinationPath remote_cam_client_windows_${version}.zip -Force
+          Move-Item -Path remote_cam_client_windows_${version}.zip -Destination ../../../../../../
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: remote_cam_client_windows
-          path: client/remote_cam_client_windows.zip
+          path: client/remote_cam_client_windows_${{ steps.get_version.outputs.FULL_VERSION }}.zip
           retention-days: 30
 
   build-server-android:
@@ -102,6 +135,19 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Extract version from pubspec.yaml
+        id: get_version
+        run: |
+          cd server
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
+          BUILD_NUMBER=$(grep '^version:' pubspec.yaml | sed 's/.*+//')
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+          echo "FULL_VERSION=${VERSION}+${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+          echo "TAG_VERSION=v${VERSION}" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+          echo "Build Number: $BUILD_NUMBER"
+
       - name: Get dependencies (Server)
         run: |
           cd server
@@ -112,10 +158,93 @@ jobs:
           cd server
           flutter build apk --release
 
+      - name: Rename APK with version
+        run: |
+          cd server/build/app/outputs/flutter-apk
+          mv app-release.apk remote_cam_server_android_${{ steps.get_version.outputs.FULL_VERSION }}.apk
+
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: remote_cam_server_android
-          path: server/build/app/outputs/flutter-apk/app-release.apk
+          path: server/build/app/outputs/flutter-apk/remote_cam_server_android_${{ steps.get_version.outputs.FULL_VERSION }}.apk
           retention-days: 30
 
+  create-release:
+    name: Create Release
+    needs: [build-client-macos, build-client-windows, build-server-android]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: get_tag_version
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG_VERSION#v}
+          echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Tag Version: $TAG_VERSION"
+          echo "Version: $VERSION"
+
+      - name: Extract client version from pubspec.yaml
+        id: get_client_version
+        run: |
+          cd client
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
+          BUILD_NUMBER=$(grep '^version:' pubspec.yaml | sed 's/.*+//')
+          echo "FULL_VERSION=${VERSION}+${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+
+      - name: Extract server version from pubspec.yaml
+        id: get_server_version
+        run: |
+          cd server
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
+          BUILD_NUMBER=$(grep '^version:' pubspec.yaml | sed 's/.*+//')
+          echo "FULL_VERSION=${VERSION}+${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: remote_cam_client_macos
+          path: ./artifacts/macos
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: remote_cam_client_windows
+          path: ./artifacts/windows
+
+      - name: Download Android artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: remote_cam_server_android
+          path: ./artifacts/android
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.get_tag_version.outputs.TAG_VERSION }}
+          name: Release ${{ steps.get_tag_version.outputs.VERSION }}
+          body: |
+            ## Release ${{ steps.get_tag_version.outputs.VERSION }}
+
+            ### Client
+            - **macOS**: remote_cam_client_macos_${{ steps.get_client_version.outputs.FULL_VERSION }}.zip
+            - **Windows**: remote_cam_client_windows_${{ steps.get_client_version.outputs.FULL_VERSION }}.zip
+
+            ### Server
+            - **Android**: remote_cam_server_android_${{ steps.get_server_version.outputs.FULL_VERSION }}.apk
+
+            ### Changes
+            - See commit history for details
+          files: |
+            artifacts/macos/*
+            artifacts/windows/*
+            artifacts/android/*
+          draft: false
+          prerelease: false
