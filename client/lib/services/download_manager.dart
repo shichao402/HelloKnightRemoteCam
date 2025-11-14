@@ -31,6 +31,46 @@ class DownloadManager {
 
   Stream<List<DownloadTask>> get tasksStream => _tasksController.stream;
 
+  // 获取所有任务（包括等待、下载中）
+  List<DownloadTask> getTasks() {
+    final allTasks = <DownloadTask>[];
+    allTasks.addAll(_waitingQueue);
+    allTasks.addAll(_activeDownloads);
+    return allTasks;
+  }
+  
+  // 根据文件名查找任务（包括已完成的任务）
+  Future<DownloadTask?> findTaskByFileName(String fileName) async {
+    // 先检查内存中的任务
+    try {
+      final memoryTask = [..._waitingQueue, ..._activeDownloads].firstWhere(
+        (t) => t.fileName == fileName,
+      );
+      return memoryTask;
+    } catch (e) {
+      // 内存中没有找到
+    }
+    
+    // 检查数据库中的已完成任务
+    if (_database != null) {
+      try {
+        final List<Map<String, dynamic>> maps = await _database!.query(
+          'downloads',
+          where: 'fileName = ? AND status = ?',
+          whereArgs: [fileName, DownloadStatus.completed.toString()],
+        );
+        
+        if (maps.isNotEmpty) {
+          return DownloadTask.fromJson(maps.first);
+        }
+      } catch (e) {
+        // 忽略错误
+      }
+    }
+    
+    return null;
+  }
+
   // 初始化数据库
   Future<void> initialize() async {
     final dbPath = await getDatabasesPath();

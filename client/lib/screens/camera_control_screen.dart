@@ -238,6 +238,27 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
 
   Future<void> _autoDownloadPicture(FileInfo file) async {
     try {
+      // 检查是否已经在下载中或已完成
+      final existingTask = await _downloadManager.findTaskByFileName(file.name);
+      
+      if (existingTask != null) {
+        if (existingTask.status == DownloadStatus.downloading || 
+            existingTask.status == DownloadStatus.pending) {
+          // 已经在下载中
+          return;
+        }
+        
+        if (existingTask.status == DownloadStatus.completed) {
+          // 已经下载完成
+          if (mounted) {
+            _showDownloadSuccess(file.name, existingTask.localFilePath);
+            // 自动刷新文件列表
+            _refreshFileList();
+          }
+          return;
+        }
+      }
+      
       final taskId = await _downloadManager.addDownload(
         remoteFilePath: file.path,
         fileName: file.name,
@@ -258,6 +279,14 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           _downloadSubscription = null;
           if (mounted) {
             _showDownloadSuccess(file.name, task.localFilePath);
+            // 自动刷新文件列表
+            _refreshFileList();
+          }
+        } else if (task.status == DownloadStatus.failed) {
+          _downloadSubscription?.cancel();
+          _downloadSubscription = null;
+          if (mounted) {
+            _showError('下载失败: ${file.name}');
           }
         }
       });
@@ -323,13 +352,22 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           : await widget.apiService.startRecording();
 
       if (result['success']) {
+        final wasRecording = _isRecording;
         setState(() {
           _isRecording = !_isRecording;
         });
         _showSuccess(_isRecording ? '录像已开始' : '录像已停止');
         
-        if (!_isRecording) {
+        if (!wasRecording && _isRecording) {
+          // 录像已开始
+        } else if (wasRecording && !_isRecording) {
+          // 录像已停止，刷新文件列表并自动下载最新视频
           await _refreshFileList();
+          
+          if (_videos.isNotEmpty) {
+            final latestVideo = _videos.first; // 最新的视频在第一位
+            await _autoDownloadVideo(latestVideo);
+          }
         }
       } else {
         _showError('操作失败: ${result['error']}');
@@ -342,6 +380,66 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           _isOperating = false;
         });
       }
+    }
+  }
+
+  Future<void> _autoDownloadVideo(FileInfo file) async {
+    try {
+      // 检查是否已经在下载中或已完成
+      final existingTask = await _downloadManager.findTaskByFileName(file.name);
+      
+      if (existingTask != null) {
+        if (existingTask.status == DownloadStatus.downloading || 
+            existingTask.status == DownloadStatus.pending) {
+          // 已经在下载中
+          return;
+        }
+        
+        if (existingTask.status == DownloadStatus.completed) {
+          // 已经下载完成
+          if (mounted) {
+            _showDownloadSuccess(file.name, existingTask.localFilePath);
+            // 自动刷新文件列表
+            _refreshFileList();
+          }
+          return;
+        }
+      }
+      
+      final taskId = await _downloadManager.addDownload(
+        remoteFilePath: file.path,
+        fileName: file.name,
+      );
+      
+      // 取消之前的订阅
+      _downloadSubscription?.cancel();
+      
+      // 监听下载完成（只监听一次）
+      _downloadSubscription = _downloadManager.tasksStream.listen((tasks) {
+        final task = tasks.firstWhere(
+          (t) => t.id == taskId,
+          orElse: () => tasks.first,
+        );
+        
+        if (task.status == DownloadStatus.completed) {
+          _downloadSubscription?.cancel();
+          _downloadSubscription = null;
+          if (mounted) {
+            _showDownloadSuccess(file.name, task.localFilePath);
+            // 自动刷新文件列表
+            _refreshFileList();
+          }
+        } else if (task.status == DownloadStatus.failed) {
+          _downloadSubscription?.cancel();
+          _downloadSubscription = null;
+          if (mounted) {
+            _showError('下载失败: ${file.name}');
+          }
+        }
+      });
+    } catch (e) {
+      final logger = ClientLoggerService();
+      logger.logError('自动下载视频失败', error: e);
     }
   }
 

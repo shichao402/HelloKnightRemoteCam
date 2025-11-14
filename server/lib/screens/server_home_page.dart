@@ -5,6 +5,7 @@ import '../services/camera_service.dart';
 import '../services/settings_service.dart';
 import '../services/http_server.dart';
 import '../services/logger_service.dart';
+import '../services/operation_log_service.dart';
 import '../models/camera_status.dart';
 import 'debug_log_screen.dart';
 import 'server_settings_screen.dart';
@@ -393,69 +394,39 @@ class _ServerHomePageState extends State<ServerHomePage> {
 
           const SizedBox(height: 16),
 
-          // 相机预览
+          // 关键操作记录窗口
           Expanded(
             child: Container(
               margin: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.black,
+                color: Colors.grey[100],
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.grey),
+                border: Border.all(color: Colors.grey[300]!),
               ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: _cameraService.isInitialized
-                    ? Stack(
-                        children: [
-                          Center(
-                            child: Container(
-                              color: Colors.black,
-                              child: const Center(
-                                child: Text(
-                                  '预览通过客户端查看',
-                                  style: TextStyle(color: Colors.white),
-                                ),
-                              ),
-                            ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: const [
+                        Icon(Icons.history, size: 20),
+                        SizedBox(width: 8),
+                        Text(
+                          '操作记录',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
                           ),
-                          if (_cameraService.isRecording)
-                            Positioned(
-                              top: 16,
-                              right: 16,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.red,
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: const [
-                                    Icon(
-                                      Icons.fiber_manual_record,
-                                      color: Colors.white,
-                                      size: 16,
-                                    ),
-                                    SizedBox(width: 4),
-                                    Text(
-                                      '录像中',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                        ],
-                      )
-                    : const Center(
-                        child: CircularProgressIndicator(),
-                      ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: _buildOperationLogs(),
+                  ),
+                ],
               ),
             ),
           ),
@@ -484,6 +455,145 @@ class _ServerHomePageState extends State<ServerHomePage> {
         ),
       ],
     );
+  }
+
+  Widget _buildOperationLogs() {
+    final logs = _httpServer.operationLog.getLogs();
+    
+    if (logs.isEmpty) {
+      return const Center(
+        child: Text(
+          '暂无操作记录',
+          style: TextStyle(color: Colors.grey),
+        ),
+      );
+    }
+    
+    return ListView.builder(
+      padding: const EdgeInsets.all(8),
+      itemCount: logs.length,
+      itemBuilder: (context, index) {
+        final log = logs[index];
+        return _buildLogItem(log);
+      },
+    );
+  }
+
+  Widget _buildLogItem(OperationLog log) {
+    final timeStr = _formatTime(log.timestamp);
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            _getOperationIcon(log.type),
+            size: 20,
+            color: _getOperationColor(log.type),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  log.displayText,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Text(
+                      log.clientIp,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '·',
+                      style: TextStyle(color: Colors.grey[400]),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      timeStr,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  IconData _getOperationIcon(OperationType type) {
+    switch (type) {
+      case OperationType.takePicture:
+        return Icons.camera_alt;
+      case OperationType.startRecording:
+        return Icons.videocam;
+      case OperationType.stopRecording:
+        return Icons.videocam_off;
+      case OperationType.downloadStart:
+        return Icons.download;
+      case OperationType.downloadComplete:
+        return Icons.check_circle;
+      case OperationType.connect:
+        return Icons.link;
+      case OperationType.disconnect:
+        return Icons.link_off;
+    }
+  }
+
+  Color _getOperationColor(OperationType type) {
+    switch (type) {
+      case OperationType.takePicture:
+        return Colors.blue;
+      case OperationType.startRecording:
+        return Colors.red;
+      case OperationType.stopRecording:
+        return Colors.orange;
+      case OperationType.downloadStart:
+        return Colors.blue;
+      case OperationType.downloadComplete:
+        return Colors.green;
+      case OperationType.connect:
+        return Colors.teal;
+      case OperationType.disconnect:
+        return Colors.grey;
+    }
+  }
+
+  String _formatTime(DateTime time) {
+    final now = DateTime.now();
+    final diff = now.difference(time);
+    
+    if (diff.inSeconds < 60) {
+      return '刚刚';
+    } else if (diff.inMinutes < 60) {
+      return '${diff.inMinutes}分钟前';
+    } else if (diff.inHours < 24) {
+      return '${diff.inHours}小时前';
+    } else {
+      return '${time.month}/${time.day} ${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    }
   }
 
   String _getTimeSince(DateTime time) {

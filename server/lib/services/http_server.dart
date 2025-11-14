@@ -7,6 +7,7 @@ import 'package:shelf_router/shelf_router.dart';
 import 'camera_service.dart';
 import 'settings_service.dart';
 import 'logger_service.dart';
+import 'operation_log_service.dart';
 import '../models/camera_settings.dart';
 import '../models/camera_status.dart';
 
@@ -26,6 +27,7 @@ class HttpServerService {
   final CameraService cameraService;
   final SettingsService settingsService;
   final LoggerService logger = LoggerService();
+  final OperationLogService operationLog = OperationLogService();
   
   HttpServer? _server;
   String? _ipAddress;
@@ -181,10 +183,28 @@ class HttpServerService {
 
     // 拍照
     apiRouter.post('/capture', (Request request) async {
+      String? clientIp;
       try {
+        // 获取客户端IP
+        final connectionInfo = request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
+        if (connectionInfo != null) {
+          clientIp = connectionInfo.remoteAddress.address;
+        }
+        clientIp ??= request.headers['x-forwarded-for']?.split(',').first.trim() ?? 
+                     request.headers['x-real-ip'] ?? 'unknown';
+        
         logger.logCamera('开始拍照');
         final filePath = await cameraService.takePicture();
         logger.logCamera('拍照成功', details: filePath);
+        
+        // 记录操作日志
+        final fileName = filePath.split('/').last;
+        operationLog.addLog(
+          type: OperationType.takePicture,
+          clientIp: clientIp,
+          fileName: fileName,
+        );
+        
         return Response.ok(
           json.encode({'success': true, 'path': filePath}),
           headers: {'Content-Type': 'application/json'},
@@ -200,10 +220,28 @@ class HttpServerService {
 
     // 开始录像
     apiRouter.post('/recording/start', (Request request) async {
+      String? clientIp;
       try {
+        // 获取客户端IP
+        final connectionInfo = request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
+        if (connectionInfo != null) {
+          clientIp = connectionInfo.remoteAddress.address;
+        }
+        clientIp ??= request.headers['x-forwarded-for']?.split(',').first.trim() ?? 
+                     request.headers['x-real-ip'] ?? 'unknown';
+        
         logger.logCamera('开始录像');
         final filePath = await cameraService.startRecording();
         logger.logCamera('录像开始成功', details: filePath);
+        
+        // 记录操作日志
+        final fileName = filePath.split('/').last;
+        operationLog.addLog(
+          type: OperationType.startRecording,
+          clientIp: clientIp,
+          fileName: fileName,
+        );
+        
         return Response.ok(
           json.encode({'success': true, 'path': filePath}),
           headers: {'Content-Type': 'application/json'},
@@ -219,10 +257,28 @@ class HttpServerService {
 
     // 停止录像
     apiRouter.post('/recording/stop', (Request request) async {
+      String? clientIp;
       try {
+        // 获取客户端IP
+        final connectionInfo = request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
+        if (connectionInfo != null) {
+          clientIp = connectionInfo.remoteAddress.address;
+        }
+        clientIp ??= request.headers['x-forwarded-for']?.split(',').first.trim() ?? 
+                     request.headers['x-real-ip'] ?? 'unknown';
+        
         logger.logCamera('停止录像');
         final filePath = await cameraService.stopRecording();
         logger.logCamera('录像停止成功', details: filePath);
+        
+        // 记录操作日志
+        final fileName = filePath.split('/').last;
+        operationLog.addLog(
+          type: OperationType.stopRecording,
+          clientIp: clientIp,
+          fileName: fileName,
+        );
+        
         return Response.ok(
           json.encode({'success': true, 'path': filePath}),
           headers: {'Content-Type': 'application/json'},
@@ -258,7 +314,16 @@ class HttpServerService {
 
     // 下载文件（支持Range请求用于断点续传）
     apiRouter.get('/file/download', (Request request) async {
+      String? clientIp;
       try {
+        // 获取客户端IP
+        final connectionInfo = request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
+        if (connectionInfo != null) {
+          clientIp = connectionInfo.remoteAddress.address;
+        }
+        clientIp ??= request.headers['x-forwarded-for']?.split(',').first.trim() ?? 
+                     request.headers['x-real-ip'] ?? 'unknown';
+        
         final filePath = request.url.queryParameters['path'];
         if (filePath == null) {
           return Response.badRequest(
@@ -270,11 +335,27 @@ class HttpServerService {
         final file = await cameraService.getFile(filePath);
         final fileSize = await file.length();
         final filename = file.path.split('/').last;
-
+        
         // 检查是否为Range请求
         final rangeHeader = request.headers['range'];
-        if (rangeHeader != null && rangeHeader.startsWith('bytes=')) {
-          // 处理断点续传
+        final isRangeRequest = rangeHeader != null && rangeHeader.startsWith('bytes=');
+        final isFullDownload = request.method == 'GET' && !isRangeRequest;
+        
+        // HEAD 请求：只返回 headers，不返回 body（不记录操作日志）
+        if (request.method == 'HEAD') {
+          return Response.ok(
+            '',
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'Content-Disposition': 'attachment; filename="$filename"',
+              'Content-Length': fileSize.toString(),
+              'Accept-Ranges': 'bytes',
+            },
+          );
+        }
+
+        // Range 请求：处理断点续传（不记录操作日志）
+        if (isRangeRequest) {
           final range = rangeHeader.substring(6).split('-');
           final start = int.parse(range[0]);
           final end = range.length > 1 && range[1].isNotEmpty
@@ -300,7 +381,51 @@ class HttpServerService {
           );
         }
 
-        // 完整文件下载
+        // 完整文件下载 - 记录开始和完成
+        if (isFullDownload) {
+          // 记录下载开始
+          operationLog.addLog(
+            type: OperationType.downloadStart,
+            clientIp: clientIp,
+            fileName: filename,
+          );
+
+          // 使用 Stream 发送文件，在完成后记录下载完成
+          final stream = file.openRead();
+          final streamController = StreamController<List<int>>();
+          
+          stream.listen(
+            (data) {
+              streamController.add(data);
+            },
+            onDone: () {
+              // 下载完成后记录日志
+              operationLog.addLog(
+                type: OperationType.downloadComplete,
+                clientIp: clientIp ?? 'unknown',
+                fileName: filename,
+              );
+              streamController.close();
+            },
+            onError: (error) {
+              streamController.addError(error);
+              streamController.close();
+            },
+            cancelOnError: true,
+          );
+
+          return Response.ok(
+            streamController.stream,
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'Content-Disposition': 'attachment; filename="$filename"',
+              'Content-Length': fileSize.toString(),
+              'Accept-Ranges': 'bytes',
+            },
+          );
+        }
+
+        // 如果上面的条件不满足（不应该发生），使用原来的方式
         final bytes = await file.readAsBytes();
         return Response.ok(
           bytes,
