@@ -1,0 +1,29 @@
+name: remote_cam_server
+description: Remote camera server application
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  camera: ^0.10.5
+  shelf: ^1.4.1
+  shelf_router: ^1.1.4
+  path_provider: ^2.1.1
+  permission_handler: ^11.0.1
+  shared_preferences: ^2.2.2
+  path: ^1.8.3
+  image: ^4.1.3
+  sqflite: ^2.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
