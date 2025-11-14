@@ -1,0 +1,121 @@
+name: Build Applications
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  build-client-macos:
+    name: Build Client macOS
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies (Client)
+        run: |
+          cd client
+          flutter pub get
+
+      - name: Build macOS app
+        run: |
+          cd client
+          flutter build macos --release
+
+      - name: Archive macOS app
+        run: |
+          cd client/build/macos/Build/Products/Release
+          zip -r remote_cam_client_macos.zip remote_cam_client.app
+          mv remote_cam_client_macos.zip ../../../../../
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote_cam_client_macos
+          path: client/remote_cam_client_macos.zip
+          retention-days: 30
+
+  build-client-windows:
+    name: Build Client Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies (Client)
+        run: |
+          cd client
+          flutter pub get
+
+      - name: Build Windows app
+        run: |
+          cd client
+          flutter build windows --release
+
+      - name: Archive Windows app
+        shell: powershell
+        run: |
+          cd client/build/windows/x64/runner/Release
+          Compress-Archive -Path * -DestinationPath remote_cam_client_windows.zip -Force
+          Move-Item -Path remote_cam_client_windows.zip -Destination ../../../../../../
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote_cam_client_windows
+          path: client/remote_cam_client_windows.zip
+          retention-days: 30
+
+  build-server-android:
+    name: Build Server Android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies (Server)
+        run: |
+          cd server
+          flutter pub get
+
+      - name: Build Android APK
+        run: |
+          cd server
+          flutter build apk --release
+
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote_cam_server_android
+          path: server/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
+
