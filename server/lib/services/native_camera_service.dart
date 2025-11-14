@@ -79,6 +79,32 @@ class NativeCameraService {
       cancelOnError: false, // 不因错误取消订阅
     );
   }
+
+  /// 恢复预览流（应用切回前台时调用）
+  Future<void> resumePreview() async {
+    if (!_isInitialized) {
+      _logger.logCamera('相机未初始化，无法恢复预览流');
+      return;
+    }
+
+    try {
+      _logger.logCamera('恢复预览流', details: '重新启动EventChannel监听');
+      
+      // 重新启动预览流监听
+      _startPreviewStream();
+      
+      // 调用原生方法重新启动预览（如果原生端支持）
+      try {
+        await _methodChannel.invokeMethod('resumePreview');
+        _logger.logCamera('已调用原生方法恢复预览');
+      } catch (e) {
+        // 如果原生端不支持resumePreview方法，忽略错误
+        _logger.log('原生端不支持resumePreview方法，跳过', tag: 'PREVIEW');
+      }
+    } catch (e, stackTrace) {
+      _logger.logError('恢复预览流失败', error: e, stackTrace: stackTrace);
+    }
+  }
   
   /// 处理预览帧（数据已经是JPEG格式）
   void _processPreviewFrame(Uint8List jpegData) {

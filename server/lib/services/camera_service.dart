@@ -34,6 +34,13 @@ class CameraService {
   bool get isInitialized => _nativeCamera?.isInitialized ?? false;
   Uint8List? get lastPreviewFrame => _lastPreviewFrame;
 
+  /// 恢复预览流（应用切回前台时调用）
+  Future<void> resumePreview() async {
+    if (_nativeCamera != null && _nativeCamera!.isInitialized) {
+      await _nativeCamera!.resumePreview();
+    }
+  }
+
   // 初始化相机
   // camera: 主相机（使用原生相机进行录制、预览和拍照）
   Future<void> initialize(CameraDescription camera, [CameraSettings? initialSettings]) async {

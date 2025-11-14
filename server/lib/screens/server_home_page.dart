@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'dart:async';
+import 'dart:io';
 import '../services/camera_service.dart';
 import '../services/settings_service.dart';
 import '../services/http_server.dart';
 import '../services/logger_service.dart';
 import '../services/operation_log_service.dart';
+import '../services/foreground_service.dart';
 import '../models/camera_status.dart';
 import 'debug_log_screen.dart';
 import 'server_settings_screen.dart';
@@ -18,10 +20,11 @@ class ServerHomePage extends StatefulWidget {
   State<ServerHomePage> createState() => _ServerHomePageState();
 }
 
-class _ServerHomePageState extends State<ServerHomePage> {
+class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObserver {
   final CameraService _cameraService = CameraService();
   final SettingsService _settingsService = SettingsService();
   final LoggerService _logger = LoggerService();
+  final ForegroundService _foregroundService = ForegroundService();
   late HttpServerService _httpServer;
   
   bool _isInitialized = false;
@@ -34,7 +37,80 @@ class _ServerHomePageState extends State<ServerHomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializeServices();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stopRefreshTimer();
+    _httpServer.stop();
+    _cameraService.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      // 应用切回前台时，检查并恢复预览流
+      _logger.log('应用切回前台，检查预览流状态', tag: 'LIFECYCLE');
+      _checkAndRestorePreviewStream();
+    } else if (state == AppLifecycleState.paused) {
+      _logger.log('应用切到后台', tag: 'LIFECYCLE');
+    }
+  }
+
+  /// 检查并恢复预览流
+  Future<void> _checkAndRestorePreviewStream() async {
+    if (!_isInitialized || !_isServerRunning) {
+      return;
+    }
+
+    try {
+      // 检查相机是否已初始化
+      if (!_cameraService.isInitialized) {
+        _logger.log('相机未初始化，无法恢复预览流', tag: 'LIFECYCLE');
+        return;
+      }
+
+      // 等待一小段时间，让应用完全恢复
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // 尝试恢复预览流
+      _logger.log('尝试恢复预览流', tag: 'LIFECYCLE');
+      await _cameraService.resumePreview();
+      
+      // 等待一段时间后检查预览帧是否恢复
+      await Future.delayed(const Duration(milliseconds: 1000));
+      
+      final lastFrame = _cameraService.lastPreviewFrame;
+      if (lastFrame == null) {
+        _logger.log('预览帧仍为null，预览流可能未恢复', tag: 'LIFECYCLE');
+      } else {
+        _logger.log('预览流已恢复，最后预览帧大小: ${lastFrame.length} 字节', tag: 'LIFECYCLE');
+      }
+    } catch (e, stackTrace) {
+      _logger.logError('检查预览流状态失败', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  /// 检查并请求忽略电池优化
+  Future<void> _checkBatteryOptimization() async {
+    try {
+      final isIgnoring = await _foregroundService.isIgnoringBatteryOptimizations();
+      if (!isIgnoring) {
+        _logger.log('应用未忽略电池优化，将请求用户授权', tag: 'BATTERY');
+        // 延迟一下，避免在启动时立即弹出对话框
+        await Future.delayed(const Duration(seconds: 2));
+        await _foregroundService.requestIgnoreBatteryOptimizations();
+      } else {
+        _logger.log('应用已忽略电池优化', tag: 'BATTERY');
+      }
+    } catch (e, stackTrace) {
+      _logger.logError('检查电池优化状态失败', error: e, stackTrace: stackTrace);
+    }
   }
 
   Future<void> _initializeServices() async {
@@ -120,6 +196,11 @@ class _ServerHomePageState extends State<ServerHomePage> {
       });
       
       _logger.log('服务器启动成功: http://$_ipAddress:$_port', tag: 'SERVER');
+      
+      // 检查并请求忽略电池优化（仅在Android上）
+      if (Platform.isAndroid) {
+        await _checkBatteryOptimization();
+      }
       
       // 启动定时刷新UI（每2秒刷新一次连接设备列表）
       _startRefreshTimer();
@@ -607,11 +688,4 @@ class _ServerHomePageState extends State<ServerHomePage> {
     }
   }
 
-  @override
-  void dispose() {
-    _stopRefreshTimer();
-    _httpServer.stop();
-    _cameraService.dispose();
-    super.dispose();
-  }
 }

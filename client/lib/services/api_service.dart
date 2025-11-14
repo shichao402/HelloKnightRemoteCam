@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
+import 'dart:typed_data';
 import '../models/camera_settings.dart';
 import '../models/file_info.dart';
 import 'logger_service.dart';
@@ -336,6 +337,32 @@ class ApiService {
   // 获取文件下载URL
   String getFileDownloadUrl(String remotePath) {
     return '$baseUrl/file/download?path=${Uri.encodeComponent(remotePath)}';
+  }
+
+  // 获取缩略图URL（支持照片和视频）
+  String getThumbnailUrl(String remotePath, bool isVideo) {
+    return '$baseUrl/file/thumbnail?path=${Uri.encodeComponent(remotePath)}&type=${isVideo ? 'video' : 'image'}';
+  }
+
+  // 下载缩略图（支持照片和视频）
+  Future<Uint8List?> downloadThumbnail(String remotePath, bool isVideo) async {
+    try {
+      final uri = Uri.parse(getThumbnailUrl(remotePath, isVideo));
+      final request = await _httpClient.getUrl(uri);
+      final response = await request.close();
+      
+      if (response.statusCode == 200) {
+        final bytes = <int>[];
+        await for (final chunk in response) {
+          bytes.addAll(chunk);
+        }
+        return Uint8List.fromList(bytes);
+      }
+      return null;
+    } catch (e) {
+      logger.logError('下载缩略图失败', error: e);
+      return null;
+    }
   }
 }
 

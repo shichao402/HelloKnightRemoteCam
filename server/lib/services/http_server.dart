@@ -8,6 +8,8 @@ import 'camera_service.dart';
 import 'settings_service.dart';
 import 'logger_service.dart';
 import 'operation_log_service.dart';
+import 'foreground_service.dart';
+import 'media_scanner_service.dart';
 import '../models/camera_settings.dart';
 import '../models/camera_status.dart';
 
@@ -28,6 +30,7 @@ class HttpServerService {
   final SettingsService settingsService;
   final LoggerService logger = LoggerService();
   final OperationLogService operationLog = OperationLogService();
+  final ForegroundService _foregroundService = ForegroundService();
   
   HttpServer? _server;
   String? _ipAddress;
@@ -305,6 +308,56 @@ class HttpServerService {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
+        return Response.internalServerError(
+          body: json.encode({'success': false, 'error': e.toString()}),
+          headers: {'Content-Type': 'application/json'},
+        );
+      }
+    });
+
+    // 获取缩略图（支持照片和视频）
+    apiRouter.get('/file/thumbnail', (Request request) async {
+      try {
+        final filePath = request.url.queryParameters['path'];
+        final fileType = request.url.queryParameters['type'] ?? 'video'; // 默认为video以保持兼容
+        if (filePath == null) {
+          return Response.badRequest(
+            body: json.encode({'success': false, 'error': '缺少文件路径参数'}),
+            headers: {'Content-Type': 'application/json'},
+          );
+        }
+
+        // 获取缩略图路径
+        final thumbnailPath = await MediaScannerService.getThumbnail(filePath, fileType == 'video');
+        if (thumbnailPath == null) {
+          return Response(
+            404,
+            body: json.encode({'success': false, 'error': '缩略图不存在'}),
+            headers: {'Content-Type': 'application/json'},
+          );
+        }
+
+        final thumbnailFile = File(thumbnailPath);
+        if (!await thumbnailFile.exists()) {
+          return Response(
+            404,
+            body: json.encode({'success': false, 'error': '缩略图文件不存在'}),
+            headers: {'Content-Type': 'application/json'},
+          );
+        }
+
+        final thumbnailSize = await thumbnailFile.length();
+        final thumbnailBytes = await thumbnailFile.readAsBytes();
+
+        return Response.ok(
+          thumbnailBytes,
+          headers: {
+            'Content-Type': 'image/jpeg',
+            'Content-Length': thumbnailSize.toString(),
+          },
+        );
+      } catch (e, stackTrace) {
+        logger.logError('获取缩略图失败', error: e, stackTrace: stackTrace);
         return Response.internalServerError(
           body: json.encode({'success': false, 'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
@@ -608,11 +661,17 @@ class HttpServerService {
     _server = await shelf_io.serve(handler, InternetAddress.anyIPv4, _port);
     print('服务器运行在 http://$_ipAddress:$_port');
 
+    // 启动前台服务（保持应用在后台运行时继续工作）
+    await _foregroundService.start();
+
     return _ipAddress ?? 'localhost';
   }
 
   // 停止服务器
   Future<void> stop() async {
+    // 停止前台服务
+    await _foregroundService.stop();
+    
     await _server?.close(force: true);
     _server = null;
     print('服务器已停止');

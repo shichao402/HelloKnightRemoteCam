@@ -198,8 +198,23 @@ class Camera2Manager(private val context: Context) {
             requestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
             
             session.setRepeatingRequest(requestBuilder.build(), null, backgroundHandler)
+            Log.d(TAG, "预览已启动")
         } catch (e: Exception) {
             Log.e(TAG, "启动预览失败", e)
+        }
+    }
+
+    // 恢复预览（应用切回前台时调用）
+    fun resumePreview() {
+        try {
+            if (cameraDevice == null || captureSession == null) {
+                Log.w(TAG, "相机未初始化，无法恢复预览")
+                return
+            }
+            Log.d(TAG, "恢复预览")
+            startPreview()
+        } catch (e: Exception) {
+            Log.e(TAG, "恢复预览失败", e)
         }
     }
     

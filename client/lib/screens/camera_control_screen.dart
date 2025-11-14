@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'dart:io';
 import 'dart:async';
 import '../services/api_service.dart';
@@ -13,6 +14,7 @@ import 'device_connection_screen.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
+import '../services/download_settings_service.dart';
 
 class CameraControlScreen extends StatefulWidget {
   final ApiService apiService;
@@ -31,6 +33,8 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   List<FileInfo> _videos = [];
   late DownloadManager _downloadManager;
   StreamSubscription<List<DownloadTask>>? _downloadSubscription;
+  final DownloadSettingsService _downloadSettings = DownloadSettingsService();
+  final Map<String, bool> _downloadedStatusCache = {}; // 缓存下载状态
   
   // 连接状态管理
   bool _isConnected = true;
@@ -196,13 +200,29 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     try {
       final result = await widget.apiService.getFileList();
       if (result['success'] && mounted) {
+        final pictures = result['pictures'] as List<FileInfo>;
+        final videos = result['videos'] as List<FileInfo>;
+        
+        // 检查所有文件的下载状态
+        await _checkDownloadStatus([...pictures, ...videos]);
+        
         setState(() {
-          _pictures = result['pictures'] as List<FileInfo>;
-          _videos = result['videos'] as List<FileInfo>;
+          _pictures = pictures;
+          _videos = videos;
         });
       }
     } catch (e) {
       _showError('刷新文件列表失败: $e');
+    }
+  }
+
+  /// 批量检查文件下载状态
+  Future<void> _checkDownloadStatus(List<FileInfo> files) async {
+    final downloadDir = await _downloadSettings.getDownloadPath();
+    for (var file in files) {
+      final localPath = path.join(downloadDir, file.name);
+      final localFile = File(localPath);
+      _downloadedStatusCache[file.name] = await localFile.exists();
     }
   }
 
@@ -465,6 +485,16 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     );
   }
 
+  void _showInfo(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.blue,
+      ),
+    );
+  }
+
   void _navigateToSettings() async {
     // 显示选择对话框：相机设置或应用设置
     final choice = await showDialog<String>(
@@ -517,13 +547,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     }
   }
 
-  void _navigateToFileManager() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => FileManagerScreen(apiService: widget.apiService),
-      ),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -577,7 +600,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.folder),
-            onPressed: _navigateToFileManager,
+            onPressed: () => _navigateToFileManager(null),
             tooltip: '文件管理',
           ),
         ],
@@ -738,18 +761,360 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       itemCount: recentFiles.length,
       itemBuilder: (context, index) {
         final file = recentFiles[index];
-        return ListTile(
-          leading: Icon(
-            file.isVideo ? Icons.videocam : Icons.image,
-            color: file.isVideo ? Colors.red : Colors.blue,
+        final isDownloaded = _downloadedStatusCache[file.name] == true;
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Column(
+            children: [
+              ListTile(
+                leading: Icon(
+                  file.isVideo ? Icons.videocam : Icons.image,
+                  color: file.isVideo ? Colors.red : Colors.blue,
+                ),
+                title: Text(file.name),
+                subtitle: Text(file.formattedSize),
+                trailing: IconButton(
+                  icon: const Icon(Icons.location_on, size: 20),
+                  onPressed: () => _navigateToFileManager(file.name),
+                  tooltip: '定位到文件',
+                ),
+              ),
+              // 操作按钮区域
+              _buildFileActionButtons(file, compact: false),
+            ],
           ),
-          title: Text(file.name),
-          subtitle: Text(file.formattedSize),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: _navigateToFileManager,
         );
       },
     );
+  }
+  
+  /// 导航到文件管理并定位到指定文件
+  void _navigateToFileManager(String? fileName) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => FileManagerScreen(
+          apiService: widget.apiService,
+          highlightFileName: fileName,
+        ),
+      ),
+    );
+  }
+
+  /// 构建文件操作按钮（直接显示）
+  Widget _buildFileActionButtons(FileInfo file, {bool compact = false}) {
+    final isDownloaded = _downloadedStatusCache[file.name] == true;
+    
+    if (compact) {
+      // 紧凑模式
+      return PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, size: 18),
+        onSelected: (value) async {
+          switch (value) {
+            case 'download':
+              await _downloadFile(file);
+              break;
+            case 'open_in_manager':
+              await _openInFileManager(file);
+              break;
+            case 'copy':
+              await _copyFile(file);
+              break;
+            case 'delete_local':
+              await _deleteLocalFile(file);
+              break;
+          }
+        },
+        itemBuilder: (context) => [
+          PopupMenuItem(
+            value: 'download',
+            enabled: !isDownloaded,
+            child: Row(
+              children: [
+                Icon(Icons.download, color: isDownloaded ? Colors.grey : null),
+                const SizedBox(width: 8),
+                const Text('下载'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'open_in_manager',
+            enabled: isDownloaded,
+            child: Row(
+              children: [
+                Icon(Icons.folder_open, color: isDownloaded ? null : Colors.grey),
+                const SizedBox(width: 8),
+                const Text('在资源管理器中打开'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'copy',
+            enabled: isDownloaded,
+            child: Row(
+              children: [
+                Icon(Icons.copy, color: isDownloaded ? null : Colors.grey),
+                const SizedBox(width: 8),
+                const Text('复制文件'),
+              ],
+            ),
+          ),
+          const PopupMenuDivider(),
+          PopupMenuItem(
+            value: 'delete_local',
+            enabled: isDownloaded,
+            child: Row(
+              children: [
+                Icon(Icons.delete_forever, color: isDownloaded ? Colors.red : Colors.grey),
+                const SizedBox(width: 8),
+                Text(
+                  '删除本地文件',
+                  style: TextStyle(color: isDownloaded ? Colors.red : Colors.grey),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+    
+    // 完整模式（列表视图）
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              icon: const Icon(Icons.download, size: 16),
+              label: const Text('下载', style: TextStyle(fontSize: 12)),
+              onPressed: isDownloaded ? null : () => _downloadFile(file),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: OutlinedButton.icon(
+              icon: const Icon(Icons.folder_open, size: 16),
+              label: const Text('打开', style: TextStyle(fontSize: 12)),
+              onPressed: isDownloaded ? () => _openInFileManager(file) : null,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: OutlinedButton.icon(
+              icon: const Icon(Icons.copy, size: 16),
+              label: const Text('复制', style: TextStyle(fontSize: 12)),
+              onPressed: isDownloaded ? () => _copyFile(file) : null,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: OutlinedButton.icon(
+              icon: const Icon(Icons.delete_forever, size: 16),
+              label: const Text('删除', style: TextStyle(fontSize: 12)),
+              style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+              onPressed: isDownloaded ? () => _deleteLocalFile(file) : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 在系统资源管理器中打开并选中文件
+  Future<void> _openInFileManager(FileInfo file) async {
+    try {
+      final downloadDir = await _downloadSettings.getDownloadPath();
+      final localPath = path.join(downloadDir, file.name);
+      final localFile = File(localPath);
+      
+      if (!await localFile.exists()) {
+        _showInfo('文件不存在');
+        return;
+      }
+
+      // 跨平台打开文件管理器并选中文件
+      if (Platform.isMacOS) {
+        // macOS: open -R
+        await Process.run('open', ['-R', localPath]);
+      } else if (Platform.isWindows) {
+        // Windows: explorer /select,filepath
+        await Process.run('explorer', ['/select,', localPath]);
+      } else if (Platform.isLinux) {
+        // Linux: xdg-open (打开目录)
+        final dirPath = path.dirname(localPath);
+        await Process.run('xdg-open', [dirPath]);
+      } else {
+        _showInfo('不支持的操作系统');
+      }
+      
+      _showInfo('已在资源管理器中打开');
+    } catch (e) {
+      _showInfo('打开资源管理器失败: $e');
+    }
+  }
+
+  /// 复制文件到剪贴板（跨平台）
+  Future<void> _copyFile(FileInfo file) async {
+    try {
+      final downloadDir = await _downloadSettings.getDownloadPath();
+      final localPath = path.join(downloadDir, file.name);
+      final localFile = File(localPath);
+      
+      if (!await localFile.exists()) {
+        _showInfo('文件不存在');
+        return;
+      }
+
+      // 跨平台复制文件到剪贴板
+      if (Platform.isMacOS) {
+        // macOS: 使用 osascript 复制文件引用
+        try {
+          final escapedPath = localPath.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+          // 使用 POSIX file 复制文件引用，而不是文件内容
+          final script = 'set the clipboard to POSIX file "$escapedPath"';
+          final result = await Process.run('osascript', ['-e', script]);
+          if (result.exitCode == 0) {
+            _showInfo('文件已复制到剪贴板');
+          } else {
+            // 如果失败，复制文件路径
+            await Clipboard.setData(ClipboardData(text: localPath));
+            _showInfo('文件路径已复制到剪贴板');
+          }
+        } catch (e) {
+          // 如果失败，复制文件路径
+          await Clipboard.setData(ClipboardData(text: localPath));
+          _showInfo('文件路径已复制到剪贴板');
+        }
+      } else if (Platform.isWindows) {
+        // Windows: 使用 PowerShell 复制文件
+        try {
+          final escapedPath = localPath.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+          final result = await Process.run('powershell', [
+            '-Command',
+            'Set-Clipboard -Path "$escapedPath"',
+          ]);
+          if (result.exitCode == 0) {
+            _showInfo('文件已复制到剪贴板');
+          } else {
+            await Clipboard.setData(ClipboardData(text: localPath));
+            _showInfo('文件路径已复制到剪贴板');
+          }
+        } catch (e) {
+          await Clipboard.setData(ClipboardData(text: localPath));
+          _showInfo('文件路径已复制到剪贴板');
+        }
+      } else if (Platform.isLinux) {
+        // Linux: 使用 xclip 复制文件
+        try {
+          final fileBytes = await localFile.readAsBytes();
+          final process = await Process.start('xclip', ['-selection', 'clipboard', '-t', file.isVideo ? 'video/mp4' : 'image/png']);
+          process.stdin.add(fileBytes);
+          await process.stdin.close();
+          final exitCode = await process.exitCode;
+          if (exitCode == 0) {
+            _showInfo('文件已复制到剪贴板');
+          } else {
+            throw Exception('xclip failed with exit code $exitCode');
+          }
+        } catch (e) {
+          try {
+            final fileBytes = await localFile.readAsBytes();
+            final process = await Process.start('xsel', ['--clipboard', '--input']);
+            process.stdin.add(fileBytes);
+            await process.stdin.close();
+            final exitCode = await process.exitCode;
+            if (exitCode == 0) {
+              _showInfo('文件已复制到剪贴板');
+            } else {
+              throw Exception('xsel failed with exit code $exitCode');
+            }
+          } catch (e2) {
+            await Clipboard.setData(ClipboardData(text: localPath));
+            _showInfo('文件路径已复制到剪贴板（请安装 xclip 或 xsel 以支持文件复制）');
+          }
+        }
+      } else {
+        await Clipboard.setData(ClipboardData(text: localPath));
+        _showInfo('文件路径已复制到剪贴板');
+      }
+    } catch (e) {
+      _showInfo('复制失败: $e');
+    }
+  }
+
+  /// 删除本地文件
+  Future<void> _deleteLocalFile(FileInfo file) async {
+    try {
+      final downloadDir = await _downloadSettings.getDownloadPath();
+      final localPath = path.join(downloadDir, file.name);
+      final localFile = File(localPath);
+      
+      if (!await localFile.exists()) {
+        _showInfo('文件不存在');
+        return;
+      }
+
+      // 确认对话框
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('确认删除'),
+          content: Text('确定要删除本地文件 ${file.name} 吗？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: TextButton.styleFrom(foregroundColor: Colors.red),
+              child: const Text('删除'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) return;
+
+      await localFile.delete();
+      _downloadedStatusCache[file.name] = false;
+      setState(() {});
+      _showInfo('本地文件已删除');
+    } catch (e) {
+      _showInfo('删除失败: $e');
+    }
+  }
+
+  /// 下载文件
+  Future<void> _downloadFile(FileInfo file) async {
+    try {
+      // 检查是否已下载
+      final isDownloaded = _downloadedStatusCache[file.name] == true;
+      if (isDownloaded) {
+        _showInfo('文件已下载');
+        return;
+      }
+
+      // 检查是否正在下载
+      final existingTask = await _downloadManager.findTaskByFileName(file.name);
+      if (existingTask != null && 
+          (existingTask.status == DownloadStatus.downloading || 
+           existingTask.status == DownloadStatus.pending)) {
+        _showInfo('文件正在下载中');
+        return;
+      }
+
+      await _downloadManager.addDownload(
+        remoteFilePath: file.path,
+        fileName: file.name,
+      );
+      
+      final downloadDir = await _downloadSettings.getDownloadPath();
+      _showInfo('已添加到下载队列\n保存位置: $downloadDir');
+    } catch (e) {
+      _showInfo('添加下载失败: $e');
+    }
   }
 }
 
