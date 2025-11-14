@@ -95,10 +95,13 @@ adb shell am start -n com.example.remote_cam_server/.MainActivity
 ```bash
 cd client
 
-# 方式1：使用部署脚本
+# 方式1：使用部署脚本（推荐）
+./scripts/deploy.sh --debug --macos
+
+# 方式2：向后兼容脚本
 ./scripts/deploy_mac.sh
 
-# 方式2：直接运行
+# 方式3：直接运行
 flutter run -d macos
 ```
 
@@ -107,19 +110,25 @@ flutter run -d macos
 ```bash
 cd client
 
-# 方式1：使用部署脚本
+# 方式1：使用部署脚本（推荐，需要 Git Bash 或 WSL）
+bash scripts/deploy.sh --debug --windows
+
+# 方式2：向后兼容脚本（需要 Git Bash 或 WSL）
 scripts\deploy_windows.bat
 
-# 方式2：直接运行
+# 方式3：直接运行
 flutter run -d windows
 ```
 
-**Android平台：**
+**Android平台（Server）：**
 
 ```bash
-cd client
+cd server
 
-# 使用部署脚本
+# 方式1：使用部署脚本（推荐）
+./scripts/deploy.sh --debug
+
+# 方式2：向后兼容脚本
 ./scripts/deploy_android.sh
 ```
 

@@ -1,39 +1,31 @@
 @echo off
-REM 主控端 Windows 部署脚本
+REM 主控端 Windows 部署脚本（向后兼容包装器）
+REM 此脚本调用新的模块化部署脚本
 
-echo ========================================
-echo 开始构建主控端 Windows 应用
-echo ========================================
+setlocal
 
 cd /d "%~dp0\.."
 
-REM 检查Flutter是否可用
-where flutter >nul 2>nul
-if %errorlevel% neq 0 (
-    echo 错误: 未找到 Flutter 命令
-    echo 请确保 Flutter 已安装并添加到 PATH
-    exit /b 1
+REM 检查是否有 Git Bash 或 WSL
+where bash >nul 2>nul
+if %errorlevel% equ 0 (
+    REM 使用 bash 调用新的部署脚本
+    bash scripts/deploy.sh --debug --windows
+    exit /b %errorlevel%
 )
 
-REM 构建 Windows 应用
-echo 正在构建...
-flutter build windows --debug
-
-set BUILD_PATH=build\windows\runner\Debug
-
-if exist "%BUILD_PATH%" (
-    echo ========================================
-    echo 构建成功！
-    echo 应用位置: %BUILD_PATH%
-    echo ========================================
-    
-    REM 询问是否启动应用
-    set /p choice="是否启动应用? (y/n) "
-    if /i "%choice%"=="y" (
-        start "" "%BUILD_PATH%\remote_cam_client.exe"
-    )
-) else (
-    echo 构建失败，请检查错误信息
-    exit /b 1
+REM 如果没有 bash，尝试使用 WSL
+where wsl >nul 2>nul
+if %errorlevel% equ 0 (
+    wsl bash scripts/deploy.sh --debug --windows
+    exit /b %errorlevel%
 )
 
+REM 如果都没有，提示用户
+echo 错误: 未找到 bash 或 wsl 命令
+echo 请安装 Git for Windows 或 WSL 以使用新的模块化脚本
+echo.
+echo 或者使用旧的方式（需要手动构建）:
+echo   flutter build windows --debug
+echo   flutter run -d windows
+exit /b 1

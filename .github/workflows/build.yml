@@ -36,15 +36,10 @@ jobs:
           echo "Version: $VERSION"
           echo "Build Number: $BUILD_NUMBER"
 
-      - name: Get dependencies (Client)
-        run: |
-          cd client
-          flutter pub get
-
       - name: Build macOS app
         run: |
           cd client
-          flutter build macos --release
+          ./scripts/build.sh --release --macos
 
       - name: Archive macOS app
         run: |
@@ -90,15 +85,10 @@ jobs:
           Write-Host "Version: $version"
           Write-Host "Build Number: $buildNumber"
 
-      - name: Get dependencies (Client)
-        run: |
-          cd client
-          flutter pub get
-
       - name: Build Windows app
         run: |
           cd client
-          flutter build windows --release
+          bash scripts/build.sh --release --windows
 
       - name: Archive Windows app
         shell: powershell
@@ -148,15 +138,10 @@ jobs:
           echo "Version: $VERSION"
           echo "Build Number: $BUILD_NUMBER"
 
-      - name: Get dependencies (Server)
-        run: |
-          cd server
-          flutter pub get
-
       - name: Build Android APK
         run: |
           cd server
-          flutter build apk --release
+          ./scripts/build.sh --release
 
       - name: Rename APK with version
         run: |

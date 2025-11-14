@@ -95,12 +95,14 @@ catch (e, stackTrace) {
 - 需要查看日志时
 
 #### 2. 手机端部署脚本（强制使用）
-**路径：** `server/scripts/deploy_android.sh`
+**路径：** `server/scripts/deploy.sh` 或 `server/scripts/deploy_android.sh`（向后兼容）
 
 **用途：** 构建并部署手机端Android应用
 
 **使用方式：**
 ```bash
+cd server && ./scripts/deploy.sh --debug
+# 或使用向后兼容脚本
 cd server && ./scripts/deploy_android.sh
 ```
 
@@ -112,12 +114,14 @@ cd server && ./scripts/deploy_android.sh
 - 可选启动应用
 
 #### 3. Mac客户端部署脚本（强制使用）
-**路径：** `client/scripts/deploy_mac.sh`
+**路径：** `client/scripts/deploy.sh` 或 `client/scripts/deploy_mac.sh`（向后兼容）
 
 **用途：** 构建并部署Mac客户端应用
 
 **使用方式：**
 ```bash
+cd client && ./scripts/deploy.sh --debug --macos
+# 或使用向后兼容脚本
 cd client && ./scripts/deploy_mac.sh
 ```
 
@@ -127,12 +131,14 @@ cd client && ./scripts/deploy_mac.sh
 - 可选启动应用
 
 #### 4. Windows客户端部署脚本（强制使用）
-**路径：** `client/scripts/deploy_windows.bat`
+**路径：** `client/scripts/deploy.sh` 或 `client/scripts/deploy_windows.bat`（向后兼容）
 
 **用途：** 构建并部署Windows客户端应用
 
 **使用方式：**
 ```bash
+cd client && bash scripts/deploy.sh --debug --windows
+# 或使用向后兼容脚本（需要 Git Bash 或 WSL）
 cd client && scripts\deploy_windows.bat
 ```
 

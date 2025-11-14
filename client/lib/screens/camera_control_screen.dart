@@ -11,7 +11,6 @@ import 'settings_screen.dart';
 import 'file_manager_screen.dart';
 import 'client_settings_screen.dart';
 import 'device_connection_screen.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
@@ -317,8 +316,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   }
 
   Future<void> _showDownloadSuccess(String fileName, String filePath) async {
-    final directory = await getApplicationDocumentsDirectory();
-    final downloadDir = path.join(directory.path, 'downloads');
+    final downloadDir = await _downloadSettings.getDownloadPath();
     
     if (!mounted) return;
     
@@ -761,7 +759,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       itemCount: recentFiles.length,
       itemBuilder: (context, index) {
         final file = recentFiles[index];
-        final isDownloaded = _downloadedStatusCache[file.name] == true;
         return Card(
           margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           child: Column(

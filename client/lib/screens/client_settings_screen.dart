@@ -3,8 +3,6 @@ import 'package:flutter/services.dart';
 import 'dart:io';
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as path;
 import 'package:file_picker/file_picker.dart';
 
 class ClientSettingsScreen extends StatefulWidget {
