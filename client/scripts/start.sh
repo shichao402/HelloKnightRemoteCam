@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 BUILD_MODE_CAPITALIZED="$(echo ${BUILD_MODE:0:1} | tr '[:lower:]' '[:upper:]')${BUILD_MODE:1}"
 
 if [ "$BUILD_TYPE" = "macos" ]; then
-    APP_PATH="build/macos/Build/Products/$BUILD_MODE_CAPITALIZED/remote_cam_client.app"
+    APP_PATH="build/macos/Build/Products/$BUILD_MODE_CAPITALIZED/HelloKnightRCC.app"
     if [ ! -d "$APP_PATH" ]; then
         echo "错误: 应用未找到: $APP_PATH"
         echo "请先运行构建脚本"

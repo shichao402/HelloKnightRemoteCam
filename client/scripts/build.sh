@@ -64,7 +64,7 @@ $FLUTTER pub get
 if [ "$BUILD_TYPE" = "macos" ]; then
     # Flutter 构建输出路径使用首字母大写的模式名（Debug/Release）
     BUILD_MODE_CAPITALIZED="$(echo ${BUILD_MODE:0:1} | tr '[:lower:]' '[:upper:]')${BUILD_MODE:1}"
-    APP_PATH="build/macos/Build/Products/$BUILD_MODE_CAPITALIZED/remote_cam_client.app"
+    APP_PATH="build/macos/Build/Products/$BUILD_MODE_CAPITALIZED/HelloKnightRCC.app"
     if [ -d "$APP_PATH" ]; then
         echo "删除旧的 app 文件以使用增量编译..."
         rm -rf "$APP_PATH"
@@ -84,7 +84,7 @@ else
 fi
 
 if [ "$BUILD_TYPE" = "macos" ]; then
-    APP_PATH="$BUILD_PATH/remote_cam_client.app"
+    APP_PATH="$BUILD_PATH/HelloKnightRCC.app"
     if [ -d "$APP_PATH" ]; then
         # 移除 macOS Gatekeeper 隔离属性（允许未签名应用运行）
         echo "移除 macOS 隔离属性..."
