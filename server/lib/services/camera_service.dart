@@ -40,6 +40,11 @@ class CameraService {
       await _nativeCamera!.resumePreview();
     }
   }
+  
+  /// 设置检查活跃客户端连接的回调函数（用于控制预览帧处理）
+  void setHasActiveClientsCallback(bool Function()? callback) {
+    _nativeCamera?.setHasActiveClientsCallback(callback);
+  }
 
   // 初始化相机
   // camera: 主相机（使用原生相机进行录制、预览和拍照）

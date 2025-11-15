@@ -43,7 +43,7 @@ if adb devices | grep -q "device$"; then
             LATEST_LOG_NAME=$(basename "$LATEST_LOG")
             echo "读取最新日志文件: $LATEST_LOG_NAME"
             echo ""
-            adb shell run-as com.example.remote_cam_server cat "$LATEST_LOG" 2>/dev/null | tail -500 || echo "无法读取日志文件: $LATEST_LOG"
+            adb shell run-as com.example.remote_cam_server cat "$LATEST_LOG" 2>/dev/null || echo "无法读取日志文件: $LATEST_LOG"
             
             # 读取其他最近的日志文件（倒数第2和第3个）
             OTHER_LOGS=$(echo "$LOG_FILES" | tail -3 | head -2)
@@ -58,7 +58,7 @@ if adb devices | grep -q "device$"; then
                         echo "========================================"
                         echo "--- $logname ---"
                         echo "========================================"
-                        adb shell run-as com.example.remote_cam_server cat "$logpath" 2>/dev/null | tail -100 || true
+                        adb shell run-as com.example.remote_cam_server cat "$logpath" 2>/dev/null || true
                     fi
                 done
             fi
@@ -96,7 +96,7 @@ if [ -d "$CLIENT_LOG_DIR" ]; then
     echo ""
     echo "最新日志内容:"
     echo "========================================"
-    cat "$CLIENT_LOG_DIR"/client_debug_*.log 2>/dev/null | tail -100 || echo "无日志文件"
+    cat "$CLIENT_LOG_DIR"/client_debug_*.log 2>/dev/null || echo "无日志文件"
     echo "========================================"
 else
     echo "✗ 客户端日志目录不存在: $CLIENT_LOG_DIR"

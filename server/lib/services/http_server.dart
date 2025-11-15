@@ -61,18 +61,23 @@ class HttpServerService {
     final enabled = await ServerSettings.getAutoStopEnabled();
     final minutes = await ServerSettings.getAutoStopMinutes();
     
+    print('[AUTO_STOP] 更新自动停止设置: 启用=$enabled, 分钟数=$minutes');
+    logger.log('更新自动停止设置: 启用=$enabled, 分钟数=$minutes', tag: 'AUTO_STOP');
+    
     _autoStopEnabled = enabled;
     _autoStopMinutes = minutes;
     
-    // 如果启用了自动停止，检查当前状态
+    // 如果启用了自动停止，启动定时器（持续监控连接状态）
     if (_autoStopEnabled && isRunning) {
-      _checkAutoStop();
+      logger.log('自动停止已启用，启动监控定时器', tag: 'AUTO_STOP');
+      _startAutoStopTimer();
     } else {
+      logger.log('自动停止未启用或服务器未运行，取消定时器 (enabled=$enabled, isRunning=$isRunning)', tag: 'AUTO_STOP');
       _cancelAutoStopTimer();
     }
   }
 
-  // 更新连接设备信息
+  // 更新连接设备信息（仅在ping心跳时调用）
   void _updateConnectedDevice(String ipAddress) {
     // 忽略unknown和无效IP
     if (ipAddress == 'unknown' || ipAddress.isEmpty) {
@@ -81,7 +86,6 @@ class HttpServerService {
     
     final now = DateTime.now();
     final wasNew = !_connectedDevices.containsKey(ipAddress);
-    final hadConnections = _connectedDevices.isNotEmpty;
     
     if (_connectedDevices.containsKey(ipAddress)) {
       _connectedDevices[ipAddress]!.lastActivity = now;
@@ -94,29 +98,16 @@ class HttpServerService {
       logger.log('新设备连接: $ipAddress', tag: 'CONNECTION');
     }
     
-    // 清理5分钟未活动的设备
+    // 清理30秒未活动的设备（基于ping心跳：客户端每5秒ping一次，30秒是6个周期）
     final removed = <String>[];
     _connectedDevices.removeWhere((ip, device) {
-      final inactive = now.difference(device.lastActivity).inMinutes > 5;
+      final inactive = now.difference(device.lastActivity).inSeconds > 30;
       if (inactive) {
         removed.add(ip);
-        logger.log('设备断开连接: $ip (超时)', tag: 'CONNECTION');
+        logger.log('设备断开连接: $ip (ping心跳超时30秒)', tag: 'CONNECTION');
       }
       return inactive;
     });
-    
-    // 检查自动停止状态
-    if (_autoStopEnabled && isRunning) {
-      if (_connectedDevices.isEmpty && hadConnections) {
-        // 从有连接到无连接，开始计时
-        _noConnectionStartTime = now;
-        _startAutoStopTimer();
-      } else if (_connectedDevices.isNotEmpty) {
-        // 有连接，取消计时
-        _noConnectionStartTime = null;
-        _cancelAutoStopTimer();
-      }
-    }
     
     // 如果有变化，通知监听者（如果实现了）
     if (wasNew || removed.isNotEmpty) {
@@ -124,38 +115,27 @@ class HttpServerService {
     }
   }
   
-  // 检查自动停止状态
+  // 检查自动停止状态（简化版本：只清理过期连接，不管理定时器）
   void _checkAutoStop() {
     if (!_autoStopEnabled || !isRunning) {
-      _cancelAutoStopTimer();
-      _noConnectionStartTime = null;
       return;
     }
     
-    // 清理过期的连接（5分钟未活动）
+    // 清理过期的连接（30秒未活动视为断开，基于ping心跳）
     final now = DateTime.now();
     _connectedDevices.removeWhere((ip, device) {
-      return now.difference(device.lastActivity).inMinutes > 5;
-    });
-    
-    if (_connectedDevices.isEmpty) {
-      // 没有连接，开始计时
-      if (_noConnectionStartTime == null) {
-        _noConnectionStartTime = DateTime.now();
+      final inactive = now.difference(device.lastActivity).inSeconds > 30;
+      if (inactive) {
+        logger.log('设备断开连接: $ip (ping心跳超时30秒)', tag: 'CONNECTION');
       }
-      _startAutoStopTimer();
-    } else {
-      // 有连接，取消计时
-      _noConnectionStartTime = null;
-      _cancelAutoStopTimer();
-    }
+      return inactive;
+    });
   }
   
-  // 启动自动停止定时器
+  // 启动自动停止定时器（简化版本：持续运行，定期检查）
   void _startAutoStopTimer() {
-    _cancelAutoStopTimer();
-    
-    if (_noConnectionStartTime == null) {
+    // 如果定时器已经在运行，不重复启动
+    if (_autoStopTimer != null) {
       return;
     }
     
@@ -165,22 +145,64 @@ class HttpServerService {
       return;
     }
     
-    // 每秒检查一次
-    _autoStopTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_noConnectionStartTime == null) {
+    logger.log('启动自动停止定时器：分钟数=$_autoStopMinutes', tag: 'AUTO_STOP');
+    
+    // 每5秒检查一次（应用在后台时也能正常工作，因为有前台服务）
+    _autoStopTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      if (!_autoStopEnabled || !isRunning) {
         timer.cancel();
+        _autoStopTimer = null;
+        _noConnectionStartTime = null;
         return;
       }
       
-      final elapsed = DateTime.now().difference(_noConnectionStartTime!);
-      final elapsedMinutes = elapsed.inMinutes;
+      final now = DateTime.now();
       
-      // 如果达到设定的分钟数，执行自动停止
-      if (elapsedMinutes >= _autoStopMinutes) {
-        timer.cancel();
-        _autoStopTimer = null;
-        logger.log('自动停止服务器：无客户端连接已超过${_autoStopMinutes}分钟', tag: 'AUTO_STOP');
-        _onAutoStop?.call();
+      // 清理过期连接（30秒未活动视为断开，基于ping心跳）
+      _connectedDevices.removeWhere((ip, device) {
+        final inactiveSeconds = now.difference(device.lastActivity).inSeconds;
+        final inactive = inactiveSeconds > 30;
+        if (inactive) {
+          logger.log('设备断开连接: $ip (ping心跳超时30秒，实际不活跃${inactiveSeconds}秒)', tag: 'CONNECTION');
+        }
+        return inactive;
+      });
+      
+      // 检查连接状态
+      if (_connectedDevices.isEmpty) {
+        // 没有连接，开始或继续计时
+        if (_noConnectionStartTime == null) {
+          _noConnectionStartTime = now;
+          logger.log('开始自动停止计时，无连接时间: ${_noConnectionStartTime}', tag: 'AUTO_STOP');
+        } else {
+          final elapsed = now.difference(_noConnectionStartTime!);
+          final elapsedMinutes = elapsed.inMinutes;
+          final elapsedSeconds = elapsed.inSeconds;
+          
+          // 每30秒记录一次进度（避免日志过多）
+          if (elapsedSeconds % 30 == 0) {
+            logger.log('自动停止计时中：已无连接 ${elapsedMinutes}分${elapsedSeconds % 60}秒 / ${_autoStopMinutes}分钟', tag: 'AUTO_STOP');
+          }
+          
+          // 如果达到设定的分钟数，执行自动停止
+          if (elapsedMinutes >= _autoStopMinutes) {
+            timer.cancel();
+            _autoStopTimer = null;
+            logger.log('自动停止服务器：无客户端连接已超过${_autoStopMinutes}分钟', tag: 'AUTO_STOP');
+            if (_onAutoStop != null) {
+              logger.log('调用自动停止回调', tag: 'AUTO_STOP');
+              _onAutoStop!();
+            } else {
+              logger.logError('自动停止回调为null，无法停止服务器', error: Exception('回调未设置'));
+            }
+          }
+        }
+      } else {
+        // 有连接，重置计时
+        if (_noConnectionStartTime != null) {
+          logger.log('检测到活跃连接，取消自动停止计时', tag: 'AUTO_STOP');
+          _noConnectionStartTime = null;
+        }
       }
     });
   }
@@ -199,6 +221,10 @@ class HttpServerService {
 
   // 启动服务器
   Future<String> start(int port) async {
+    // 设置预览帧处理回调：只有在有活跃客户端连接时才处理预览帧
+    cameraService.setHasActiveClientsCallback(() {
+      return _connectedDevices.isNotEmpty;
+    });
     _port = port;
     final app = Router();
 
@@ -245,7 +271,7 @@ class HttpServerService {
           // 记录请求
           logger.logHttpRequest(request.method, request.url.path);
           
-          // OPTIONS 请求直接通过（CORS 预检），但不记录连接
+          // OPTIONS 请求直接通过（CORS 预检）
           if (request.method == 'OPTIONS') {
             return Response.ok('', headers: {
               'Access-Control-Allow-Origin': '*',
@@ -254,8 +280,8 @@ class HttpServerService {
             });
           }
 
-          // 记录连接设备（排除OPTIONS请求）
-          _updateConnectedDevice(clientIp);
+          // 注意：不再在中间件中更新连接状态，只在ping心跳时更新
+          // 这样可以确保只有活跃的ping心跳才会保持连接状态
           
           final response = await handler(request);
           logger.logHttpResponse(response.statusCode, request.url.path);
@@ -286,9 +312,10 @@ class HttpServerService {
       }
       
       logger.logHttpRequest('GET', '/ping');
-      logger.log('收到ping请求，来自: $clientIp', tag: 'CONNECTION');
+      logger.log('收到ping心跳请求，来自: $clientIp', tag: 'CONNECTION');
       
-      // ping请求也会通过中间件更新连接设备，这里不需要重复调用
+      // 更新连接设备信息（这是判断客户端是否在线的主要依据）
+      _updateConnectedDevice(clientIp);
       return Response.ok('pong');
     });
 
@@ -695,6 +722,25 @@ class HttpServerService {
     apiRouter.get('/preview/stream', (Request request) async {
       logger.log('收到预览流请求', tag: 'PREVIEW');
       
+      // 获取客户端IP地址（与中间件逻辑一致）
+      String clientIp = 'unknown';
+      if (request.headers.containsKey('x-forwarded-for')) {
+        final forwarded = request.headers['x-forwarded-for']!;
+        clientIp = forwarded.split(',').first.trim();
+      }
+      if (clientIp == 'unknown') {
+        final connectionInfo = request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
+        if (connectionInfo != null) {
+          clientIp = connectionInfo.remoteAddress.address;
+        }
+      }
+      if (clientIp == 'unknown' && request.headers.containsKey('x-real-ip')) {
+        clientIp = request.headers['x-real-ip']!;
+      }
+      
+      print('[PREVIEW] 预览流客户端IP: $clientIp');
+      logger.log('预览流客户端IP: $clientIp', tag: 'PREVIEW');
+      
       final controller = StreamController<List<int>>();
       const boundary = 'frame';
       
@@ -705,36 +751,119 @@ class HttpServerService {
           controller.add(utf8.encode('--$boundary\r\n'));
           
           int frameCount = 0;
-          while (!controller.isClosed) {
+          while (!controller.isClosed && isRunning) {
+            // 检查服务器是否还在运行，如果停止则退出循环
+            if (!isRunning) {
+              print('[PREVIEW] 服务器已停止，停止发送预览帧');
+              logger.log('服务器已停止，停止发送预览帧', tag: 'PREVIEW');
+              break;
+            }
+            
+            // 检查是否有活跃的连接设备，如果没有则等待
+            if (_connectedDevices.isEmpty) {
+              // 只在第一次检测到无连接时记录日志
+              if (frameCount == 0 || frameCount % 50 == 0) {
+                logger.log('没有活跃连接设备，暂停发送预览帧', tag: 'PREVIEW');
+              }
+              // 等待一段时间后重新检查
+              await Future.delayed(const Duration(milliseconds: 500));
+              continue;
+            }
+            
             try {
+              // 检查相机是否已初始化，如果未初始化则退出循环
+              if (!cameraService.isInitialized) {
+                print('[PREVIEW] 相机服务未初始化，停止发送预览帧');
+                logger.log('相机服务未初始化，停止发送预览帧', tag: 'PREVIEW');
+                break;
+              }
+              
               final frameData = await cameraService.capturePreviewFrame();
               frameCount++;
               
               if (frameData == null) {
-                logger.log('预览帧为null (帧计数: $frameCount)', tag: 'PREVIEW');
-                // 如果相机未初始化，等待一段时间后重试
+                // 如果相机未初始化，退出循环（服务器可能已停止）
+                if (!cameraService.isInitialized || !isRunning) {
+                  print('[PREVIEW] 相机服务未初始化或服务器已停止，停止发送预览帧');
+                  logger.log('相机服务未初始化或服务器已停止，停止发送预览帧', tag: 'PREVIEW');
+                  break;
+                }
+                // 每10次null才记录一次日志，避免日志过多
+                if (frameCount % 10 == 0) {
+                  logger.log('预览帧为null (帧计数: $frameCount)', tag: 'PREVIEW');
+                }
+                // 等待一段时间后重试
                 await Future.delayed(const Duration(milliseconds: 100));
                 continue;
               }
               
-              if (!controller.isClosed) {
-                logger.log('发送预览帧 #$frameCount，大小: ${frameData.length} 字节', tag: 'PREVIEW');
-                controller.add(utf8.encode('Content-Type: image/jpeg\r\n'));
-                controller.add(utf8.encode('Content-Length: ${frameData.length}\r\n\r\n'));
-                controller.add(frameData);
-                controller.add(utf8.encode('\r\n--$boundary\r\n'));
+              // 再次检查是否有活跃连接（可能在获取帧的过程中连接断开了）
+              if (_connectedDevices.isEmpty) {
+                // 只在第一次检测到无连接时记录日志
+                if (frameCount == 1 || frameCount % 50 == 0) {
+                  logger.log('获取预览帧后没有活跃连接设备，暂停发送', tag: 'PREVIEW');
+                }
+                await Future.delayed(const Duration(milliseconds: 500));
+                continue;
+              }
+              
+              if (!controller.isClosed && isRunning) {
+                // 每100帧记录一次日志，避免日志过多
+                if (frameCount % 100 == 0) {
+                  logger.log('发送预览帧 #$frameCount，大小: ${frameData.length} 字节', tag: 'PREVIEW');
+                }
+                
+                // 注意：不再通过预览流更新连接状态，主要依赖ping心跳来判断客户端是否在线
+                // 预览流是长连接，即使客户端断开，服务器端可能无法立即检测到
+                // 而ping心跳每5秒一次，30秒超时可以更可靠地检测客户端离线
+                
+                try {
+                  controller.add(utf8.encode('Content-Type: image/jpeg\r\n'));
+                  controller.add(utf8.encode('Content-Length: ${frameData.length}\r\n\r\n'));
+                  controller.add(frameData);
+                  controller.add(utf8.encode('\r\n--$boundary\r\n'));
+                } catch (e) {
+                  // 如果发送失败（连接已断开），跳出循环
+                  print('[PREVIEW] 发送预览帧失败，连接可能已断开: $e');
+                  logger.log('发送预览帧失败，连接可能已断开: $e', tag: 'PREVIEW');
+                  break;
+                }
+              } else {
+                // controller已关闭或服务器已停止，跳出循环
+                print('[PREVIEW] StreamController已关闭或服务器已停止，停止发送预览帧');
+                logger.log('StreamController已关闭或服务器已停止，停止发送预览帧', tag: 'PREVIEW');
+                break;
               }
               
               // 根据设置的帧率延迟
               await Future.delayed(Duration(milliseconds: 1000 ~/ cameraService.settings.previewFps));
             } catch (e, stackTrace) {
+              // 如果服务器已停止，退出循环
+              if (!isRunning) {
+                print('[PREVIEW] 服务器已停止，停止发送预览帧');
+                logger.log('服务器已停止，停止发送预览帧', tag: 'PREVIEW');
+                break;
+              }
               logger.logError('预览流错误', error: e, stackTrace: stackTrace);
               logger.log('预览流错误，停止发送', tag: 'PREVIEW');
               break;
             }
           }
         } finally {
-          logger.log('预览流结束，关闭控制器', tag: 'PREVIEW');
+          logger.log('预览流结束，关闭控制器，客户端IP: $clientIp', tag: 'PREVIEW');
+          
+          // 预览流断开时，清理连接记录（如果客户端IP有效）
+          if (clientIp != 'unknown' && clientIp.isNotEmpty) {
+            print('[PREVIEW] 预览流断开，清理连接记录: $clientIp');
+            _connectedDevices.remove(clientIp);
+            logger.log('预览流断开，已清理连接记录: $clientIp', tag: 'CONNECTION');
+            // 检查自动停止状态
+            if (_autoStopEnabled && isRunning) {
+              print('[AUTO_STOP] 预览流断开，检查自动停止状态');
+              _checkAutoStop();
+            }
+          }
+          
           if (!controller.isClosed) {
             await controller.close();
           }
@@ -742,6 +871,10 @@ class HttpServerService {
       }
       
       streamPreview();
+      
+      // 注意：不再监听stream，因为会消费stream导致客户端无法接收数据
+      // 连接断开检测主要依赖ping心跳（客户端每5秒ping一次）
+      // 当客户端断开时，stream会自动关闭，finally块会执行清理
       
       return Response.ok(
         controller.stream,
@@ -775,9 +908,10 @@ class HttpServerService {
     // 启动前台服务（保持应用在后台运行时继续工作）
     await _foregroundService.start();
     
-    // 加载自动停止设置并检查
+    // 加载自动停止设置并启动监控定时器（isRunning是getter，基于_server != null）
+    print('[AUTO_STOP] 开始加载自动停止设置...');
     await updateAutoStopSettings();
-    _checkAutoStop();
+    print('[AUTO_STOP] 自动停止设置加载完成，enabled=$_autoStopEnabled, minutes=$_autoStopMinutes');
 
     return _ipAddress ?? 'localhost';
   }

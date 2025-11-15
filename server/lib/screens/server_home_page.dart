@@ -150,37 +150,10 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
       final settings = await _settingsService.loadSettings();
       _logger.log('设置已加载: ${settings.toJson()}', tag: 'INIT');
 
-      // 初始化文件索引服务
+      // 初始化文件索引服务（不启动相机，相机在服务器启动时才启动）
       await _cameraService.initializeFileIndex();
       _logger.log('文件索引服务已初始化', tag: 'INIT');
-      
-      // 选择相机：优先使用后置相机作为主相机
-      // 注意：根据搜索结果，大多数Android设备不支持同时使用前后摄像头
-      // 因此我们使用单相机模式，尝试在录制时继续使用图像流进行预览
-      CameraDescription mainCamera;
-      
-      // 列出所有可用相机
-      _logger.log('可用相机列表:', tag: 'INIT');
-      for (var camera in cameras) {
-        _logger.log('  - ${camera.name}, 方向: ${camera.lensDirection}', tag: 'INIT');
-      }
-      
-      // 查找后置相机（主相机）
-      try {
-        mainCamera = cameras.firstWhere(
-          (camera) => camera.lensDirection == CameraLensDirection.back,
-        );
-        _logger.log('找到后置相机作为主相机: ${mainCamera.name}', tag: 'INIT');
-      } catch (e) {
-        // 如果没有后置相机，使用第一个相机（可能是前置）
-        mainCamera = cameras.first;
-        _logger.log('未找到后置相机，使用第一个相机作为主相机: ${mainCamera.name}, 方向: ${mainCamera.lensDirection}', tag: 'INIT');
-      }
-      
-      // 使用单相机模式（原生相机支持同时录制和预览）
-      await _cameraService.initialize(mainCamera, settings);
-      _logger.logCamera('相机初始化成功（单相机模式）', details: '相机: ${mainCamera.name} (${mainCamera.lensDirection})');
-      _logger.log('注意：录制时预览可能停止，取决于设备硬件支持', tag: 'INIT');
+      _logger.log('注意：相机服务将在服务器启动时初始化，以节省电量', tag: 'INIT');
 
       // 创建HTTP服务器
       _httpServer = HttpServerService(
@@ -215,6 +188,42 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
   Future<void> _startServer() async {
     try {
       _logger.log('正在启动服务器...', tag: 'SERVER');
+      
+      // 服务器启动时初始化相机服务（节省电量：服务器未启动时不使用相机）
+      if (!_cameraService.isInitialized) {
+        _logger.log('初始化相机服务...', tag: 'SERVER');
+        
+        // 选择相机：优先使用后置相机作为主相机
+        CameraDescription mainCamera;
+        
+        // 列出所有可用相机
+        _logger.log('可用相机列表:', tag: 'SERVER');
+        for (var camera in cameras) {
+          _logger.log('  - ${camera.name}, 方向: ${camera.lensDirection}', tag: 'SERVER');
+        }
+        
+        // 查找后置相机（主相机）
+        try {
+          mainCamera = cameras.firstWhere(
+            (camera) => camera.lensDirection == CameraLensDirection.back,
+          );
+          _logger.log('找到后置相机作为主相机: ${mainCamera.name}', tag: 'SERVER');
+        } catch (e) {
+          // 如果没有后置相机，使用第一个相机（可能是前置）
+          mainCamera = cameras.first;
+          _logger.log('未找到后置相机，使用第一个相机作为主相机: ${mainCamera.name}, 方向: ${mainCamera.lensDirection}', tag: 'SERVER');
+        }
+        
+        // 加载设置
+        final settings = await _settingsService.loadSettings();
+        
+        // 使用单相机模式（原生相机支持同时录制和预览）
+        await _cameraService.initialize(mainCamera, settings);
+        _logger.logCamera('相机初始化成功（单相机模式）', details: '相机: ${mainCamera.name} (${mainCamera.lensDirection})');
+        _logger.log('注意：录制时预览可能停止，取决于设备硬件支持', tag: 'SERVER');
+      }
+      
+      // 启动HTTP服务器（此时后台服务会自动启动）
       _ipAddress = await _httpServer.start(_port);
       setState(() {
         _isServerRunning = true;
@@ -253,7 +262,16 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
 
   Future<void> _stopServer() async {
     _logger.log('正在停止服务器...', tag: 'SERVER');
+    
+    // 停止HTTP服务器（此时后台服务会自动停止）
     await _httpServer.stop();
+    
+    // 停止相机服务（节省电量：服务器停止时不使用相机）
+    if (_cameraService.isInitialized) {
+      _logger.log('停止相机服务...', tag: 'SERVER');
+      await _cameraService.dispose();
+      _logger.log('相机服务已停止', tag: 'SERVER');
+    }
     
     // 停止定时刷新
     _stopRefreshTimer();

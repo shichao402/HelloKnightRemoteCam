@@ -18,6 +18,9 @@ class NativeCameraService {
   // 预览帧回调
   Function(Uint8List)? onPreviewFrame;
   
+  // 检查是否有活跃客户端连接的回调函数（返回true表示有活跃连接）
+  bool Function()? _hasActiveClientsCallback;
+  
   /// 初始化原生相机
   Future<bool> initialize(String cameraId, {int previewWidth = 640, int previewHeight = 480}) async {
     try {
@@ -59,6 +62,11 @@ class NativeCameraService {
     }
   }
   
+  /// 设置检查活跃客户端连接的回调函数
+  void setHasActiveClientsCallback(bool Function()? callback) {
+    _hasActiveClientsCallback = callback;
+  }
+  
   /// 启动预览流
   void _startPreviewStream() {
     _previewSubscription?.cancel();
@@ -69,8 +77,14 @@ class NativeCameraService {
       (dynamic data) {
         try {
           if (data is Uint8List) {
-            _logger.logCamera('收到预览帧数据', details: '大小: ${data.length} 字节');
+            // 只有在有活跃客户端连接时才处理预览帧数据
+            if (_hasActiveClientsCallback != null && !_hasActiveClientsCallback!()) {
+              // 没有活跃客户端，跳过处理（不记录日志，不更新_lastPreviewFrame）
+              return;
+            }
+            
             // 数据已经是JPEG格式（Android端已转换）
+            // 不记录每帧日志，避免日志过多
             _processPreviewFrame(data);
           } else {
             _logger.log('预览帧数据类型不正确: ${data.runtimeType}', tag: 'PREVIEW');
