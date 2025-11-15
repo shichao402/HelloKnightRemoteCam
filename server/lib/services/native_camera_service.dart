@@ -16,6 +16,10 @@ class NativeCameraService {
   bool _isInitialized = false;
   bool _isRecording = false;
   
+  // 实际预览尺寸（会在初始化后从Android端获取）
+  int _previewWidth = 640;
+  int _previewHeight = 480;
+  
   // 预览帧回调
   Function(Uint8List)? onPreviewFrame;
   
@@ -23,6 +27,8 @@ class NativeCameraService {
   bool Function()? _hasActiveClientsCallback;
   
   /// 初始化原生相机
+  /// previewWidth和previewHeight是请求的预览尺寸，Android端会根据相机能力选择最接近的尺寸
+  /// 如果传入640x480（默认值），Android端会自动选择最大的预览尺寸（不超过1920x1080）
   Future<bool> initialize(String cameraId, {int previewWidth = 640, int previewHeight = 480}) async {
     try {
       _logger.logCamera('初始化原生相机', details: '相机ID: $cameraId, 预览尺寸: ${previewWidth}x$previewHeight');
@@ -38,6 +44,8 @@ class NativeCameraService {
       
       if (result == true) {
         _isInitialized = true;
+        // 获取实际预览尺寸
+        _updatePreviewSize();
         _logger.logCamera('原生相机初始化成功');
         return true;
       } else {
@@ -63,6 +71,56 @@ class NativeCameraService {
   /// 设置检查活跃客户端连接的回调函数
   void setHasActiveClientsCallback(bool Function()? callback) {
     _hasActiveClientsCallback = callback;
+  }
+  
+  /// 设置方向锁定状态
+  Future<bool> setOrientationLock(bool locked) async {
+    try {
+      _logger.logCamera('设置方向锁定', details: '锁定状态: $locked');
+      final result = await _methodChannel.invokeMethod<bool>('setOrientationLock', {
+        'locked': locked,
+      });
+      return result ?? false;
+    } catch (e, stackTrace) {
+      _logger.logError('设置方向锁定失败', error: e, stackTrace: stackTrace);
+      return false;
+    }
+  }
+  
+  /// 获取预览尺寸
+  Future<void> _updatePreviewSize() async {
+    try {
+      final result = await _methodChannel.invokeMethod<Map<dynamic, dynamic>>('getPreviewSize');
+      if (result != null) {
+        _previewWidth = result['width'] as int? ?? 640;
+        _previewHeight = result['height'] as int? ?? 480;
+        _logger.logCamera('获取预览尺寸', details: '${_previewWidth}x$_previewHeight');
+      }
+    } catch (e, stackTrace) {
+      _logger.logError('获取预览尺寸失败', error: e, stackTrace: stackTrace);
+    }
+  }
+  
+  /// 获取预览尺寸
+  Map<String, int> getPreviewSize() {
+    return {
+      'width': _previewWidth,
+      'height': _previewHeight,
+    };
+  }
+  
+  /// 设置锁定状态下的旋转角度
+  Future<bool> setLockedRotationAngle(int angle) async {
+    try {
+      _logger.logCamera('设置锁定旋转角度', details: '角度: $angle');
+      final result = await _methodChannel.invokeMethod<bool>('setLockedRotationAngle', {
+        'angle': angle,
+      });
+      return result ?? false;
+    } catch (e, stackTrace) {
+      _logger.logError('设置锁定旋转角度失败', error: e, stackTrace: stackTrace);
+      return false;
+    }
   }
   
   /// 启动预览流

@@ -17,6 +17,7 @@ import 'logger_service.dart';
 import 'operation_log_service.dart';
 import 'foreground_service.dart';
 import 'media_scanner_service.dart';
+import 'orientation_service.dart';
 import '../models/camera_settings.dart';
 import '../models/camera_capabilities.dart';
 import '../models/camera_status.dart';
@@ -43,6 +44,7 @@ class HttpServerService {
   final OperationLogService operationLog = OperationLogService();
   final ForegroundService _foregroundService = ForegroundService();
   final DeviceInfoService _deviceInfoService = DeviceInfoService();
+  final OrientationService _orientationService = OrientationService();
   
   HttpServer? _server;
   String? _ipAddress;
@@ -356,6 +358,12 @@ class HttpServerService {
     // 启动单一预览帧广播循环
     _startPreviewBroadcast();
     
+    // 启动方向监听并设置回调
+    _orientationService.onOrientationChanged = (orientation) {
+      _broadcastOrientationChange(orientation);
+    };
+    _orientationService.startListening();
+    
     _port = port;
     final app = Router();
 
@@ -471,13 +479,15 @@ class HttpServerService {
         clientIp = 'unknown';
       }
       
-      // 发送初始连接确认
+      // 发送初始连接确认（包含预览尺寸）
+      final previewSize = cameraService.getPreviewSize();
       channel.sink.add(json.encode({
         'type': 'notification',
         'event': 'connected',
         'data': {
           'status': 'connected',
           'exclusive': _exclusiveWebSocketChannel == channel,
+          'previewSize': previewSize, // 包含预览尺寸
           'timestamp': DateTime.now().millisecondsSinceEpoch,
         },
       }));
@@ -865,6 +875,12 @@ class HttpServerService {
               _updateConnectedDevice(clientIp ?? 'websocket_client');
               result = {'success': true, 'message': 'pong'};
               break;
+            case 'setOrientationLock':
+              result = await _handleSetOrientationLockRequest(params);
+              break;
+            case 'setLockedRotationAngle':
+              result = await _handleSetLockedRotationAngleRequest(params);
+              break;
             default:
               _sendWebSocketResponse(channel, messageId, false, null, '未知的操作类型: $action');
               return;
@@ -1055,10 +1071,11 @@ class HttpServerService {
         final videoSizeMap = params['videoSize'] as Map<String, dynamic>;
         videoSize = Size.fromJson(videoSizeMap);
       }
-      if (params['previewSize'] != null) {
-        final previewSizeMap = params['previewSize'] as Map<String, dynamic>;
-        previewSize = Size.fromJson(previewSizeMap);
-      }
+      // 预览尺寸完全由服务端根据设备能力决定，忽略客户端传入的previewSize
+      // if (params['previewSize'] != null) {
+      //   final previewSizeMap = params['previewSize'] as Map<String, dynamic>;
+      //   previewSize = Size.fromJson(previewSizeMap);
+      // }
       if (params['videoFpsRange'] != null) {
         final fpsRangeMap = params['videoFpsRange'] as Map<String, dynamic>;
         videoFpsRange = FpsRange.fromJson(fpsRangeMap);
@@ -1067,6 +1084,7 @@ class HttpServerService {
       final currentSettings = await settingsService.loadSettings();
       
       // 创建新的设置对象（包含扩展参数）
+      // 注意：previewSize始终为null，因为预览尺寸由服务端根据设备能力自动决定
       final newSettings = currentSettings.copyWith(
         videoQuality: videoQualityStr,
         photoQuality: photoQualityStr,
@@ -1075,7 +1093,7 @@ class HttpServerService {
         previewQuality: previewQuality,
         photoSize: photoSize,
         videoSize: videoSize,
-        previewSize: previewSize,
+        previewSize: null, // 预览尺寸由服务端根据设备能力自动决定，不保存客户端设置
         videoFpsRange: videoFpsRange,
       );
       
@@ -1131,6 +1149,7 @@ class HttpServerService {
   
   /// 处理获取状态请求
   Future<Map<String, dynamic>> _handleGetStatusRequest() async {
+    final previewSize = cameraService.getPreviewSize();
     return {
       'success': true,
       'status': {
@@ -1139,6 +1158,7 @@ class HttpServerService {
         'currentStatus': cameraService.status.toString(),
         'canChangeSettings': cameraService.status.canChangeSettings,
         'isLocked': cameraService.status.isLocked,
+        'previewSize': previewSize, // 添加预览尺寸
       },
     };
   }
@@ -1199,6 +1219,46 @@ class HttpServerService {
   }
   
   /// 处理注册设备请求（设置独占连接的设备型号）
+  /// 处理设置方向锁定请求
+  Future<Map<String, dynamic>> _handleSetOrientationLockRequest(Map<String, dynamic> params) async {
+    try {
+      final locked = params['locked'] as bool? ?? true;
+      logger.log('设置方向锁定: $locked', tag: 'ORIENTATION');
+      
+      // 调用原生相机服务设置方向锁定
+      final success = await cameraService.setOrientationLock(locked);
+      
+      if (success) {
+        return {'success': true, 'locked': locked};
+      } else {
+        return {'success': false, 'error': '设置方向锁定失败'};
+      }
+    } catch (e, stackTrace) {
+      logger.logError('处理设置方向锁定请求失败', error: e, stackTrace: stackTrace);
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// 处理设置锁定旋转角度请求
+  Future<Map<String, dynamic>> _handleSetLockedRotationAngleRequest(Map<String, dynamic> params) async {
+    try {
+      final angle = params['angle'] as int? ?? 0;
+      logger.log('设置锁定旋转角度: $angle', tag: 'ORIENTATION');
+      
+      // 调用原生相机服务设置锁定旋转角度
+      final success = await cameraService.setLockedRotationAngle(angle);
+      
+      if (success) {
+        return {'success': true, 'angle': angle};
+      } else {
+        return {'success': false, 'error': '设置锁定旋转角度失败'};
+      }
+    } catch (e, stackTrace) {
+      logger.logError('处理设置锁定旋转角度请求失败', error: e, stackTrace: stackTrace);
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
   Future<Map<String, dynamic>> _handleRegisterDeviceRequest(Map<String, dynamic> params, WebSocketChannel channel) async {
     try {
       final deviceModel = params['deviceModel'] as String?;
@@ -1320,6 +1380,45 @@ class HttpServerService {
     
     logger.log('已广播新文件通知: $fileType, 文件数: ${filesData.length}, 成功发送: $successCount/${_webSocketChannels.length}', tag: 'WEBSOCKET');
   }
+  
+  /// 广播设备方向变化通知给所有连接的客户端（通过WebSocket）
+  void _broadcastOrientationChange(int orientation) {
+    logger.log('准备广播设备方向变化: $orientation 度, 当前WebSocket连接数: ${_webSocketChannels.length}', tag: 'WEBSOCKET');
+    
+    if (_webSocketChannels.isEmpty) {
+      logger.log('没有WebSocket连接，跳过广播', tag: 'WEBSOCKET');
+      return;
+    }
+    
+    final message = json.encode({
+      'type': 'notification',
+      'event': 'orientation_changed',
+      'data': {
+        'orientation': orientation, // 0, 90, 180, 270
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      },
+    });
+    
+    // 向所有连接的客户端广播
+    final channelsToRemove = <WebSocketChannel>[];
+    int successCount = 0;
+    for (final channel in _webSocketChannels) {
+      try {
+        channel.sink.add(message);
+        successCount++;
+      } catch (e) {
+        logger.log('广播方向变化通知失败: $e', tag: 'WEBSOCKET');
+        channelsToRemove.add(channel);
+      }
+    }
+    
+    // 清理已关闭的通道
+    for (final channel in channelsToRemove) {
+      _webSocketChannels.remove(channel);
+    }
+    
+    logger.log('已广播方向变化通知: $orientation 度, 成功发送: $successCount/${_webSocketChannels.length}', tag: 'WEBSOCKET');
+  }
 
   // 停止服务器
   Future<void> stop() async {
@@ -1339,6 +1438,9 @@ class HttpServerService {
     
     // 停止预览帧广播循环
     _stopPreviewBroadcast();
+    
+    // 停止方向监听
+    _orientationService.stopListening();
     
     // 关闭所有预览流连接
     logger.log('关闭所有预览流连接，共 ${_previewStreamControllers.length} 个', tag: 'PREVIEW');

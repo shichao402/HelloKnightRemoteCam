@@ -37,6 +37,11 @@ class CameraService {
   bool get isRecording => _isRecording;
   bool get isInitialized => _nativeCamera?.isInitialized ?? false;
   Uint8List? get lastPreviewFrame => _lastPreviewFrame;
+  
+  /// 获取预览尺寸
+  Map<String, int> getPreviewSize() {
+    return _nativeCamera?.getPreviewSize() ?? {'width': 640, 'height': 480};
+  }
 
   /// 恢复预览流（应用切回前台时调用）
   Future<void> resumePreview() async {
@@ -48,6 +53,50 @@ class CameraService {
   /// 设置检查活跃客户端连接的回调函数（用于控制预览帧处理）
   void setHasActiveClientsCallback(bool Function()? callback) {
     _nativeCamera?.setHasActiveClientsCallback(callback);
+  }
+  
+  /// 设置方向锁定状态
+  Future<bool> setOrientationLock(bool locked) async {
+    if (_nativeCamera == null || !_nativeCamera!.isInitialized) {
+      _logger.logError('设置方向锁定失败', error: Exception('相机未初始化'));
+      return false;
+    }
+    
+    try {
+      _logger.logCamera('设置方向锁定', details: '锁定状态: $locked');
+      final success = await _nativeCamera!.setOrientationLock(locked);
+      if (success) {
+        _logger.logCamera('方向锁定设置成功', details: '锁定状态: $locked');
+      } else {
+        _logger.logError('设置方向锁定失败', error: Exception('原生方法返回false'));
+      }
+      return success;
+    } catch (e, stackTrace) {
+      _logger.logError('设置方向锁定异常', error: e, stackTrace: stackTrace);
+      return false;
+    }
+  }
+  
+  /// 设置锁定状态下的旋转角度
+  Future<bool> setLockedRotationAngle(int angle) async {
+    if (_nativeCamera == null || !_nativeCamera!.isInitialized) {
+      _logger.logError('设置锁定旋转角度失败', error: Exception('相机未初始化'));
+      return false;
+    }
+    
+    try {
+      _logger.logCamera('设置锁定旋转角度', details: '角度: $angle');
+      final success = await _nativeCamera!.setLockedRotationAngle(angle);
+      if (success) {
+        _logger.logCamera('锁定旋转角度设置成功', details: '角度: $angle');
+      } else {
+        _logger.logError('设置锁定旋转角度失败', error: Exception('原生方法返回false'));
+      }
+      return success;
+    } catch (e, stackTrace) {
+      _logger.logError('设置锁定旋转角度异常', error: e, stackTrace: stackTrace);
+      return false;
+    }
   }
 
   // 初始化相机
@@ -68,10 +117,13 @@ class CameraService {
     
     // 获取相机ID（camera.name通常是数字字符串，如"0", "1"）
     final cameraId = camera.name;
+    
+    // 预览尺寸完全由服务端根据设备能力决定，不依赖客户端设置
+    // 传入默认值640x480，Android端会自动选择最大的预览尺寸（不超过1920x1080）
     final success = await _nativeCamera!.initialize(
       cameraId,
-      previewWidth: 640,
-      previewHeight: 480,
+      previewWidth: 640,  // 默认值，Android端会根据设备能力自动选择
+      previewHeight: 480, // 默认值，Android端会根据设备能力自动选择
     );
     
     if (!success) {
@@ -119,10 +171,13 @@ class CameraService {
       };
       
       final cameraId = camera.name;
+      
+      // 预览尺寸完全由服务端根据设备能力决定，不依赖客户端设置
+      // 传入默认值640x480，Android端会自动选择最大的预览尺寸（不超过1920x1080）
       final success = await _nativeCamera!.initialize(
         cameraId,
-        previewWidth: 640,
-        previewHeight: 480,
+        previewWidth: 640,  // 默认值，Android端会根据设备能力自动选择
+        previewHeight: 480, // 默认值，Android端会根据设备能力自动选择
       );
       
       if (!success) {

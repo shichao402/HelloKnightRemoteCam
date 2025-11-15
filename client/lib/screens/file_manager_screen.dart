@@ -1068,7 +1068,6 @@ class _FileManagerScreenState extends State<FileManagerScreen>
                   ),
                 ),
               ),
-            const Spacer(),
             if (_isSelectionMode) ...[
               // 全选按钮
               IconButton(

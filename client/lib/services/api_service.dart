@@ -446,6 +446,36 @@ class ApiService {
     }
   }
 
+  // 设置方向锁定状态（完全使用WebSocket）
+  Future<Map<String, dynamic>> setOrientationLock(bool locked) async {
+    try {
+      logger.logCommand('setOrientationLock', params: {'locked': locked}, details: '设置方向锁定: $locked');
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'setOrientationLock', 'locked': locked});
+      final result = await _sendWebSocketRequest('setOrientationLock', {'locked': locked});
+      logger.logCommandResponse('setOrientationLock', success: result['success'] == true, result: result, error: result['error']);
+      return result;
+    } catch (e, stackTrace) {
+      logger.logError('设置方向锁定失败', error: e, stackTrace: stackTrace);
+      logger.logCommandResponse('setOrientationLock', success: false, error: e.toString());
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  // 设置锁定状态下的旋转角度（完全使用WebSocket）
+  Future<Map<String, dynamic>> setLockedRotationAngle(int angle) async {
+    try {
+      logger.logCommand('setLockedRotationAngle', params: {'angle': angle}, details: '设置锁定旋转角度: $angle');
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'setLockedRotationAngle', 'angle': angle});
+      final result = await _sendWebSocketRequest('setLockedRotationAngle', {'angle': angle});
+      logger.logCommandResponse('setLockedRotationAngle', success: result['success'] == true, result: result, error: result['error']);
+      return result;
+    } catch (e, stackTrace) {
+      logger.logError('设置锁定旋转角度失败', error: e, stackTrace: stackTrace);
+      logger.logCommandResponse('setLockedRotationAngle', success: false, error: e.toString());
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
   // 获取当前设置（完全使用WebSocket）
   Future<Map<String, dynamic>> getSettings() async {
     try {

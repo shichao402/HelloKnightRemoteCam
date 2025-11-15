@@ -51,6 +51,24 @@ class Camera2Manager(private val context: Context) {
     // 持久化Surface（用于兼容性）
     private var persistentSurface: Surface? = null
     
+    // 方向锁定状态（true=锁定，使用固定方向；false=解锁，使用重力感应）
+    @Volatile
+    private var orientationLocked: Boolean = true // 默认锁定
+    
+    // 当前设备方向（用于解锁时计算JPEG方向）
+    @Volatile
+    private var currentDeviceOrientation: Int = 0
+    
+    // 锁定状态下的手动旋转角度（0, 90, 180, 270度）
+    @Volatile
+    private var lockedRotationAngle: Int = 0 // 默认0度（竖屏）
+    
+    // 实际选择的预览尺寸
+    @Volatile
+    private var actualPreviewWidth: Int = 640
+    @Volatile
+    private var actualPreviewHeight: Int = 480
+    
     suspend fun initialize(cameraId: String, previewWidth: Int, previewHeight: Int): Boolean {
         try {
             Log.d(TAG, "开始初始化相机，相机ID: $cameraId, 预览尺寸: ${previewWidth}x${previewHeight}")
@@ -66,9 +84,24 @@ class Camera2Manager(private val context: Context) {
             val previewSizes = streamConfigurationMap?.getOutputSizes(ImageFormat.YUV_420_888)
             
             // 选择预览尺寸
-            val previewSize = previewSizes?.firstOrNull { 
-                it.width <= previewWidth && it.height <= previewHeight 
-            } ?: previewSizes?.firstOrNull()
+            val previewSize = if (previewSizes == null || previewSizes.isEmpty()) {
+                Log.e(TAG, "无法找到合适的预览尺寸")
+                null
+            } else if (previewWidth == 640 && previewHeight == 480) {
+                // 如果传入的是默认值640x480，选择最大的预览尺寸（但不超过1920x1080）
+                previewSizes.filter { 
+                    it.width <= 1920 && it.height <= 1080 
+                }.maxByOrNull { 
+                    it.width * it.height 
+                } ?: previewSizes.first()
+            } else {
+                // 使用传入的尺寸，选择最接近的尺寸（小于等于传入尺寸的最大尺寸）
+                previewSizes.filter { 
+                    it.width <= previewWidth && it.height <= previewHeight 
+                }.maxByOrNull { 
+                    it.width * it.height 
+                } ?: previewSizes.first()
+            }
             
             if (previewSize == null) {
                 Log.e(TAG, "无法找到合适的预览尺寸")
@@ -76,7 +109,11 @@ class Camera2Manager(private val context: Context) {
                 return false
             }
             
-            Log.d(TAG, "选择预览尺寸: ${previewSize.width}x${previewSize.height}")
+            Log.d(TAG, "选择预览尺寸: ${previewSize.width}x${previewSize.height} (请求尺寸: ${previewWidth}x${previewHeight})")
+            
+            // 保存实际选择的预览尺寸
+            actualPreviewWidth = previewSize.width
+            actualPreviewHeight = previewSize.height
             
             // 先启动后台线程，确保backgroundHandler已初始化
             startBackgroundThread()
@@ -546,7 +583,16 @@ class Camera2Manager(private val context: Context) {
                 setVideoFrameRate(videoFrameRate)
                 setVideoEncodingBitRate(videoBitRate)
                 
-                Log.d(TAG, "MediaRecorder配置: 分辨率=${finalVideoSize.width}x${finalVideoSize.height}, 帧率=${videoFrameRate}fps, 比特率=${videoBitRate}")
+                // 设置视频方向
+                val videoOrientation = if (orientationLocked) {
+                    // 方向锁定：使用手动旋转角度
+                    lockedRotationAngle
+                } else {
+                    // 方向解锁：使用重力感应调整方向
+                    currentDeviceOrientation
+                }
+                setOrientationHint(videoOrientation)
+                Log.d(TAG, "MediaRecorder配置: 分辨率=${finalVideoSize.width}x${finalVideoSize.height}, 帧率=${videoFrameRate}fps, 比特率=${videoBitRate}, 方向=$videoOrientation (锁定=$orientationLocked)")
                 
                 // 如果使用持久化Surface，设置它
                 val persistentSurfaceToUse = persistentSurface
@@ -886,7 +932,19 @@ class Camera2Manager(private val context: Context) {
             val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val characteristics = cameraManager.getCameraCharacteristics(camera.id)
             val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-            val jpegOrientation = (sensorOrientation + 90) % 360
+            
+            val jpegOrientation = if (orientationLocked) {
+                // 方向锁定：使用手动旋转角度
+                // sensorOrientation + 90（基础补偿）+ lockedRotationAngle（手动旋转）
+                (sensorOrientation + 90 + lockedRotationAngle) % 360
+            } else {
+                // 方向解锁：使用重力感应调整方向
+                // 计算JPEG方向：sensorOrientation + deviceOrientation
+                // deviceOrientation是相对于竖屏的角度（0, 90, 180, 270）
+                (sensorOrientation + currentDeviceOrientation) % 360
+            }
+            
+            Log.d(TAG, "拍照方向设置: 锁定=$orientationLocked, 传感器方向=$sensorOrientation, 设备方向=$currentDeviceOrientation, JPEG方向=$jpegOrientation")
             requestBuilder.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
             
             // 触发拍照
@@ -1232,6 +1290,29 @@ class Camera2Manager(private val context: Context) {
             Log.e(TAG, "获取所有相机能力信息失败", e)
         }
         return capabilities
+    }
+    
+    // 设置方向锁定状态
+    fun setOrientationLock(locked: Boolean) {
+        orientationLocked = locked
+        Log.d(TAG, "方向锁定状态已设置: $locked")
+    }
+    
+    // 更新当前设备方向（用于解锁时计算方向）
+    fun updateDeviceOrientation(orientation: Int) {
+        currentDeviceOrientation = orientation
+        Log.d(TAG, "设备方向已更新: $orientation 度")
+    }
+    
+    // 设置锁定状态下的旋转角度
+    fun setLockedRotationAngle(angle: Int) {
+        lockedRotationAngle = angle
+        Log.d(TAG, "锁定旋转角度已设置: $angle 度")
+    }
+    
+    // 获取实际预览尺寸
+    fun getPreviewSize(): Pair<Int, Int> {
+        return Pair(actualPreviewWidth, actualPreviewHeight)
     }
 }
 

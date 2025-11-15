@@ -7,11 +7,15 @@ import '../services/logger_service.dart';
 class MjpegStreamWidget extends StatefulWidget {
   final String streamUrl;
   final BoxFit fit;
+  final int? previewWidth;  // 预览流的实际宽度（从服务器获取）
+  final int? previewHeight; // 预览流的实际高度（从服务器获取）
 
   const MjpegStreamWidget({
     Key? key,
     required this.streamUrl,
     this.fit = BoxFit.contain,
+    this.previewWidth,
+    this.previewHeight,
   }) : super(key: key);
 
   @override
@@ -25,11 +29,38 @@ class _MjpegStreamWidgetState extends State<MjpegStreamWidget> {
   Timer? _reconnectTimer;
   int _reconnectAttempts = 0;
   static const int _maxReconnectAttempts = 10;
+  
+  // 记录上次的预览尺寸，用于避免重复日志
+  int? _lastLoggedWidth;
+  int? _lastLoggedHeight;
 
   @override
   void initState() {
     super.initState();
     _logger.log('初始化MJPEG流: ${widget.streamUrl}', tag: 'PREVIEW');
+    // 记录初始预览尺寸
+    if (widget.previewWidth != null && widget.previewHeight != null) {
+      _logger.log('MjpegStreamWidget使用服务器预览尺寸: ${widget.previewWidth}x${widget.previewHeight}', tag: 'PREVIEW');
+      _lastLoggedWidth = widget.previewWidth;
+      _lastLoggedHeight = widget.previewHeight;
+    } else {
+      _logger.log('MjpegStreamWidget使用默认预览尺寸: 640x480 (服务器尺寸未提供)', tag: 'PREVIEW');
+    }
+  }
+  
+  @override
+  void didUpdateWidget(MjpegStreamWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 仅在预览尺寸变化时记录日志
+    if (widget.previewWidth != oldWidget.previewWidth || widget.previewHeight != oldWidget.previewHeight) {
+      if (widget.previewWidth != null && widget.previewHeight != null) {
+        _logger.log('MjpegStreamWidget预览尺寸已更新: ${widget.previewWidth}x${widget.previewHeight}', tag: 'PREVIEW');
+        _lastLoggedWidth = widget.previewWidth;
+        _lastLoggedHeight = widget.previewHeight;
+      } else {
+        _logger.log('MjpegStreamWidget预览尺寸已更新为默认值: 640x480', tag: 'PREVIEW');
+      }
+    }
   }
   
   @override
@@ -149,27 +180,42 @@ class _MjpegStreamWidgetState extends State<MjpegStreamWidget> {
       });
     }
 
-    return Mjpeg(
-      key: ValueKey('mjpeg_$_reconnectAttempts'), // 使用key强制重建以重连
-      isLive: true,
-      stream: widget.streamUrl,
-      error: (context, error, stack) {
-        _logger.logError('MJPEG流错误', error: error, stackTrace: stack);
-        // 延迟调用_onError，避免在build期间调用setState
-        Future.microtask(() => _onError(error.toString()));
-        return const Center(
-          child: Icon(
-            Icons.videocam_off,
-            size: 64,
-            color: Colors.grey,
-          ),
-        );
-      },
-      loading: (context) {
-        return const Center(
-          child: CircularProgressIndicator(),
-        );
-      },
+    // 使用预览流的实际分辨率（从服务器获取）
+    final previewWidth = widget.previewWidth ?? 640;
+    final previewHeight = widget.previewHeight ?? 480;
+    
+    // 使用FittedBox实现BoxFit效果，保持原始比例
+    return FittedBox(
+      fit: widget.fit, // BoxFit.contain 保持原始比例，内切于父容器
+      alignment: Alignment.center,
+      child: SizedBox(
+        // 使用预览流的实际分辨率（从服务器获取）
+        // 这个尺寸用于FittedBox计算缩放，确保保持原始比例
+        width: previewWidth.toDouble(),
+        height: previewHeight.toDouble(),
+        child: Mjpeg(
+          key: ValueKey('mjpeg_$_reconnectAttempts'), // 使用key强制重建以重连
+          isLive: true,
+          stream: widget.streamUrl,
+          error: (context, error, stack) {
+            _logger.logError('MJPEG流错误', error: error, stackTrace: stack);
+            // 延迟调用_onError，避免在build期间调用setState
+            Future.microtask(() => _onError(error.toString()));
+            return const Center(
+              child: Icon(
+                Icons.videocam_off,
+                size: 64,
+                color: Colors.grey,
+              ),
+            );
+          },
+          loading: (context) {
+            return const Center(
+              child: CircularProgressIndicator(),
+            );
+          },
+        ),
+      ),
     );
   }
 }

@@ -12,6 +12,7 @@ import android.util.Log
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.ThumbnailUtils
+import android.view.OrientationEventListener
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -26,9 +27,13 @@ class MainActivity: FlutterActivity() {
     private val PREVIEW_STREAM_CHANNEL = "com.example.remote_cam_server/preview_stream"
     private val FOREGROUND_SERVICE_CHANNEL = "com.example.remote_cam_server/foreground_service"
     private val DEVICE_INFO_CHANNEL = "com.example.remote_cam_server/device_info"
+    private val ORIENTATION_CHANNEL = "com.example.remote_cam_server/orientation"
     
     private var camera2Manager: Camera2Manager? = null
     private var previewStreamHandler: PreviewStreamHandler? = null
+    private var orientationEventListener: OrientationEventListener? = null
+    private var orientationEventSink: EventChannel.EventSink? = null
+    private var currentOrientation: Int = 0
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -154,6 +159,26 @@ class MainActivity: FlutterActivity() {
                     val caps = camera2Manager?.getAllCameraCapabilities()
                     result.success(caps)
                 }
+                "setOrientationLock" -> {
+                    val locked = call.argument<Boolean>("locked") ?: true
+                    camera2Manager?.setOrientationLock(locked)
+                    Log.d("MainActivity", "方向锁定状态已设置: $locked")
+                    result.success(true)
+                }
+                "setLockedRotationAngle" -> {
+                    val angle = call.argument<Int>("angle") ?: 0
+                    camera2Manager?.setLockedRotationAngle(angle)
+                    Log.d("MainActivity", "锁定旋转角度已设置: $angle")
+                    result.success(true)
+                }
+                "getPreviewSize" -> {
+                    val size = camera2Manager?.getPreviewSize()
+                    if (size != null) {
+                        result.success(mapOf("width" to size.first, "height" to size.second))
+                    } else {
+                        result.success(mapOf("width" to 640, "height" to 480))
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -194,6 +219,73 @@ class MainActivity: FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        
+        // Orientation Event Channel
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, ORIENTATION_CHANNEL).setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    orientationEventSink = events
+                    // 初始化时设置当前方向（默认为0，竖屏）
+                    camera2Manager?.updateDeviceOrientation(0)
+                    startOrientationListener()
+                }
+                
+                override fun onCancel(arguments: Any?) {
+                    stopOrientationListener()
+                    orientationEventSink = null
+                }
+            }
+        )
+    }
+    
+    // 启动方向监听器
+    private fun startOrientationListener() {
+        if (orientationEventListener != null) {
+            return
+        }
+        
+        orientationEventListener = object : OrientationEventListener(this) {
+            override fun onOrientationChanged(orientation: Int) {
+                // 将方向转换为标准角度（0, 90, 180, 270）
+                val normalizedOrientation = when {
+                    orientation >= 315 || orientation < 45 -> 0      // 竖屏
+                    orientation >= 45 && orientation < 135 -> 90      // 横屏右转
+                    orientation >= 135 && orientation < 225 -> 180     // 倒置
+                    orientation >= 225 && orientation < 315 -> 270    // 横屏左转
+                    else -> 0
+                }
+                
+                // 更新Camera2Manager的设备方向（无论是否改变都更新，用于解锁时计算方向）
+                camera2Manager?.updateDeviceOrientation(normalizedOrientation)
+                
+                // 只在方向改变时发送事件
+                if (normalizedOrientation != currentOrientation) {
+                    currentOrientation = normalizedOrientation
+                    Log.d("MainActivity", "设备方向改变: $currentOrientation 度")
+                    // 发送方向变化事件到Flutter层
+                    orientationEventSink?.success(currentOrientation)
+                }
+            }
+        }
+        
+        if (orientationEventListener?.canDetectOrientation() == true) {
+            orientationEventListener?.enable()
+            Log.d("MainActivity", "方向监听器已启动")
+        } else {
+            Log.w("MainActivity", "设备不支持方向检测")
+        }
+    }
+    
+    // 停止方向监听器
+    private fun stopOrientationListener() {
+        orientationEventListener?.disable()
+        orientationEventListener = null
+        Log.d("MainActivity", "方向监听器已停止")
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        stopOrientationListener()
     }
     
     // 获取设备信息

@@ -51,6 +51,25 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   
   // 左右布局比例（0.0-1.0，表示左侧占比）
   double _leftPanelRatio = 0.3; // 默认左侧30%
+  
+  // 设备方向（0=竖屏, 90=横屏右转, 180=倒置, 270=横屏左转）
+  // 使用ValueNotifier，只更新预览部分，不影响文件列表
+  final ValueNotifier<int> _deviceOrientationNotifier = ValueNotifier<int>(0);
+  
+  // 方向锁定状态（true=锁定，使用固定方向；false=解锁，使用重力感应）
+  bool _orientationLocked = true; // 默认锁定
+  
+  // 锁定状态下的手动旋转角度（0, 90, 180, 270度）
+  int _lockedRotationAngle = 0; // 默认0度（竖屏）
+  
+  // 当前旋转圈数（用于计算最短路径）
+  final ValueNotifier<double> _rotationTurnsNotifier = ValueNotifier<double>(0.0);
+  
+  // 预览尺寸（从服务器获取，默认640x480）
+  final ValueNotifier<Map<String, int>> _previewSizeNotifier = ValueNotifier<Map<String, int>>({'width': 640, 'height': 480});
+  
+  // 记录上次的预览尺寸，用于避免重复日志
+  Map<String, int>? _lastLoggedPreviewSize;
 
   @override
   void initState() {
@@ -62,6 +81,16 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     _startFileListRefreshTimer(); // 启动WebSocket连接并监听通知
     // 连接WebSocket（用于API调用）
     widget.apiService.connectWebSocket();
+    // 初始化方向锁定状态（默认锁定）
+    _initializeOrientationLock();
+  }
+  
+  /// 初始化方向锁定状态
+  Future<void> _initializeOrientationLock() async {
+    // 默认锁定状态已在变量初始化时设置，这里可以添加从服务器获取状态的逻辑
+    // 目前默认锁定，保持与server端一致
+    // 初始化旋转角度
+    _updateRotationTurns();
   }
 
   @override
@@ -70,6 +99,9 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     _reconnectTimer?.cancel();
     _connectionCheckTimer?.cancel();
     _webSocketSubscription?.cancel();
+    _deviceOrientationNotifier.dispose();
+    _rotationTurnsNotifier.dispose();
+    _previewSizeNotifier.dispose();
     super.dispose();
   }
   
@@ -105,8 +137,47 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                 _logger.log('收到新文件通知，直接使用通知中的文件信息', tag: 'WEBSOCKET');
                 // 收到新文件通知，直接使用通知中的文件信息
                 _handleNewFilesNotification(data);
+              } else if (event == 'orientation_changed' && data != null) {
+                // 处理设备方向变化通知
+                final orientation = data['orientation'] as int?;
+                if (orientation != null) {
+                  _logger.log('收到设备方向变化通知: $orientation 度', tag: 'ORIENTATION');
+                  // 更新设备方向（使用ValueNotifier，只更新预览部分，不影响文件列表）
+                  if (mounted) {
+                    _deviceOrientationNotifier.value = orientation;
+                    // 更新旋转角度（使用最短路径）
+                    _updateRotationTurns();
+                  }
+                }
               } else if (event == 'connected') {
                 _logger.log('WebSocket连接确认', tag: 'WEBSOCKET');
+                _logger.log('connected事件数据: $data', tag: 'PREVIEW');
+                // 获取预览尺寸
+                if (data != null) {
+                  _logger.log('data不为null，检查previewSize', tag: 'PREVIEW');
+                  if (data['previewSize'] != null) {
+                    _logger.log('previewSize不为null: ${data['previewSize']}', tag: 'PREVIEW');
+                    final previewSize = data['previewSize'] as Map<String, dynamic>?;
+                    _logger.log('转换后的previewSize: $previewSize', tag: 'PREVIEW');
+                    if (previewSize != null) {
+                      final width = previewSize['width'] as int? ?? 640;
+                      final height = previewSize['height'] as int? ?? 480;
+                      _logger.log('解析预览尺寸: width=$width, height=$height', tag: 'PREVIEW');
+                      if (mounted) {
+                        _previewSizeNotifier.value = {'width': width, 'height': height};
+                        _logger.log('收到服务器预览尺寸: ${width}x${height}，已更新到预览组件', tag: 'PREVIEW');
+                      } else {
+                        _logger.log('组件未mounted，无法更新预览尺寸', tag: 'PREVIEW');
+                      }
+                    } else {
+                      _logger.log('预览尺寸数据格式错误: previewSize为null', tag: 'PREVIEW');
+                    }
+                  } else {
+                    _logger.log('data中previewSize为null，data内容: $data', tag: 'PREVIEW');
+                  }
+                } else {
+                  _logger.log('未收到服务器预览尺寸，data为null，使用默认值640x480', tag: 'PREVIEW');
+                }
               }
             } catch (e) {
               _logger.logError('处理WebSocket通知失败', error: e);
@@ -789,6 +860,91 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     );
   }
 
+  /// 计算预览旋转圈数
+  /// 如果方向锁定：使用手动旋转角度（0, 90, 180, 270度）
+  /// 如果方向解锁：预览根据设备方向旋转（因为server端使用重力感应）
+  double _getRotationTurns([int? deviceOrientation]) {
+    final orientation = deviceOrientation ?? _deviceOrientationNotifier.value;
+    if (_orientationLocked) {
+      // 方向锁定：使用手动旋转角度
+      // 预览流本身有180度偏差，需要补偿：手动角度 + 180度
+      final totalRotation = (_lockedRotationAngle + 180) % 360;
+      return totalRotation / 360.0;
+    } else {
+      // 方向解锁：server端使用重力感应，预览需要根据设备方向旋转
+      // 补偿-90°偏差：如果手机是0°，预览需要+90°来显示正确方向
+      final compensatedOrientation = (orientation + 90) % 360;
+      return compensatedOrientation / 360.0;
+    }
+  }
+  
+  /// 计算最短路径的旋转圈数
+  /// 确保从当前角度到目标角度总是选择最短路径（顺时针或逆时针）
+  double _calculateShortestRotation(double currentTurns, double targetTurns) {
+    // 计算差值（可能超过1圈）
+    double diff = targetTurns - currentTurns;
+    
+    // 规范化到[-0.5, 0.5]范围内（最短路径）
+    while (diff > 0.5) {
+      diff -= 1.0;
+    }
+    while (diff < -0.5) {
+      diff += 1.0;
+    }
+    
+    // 返回当前角度加上最短路径差值
+    return currentTurns + diff;
+  }
+  
+  /// 旋转预览（锁定状态下）
+  Future<void> _rotatePreview() async {
+    // 每次旋转90度
+    final newAngle = (_lockedRotationAngle + 90) % 360;
+    try {
+      // 更新server端的锁定旋转角度
+      final result = await widget.apiService.setLockedRotationAngle(newAngle);
+      if (result['success'] == true) {
+        setState(() {
+          _lockedRotationAngle = newAngle;
+        });
+        _logger.log('旋转预览到 ${newAngle}°', tag: 'PREVIEW');
+        // 更新旋转角度（使用最短路径）
+        _updateRotationTurns();
+        _showSuccess('预览已旋转到 ${newAngle}°');
+      } else {
+        _showError('设置旋转角度失败: ${result['error']}');
+      }
+    } catch (e) {
+      _showError('设置旋转角度失败: $e');
+    }
+  }
+  
+  /// 更新旋转角度（使用最短路径）
+  void _updateRotationTurns() {
+    final targetTurns = _getRotationTurns();
+    final currentTurns = _rotationTurnsNotifier.value;
+    final shortestTurns = _calculateShortestRotation(currentTurns, targetTurns);
+    _rotationTurnsNotifier.value = shortestTurns;
+  }
+  
+  /// 切换方向锁定状态
+  Future<void> _toggleOrientationLock() async {
+    final newLockState = !_orientationLocked;
+    try {
+      final result = await widget.apiService.setOrientationLock(newLockState);
+      if (result['success'] == true) {
+        setState(() {
+          _orientationLocked = newLockState;
+        });
+        _showSuccess(newLockState ? '方向已锁定' : '方向已解锁');
+      } else {
+        _showError('设置方向锁定失败: ${result['error']}');
+      }
+    } catch (e) {
+      _showError('设置方向锁定失败: $e');
+    }
+  }
+
   void _navigateToSettings() async {
     // 直接打开全屏设置选择页面
     await Navigator.of(context).push(
@@ -865,51 +1021,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
               tooltip: '文件管理',
             ),
           ],
-          flexibleSpace: Stack(
-            children: [
-              // 拍照和录像按钮（固定在中间区域）
-              Center(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // 拍照按钮
-                    SizedBox(
-                      width: 90,
-                      child: ElevatedButton.icon(
-                        onPressed: _isOperating || _isRecording ? null : _takePicture,
-                        icon: const Icon(Icons.camera, size: 18),
-                        label: const Text('拍照', style: TextStyle(fontSize: 12)),
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                          backgroundColor: Colors.blue,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    // 录像按钮
-                    SizedBox(
-                      width: 90,
-                      child: ElevatedButton.icon(
-                        onPressed: _isOperating ? null : _toggleRecording,
-                        icon: Icon(
-                          _isRecording ? Icons.stop : Icons.videocam,
-                          size: 18,
-                        ),
-                        label: Text(
-                          _isRecording ? '停止' : '录像',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                          backgroundColor: _isRecording ? Colors.red : Colors.green,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
         ),
       ),
       body: LayoutBuilder(
@@ -922,15 +1033,84 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           
           return Row(
             children: [
-              // 左侧：视频预览区域（按照常规手机视频尺寸比例，9:16竖屏）
+              // 左侧：视频预览区域（根据视频分辨率动态调整宽高比）
               SizedBox(
                 width: leftWidth,
                 child: Column(
                   children: [
+                    // 控制按钮区域（预览窗口上方）
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[800],
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          // 拍照按钮
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: _isOperating || _isRecording ? null : _takePicture,
+                              icon: const Icon(Icons.camera, size: 18),
+                              label: const Text('拍照', style: TextStyle(fontSize: 12)),
+                              style: ElevatedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                backgroundColor: Colors.blue,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // 录像按钮
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: _isOperating ? null : _toggleRecording,
+                              icon: Icon(
+                                _isRecording ? Icons.stop : Icons.videocam,
+                                size: 18,
+                              ),
+                              label: Text(
+                                _isRecording ? '停止' : '录像',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                backgroundColor: _isRecording ? Colors.red : Colors.green,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // 旋转按钮（只在锁定状态时显示）
+                          if (_orientationLocked)
+                            IconButton(
+                              icon: const Icon(Icons.rotate_90_degrees_cw),
+                              color: Colors.blue,
+                              onPressed: _rotatePreview,
+                              tooltip: '旋转预览（当前: ${_lockedRotationAngle}°）',
+                              style: IconButton.styleFrom(
+                                backgroundColor: Colors.blue.withOpacity(0.2),
+                              ),
+                            ),
+                          // 方向锁定按钮
+                          IconButton(
+                            icon: Icon(
+                              _orientationLocked ? Icons.lock : Icons.lock_open,
+                              color: _orientationLocked ? Colors.orange : Colors.grey,
+                            ),
+                            onPressed: _toggleOrientationLock,
+                            tooltip: _orientationLocked ? '方向已锁定' : '方向已解锁',
+                            style: IconButton.styleFrom(
+                              backgroundColor: _orientationLocked ? Colors.orange.withOpacity(0.2) : Colors.transparent,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                     // 预览区域
                     Expanded(
                       child: Container(
-                        margin: const EdgeInsets.all(8),
+                        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                         decoration: BoxDecoration(
                           color: Colors.black,
                           borderRadius: BorderRadius.circular(8),
@@ -940,13 +1120,60 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                           borderRadius: BorderRadius.circular(8),
                           child: Stack(
                             children: [
-                              Center(
-                                child: AspectRatio(
-                                  aspectRatio: 9 / 16, // 常规手机视频比例（竖屏）
-                                  child: MjpegStreamWidget(
-                                    streamUrl: widget.apiService.getPreviewStreamUrl(),
-                                    fit: BoxFit.cover,
-                                  ),
+                              // 使用ValueListenableBuilder，只更新预览部分，不影响文件列表
+                              Positioned.fill(
+                                child: ValueListenableBuilder<Map<String, int>>(
+                                  valueListenable: _previewSizeNotifier,
+                                  builder: (context, previewSize, _) {
+                                    return ValueListenableBuilder<double>(
+                                      valueListenable: _rotationTurnsNotifier,
+                                      builder: (context, rotationTurns, child) {
+                                        // 根据预览尺寸计算宽高比
+                                        var width = previewSize['width'] ?? 640;
+                                        var height = previewSize['height'] ?? 480;
+                                        
+                                        // 计算旋转角度（0-1圈转换为0-360度）
+                                        final rotationDegrees = (rotationTurns * 360) % 360;
+                                        
+                                        // 如果旋转90度或270度，需要交换宽高
+                                        if ((rotationDegrees >= 90 && rotationDegrees < 180) || 
+                                            (rotationDegrees >= 270 && rotationDegrees < 360)) {
+                                          // 旋转90度或270度，交换宽高
+                                          final temp = width;
+                                          width = height;
+                                          height = temp;
+                                        }
+                                        
+                                        // 计算宽高比
+                                        final aspectRatio = width / height;
+                                        
+                                        // 记录预览尺寸使用情况（仅在尺寸变化时输出）
+                                        final currentSize = {'width': previewSize['width'], 'height': previewSize['height']};
+                                        if (_lastLoggedPreviewSize == null || 
+                                            _lastLoggedPreviewSize!['width'] != currentSize['width'] || 
+                                            _lastLoggedPreviewSize!['height'] != currentSize['height']) {
+                                          _logger.log('使用预览尺寸: ${previewSize['width']}x${previewSize['height']}, 旋转角度: ${rotationDegrees}°, 计算后宽高比: $aspectRatio (${width}/${height})', tag: 'PREVIEW');
+                                          _lastLoggedPreviewSize = Map<String, int>.from(currentSize);
+                                        }
+                                        
+                                        return Center(
+                                          child: AspectRatio(
+                                            aspectRatio: aspectRatio,
+                                            child: AnimatedRotation(
+                                              turns: rotationTurns,
+                                              duration: const Duration(milliseconds: 200),
+                                              child: MjpegStreamWidget(
+                                                streamUrl: widget.apiService.getPreviewStreamUrl(),
+                                                fit: BoxFit.contain, // 使用contain确保完整显示，不会被裁剪
+                                                previewWidth: previewSize['width'], // 使用服务器返回的预览宽度
+                                                previewHeight: previewSize['height'], // 使用服务器返回的预览高度
+                                              ),
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  },
                                 ),
                               ),
                               if (_isRecording)
