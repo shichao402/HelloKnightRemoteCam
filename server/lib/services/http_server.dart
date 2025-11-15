@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:camera/camera.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:shelf/shelf.dart';
@@ -11,14 +12,17 @@ import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'camera_service.dart';
 import 'settings_service.dart';
+import 'device_info_service.dart';
 import 'logger_service.dart';
 import 'operation_log_service.dart';
 import 'foreground_service.dart';
 import 'media_scanner_service.dart';
 import '../models/camera_settings.dart';
+import '../models/camera_capabilities.dart';
 import '../models/camera_status.dart';
 import '../models/file_info.dart';
 import '../screens/server_settings_screen.dart';
+import '../main.dart' as main_app;
 
 class ConnectedDevice {
   final String ipAddress;
@@ -38,6 +42,7 @@ class HttpServerService {
   final LoggerService logger = LoggerService();
   final OperationLogService operationLog = OperationLogService();
   final ForegroundService _foregroundService = ForegroundService();
+  final DeviceInfoService _deviceInfoService = DeviceInfoService();
   
   HttpServer? _server;
   String? _ipAddress;
@@ -53,6 +58,10 @@ class HttpServerService {
   
   // WebSocket连接：用于双向通讯通知客户端有新文件
   final List<WebSocketChannel> _webSocketChannels = [];
+  
+  // 独占连接：当前连接的客户端标识（设备型号）
+  String? _exclusiveClientDeviceModel;
+  WebSocketChannel? _exclusiveWebSocketChannel;
   
   // 自动停止相关
   Timer? _autoStopTimer;
@@ -421,9 +430,34 @@ class HttpServerService {
     // 注意：控制类端点（capture, recording/start, recording/stop）已迁移到WebSocket
     // 不再提供HTTP端点
 
-    // WebSocket端点：用于双向通讯
+    // WebSocket端点：用于双向通讯（独占连接）
     apiRouter.get('/ws', webSocketHandler((WebSocketChannel channel, String? protocol) {
+      // 检查是否已有独占客户端连接
+      if (_exclusiveWebSocketChannel != null && _exclusiveWebSocketChannel != channel) {
+        logger.log('拒绝新WebSocket连接：已有独占客户端连接（设备: $_exclusiveClientDeviceModel）', tag: 'WEBSOCKET');
+        // 发送拒绝消息并关闭连接
+        channel.sink.add(json.encode({
+          'type': 'notification',
+          'event': 'connection_rejected',
+          'data': {
+            'reason': 'exclusive_connection',
+            'message': '服务器已被其他客户端独占连接',
+            'currentClient': _exclusiveClientDeviceModel,
+          },
+        }));
+        Future.delayed(const Duration(milliseconds: 100), () {
+          channel.sink.close();
+        });
+        return;
+      }
+      
       _webSocketChannels.add(channel);
+      
+      // 如果是第一个连接，设置为独占连接
+      if (_exclusiveWebSocketChannel == null) {
+        _exclusiveWebSocketChannel = channel;
+        logger.log('设置独占WebSocket连接，当前连接数: ${_webSocketChannels.length}', tag: 'WEBSOCKET');
+      }
       
       logger.log('客户端已连接WebSocket，当前连接数: ${_webSocketChannels.length}', tag: 'WEBSOCKET');
       
@@ -443,6 +477,7 @@ class HttpServerService {
         'event': 'connected',
         'data': {
           'status': 'connected',
+          'exclusive': _exclusiveWebSocketChannel == channel,
           'timestamp': DateTime.now().millisecondsSinceEpoch,
         },
       }));
@@ -454,10 +489,22 @@ class HttpServerService {
         },
         onDone: () {
           _webSocketChannels.remove(channel);
+          // 如果断开的是独占连接，清除独占状态
+          if (_exclusiveWebSocketChannel == channel) {
+            _exclusiveWebSocketChannel = null;
+            _exclusiveClientDeviceModel = null;
+            logger.log('独占WebSocket连接已断开，清除独占状态', tag: 'WEBSOCKET');
+          }
           logger.log('客户端已断开WebSocket，当前连接数: ${_webSocketChannels.length}', tag: 'WEBSOCKET');
         },
         onError: (error) {
           _webSocketChannels.remove(channel);
+          // 如果断开的是独占连接，清除独占状态
+          if (_exclusiveWebSocketChannel == channel) {
+            _exclusiveWebSocketChannel = null;
+            _exclusiveClientDeviceModel = null;
+            logger.log('独占WebSocket连接错误，清除独占状态', tag: 'WEBSOCKET');
+          }
           logger.log('WebSocket错误: $error', tag: 'WEBSOCKET');
         },
         cancelOnError: true,
@@ -800,6 +847,19 @@ class HttpServerService {
             case 'getStatus':
               result = await _handleGetStatusRequest();
               break;
+            case 'getCameraCapabilities':
+              result = await _handleGetCameraCapabilitiesRequest(params);
+              break;
+            case 'getAllCameraCapabilities':
+              result = await _handleGetAllCameraCapabilitiesRequest();
+              break;
+            case 'getDeviceInfo':
+              result = await _handleGetDeviceInfoRequest();
+              break;
+            case 'registerDevice':
+              // 注册设备（设置独占连接的设备型号）
+              result = await _handleRegisterDeviceRequest(params, channel);
+              break;
             case 'ping':
               // WebSocket ping（用于心跳检测）
               _updateConnectedDevice(clientIp ?? 'websocket_client');
@@ -944,15 +1004,31 @@ class HttpServerService {
   /// 处理获取设置请求
   Future<Map<String, dynamic>> _handleGetSettingsRequest() async {
     final settings = await settingsService.loadSettings();
+    final settingsMap = <String, dynamic>{
+      'videoQuality': settings.videoQuality,
+      'photoQuality': settings.photoQuality,
+      'enableAudio': settings.enableAudio,
+      'previewFps': settings.previewFps,
+      'previewQuality': settings.previewQuality,
+    };
+    
+    // 添加扩展参数
+    if (settings.photoSize != null) {
+      settingsMap['photoSize'] = settings.photoSize!.toJson();
+    }
+    if (settings.videoSize != null) {
+      settingsMap['videoSize'] = settings.videoSize!.toJson();
+    }
+    if (settings.previewSize != null) {
+      settingsMap['previewSize'] = settings.previewSize!.toJson();
+    }
+    if (settings.videoFpsRange != null) {
+      settingsMap['videoFpsRange'] = settings.videoFpsRange!.toJson();
+    }
+    
     return {
       'success': true,
-      'settings': {
-        'videoQuality': settings.videoQuality,
-        'photoQuality': settings.photoQuality,
-        'enableAudio': settings.enableAudio,
-        'previewFps': settings.previewFps,
-        'previewQuality': settings.previewQuality,
-      },
+      'settings': settingsMap,
     };
   }
   
@@ -965,22 +1041,90 @@ class HttpServerService {
       final previewFps = params['previewFps'] as int?;
       final previewQuality = params['previewQuality'] as int?;
       
+      // 处理扩展参数
+      Size? photoSize;
+      Size? videoSize;
+      Size? previewSize;
+      FpsRange? videoFpsRange;
+      
+      if (params['photoSize'] != null) {
+        final photoSizeMap = params['photoSize'] as Map<String, dynamic>;
+        photoSize = Size.fromJson(photoSizeMap);
+      }
+      if (params['videoSize'] != null) {
+        final videoSizeMap = params['videoSize'] as Map<String, dynamic>;
+        videoSize = Size.fromJson(videoSizeMap);
+      }
+      if (params['previewSize'] != null) {
+        final previewSizeMap = params['previewSize'] as Map<String, dynamic>;
+        previewSize = Size.fromJson(previewSizeMap);
+      }
+      if (params['videoFpsRange'] != null) {
+        final fpsRangeMap = params['videoFpsRange'] as Map<String, dynamic>;
+        videoFpsRange = FpsRange.fromJson(fpsRangeMap);
+      }
+      
       final currentSettings = await settingsService.loadSettings();
       
-      // 创建新的设置对象（CameraSettings是不可变的）
+      // 创建新的设置对象（包含扩展参数）
       final newSettings = currentSettings.copyWith(
         videoQuality: videoQualityStr,
         photoQuality: photoQualityStr,
         enableAudio: enableAudio,
         previewFps: previewFps,
         previewQuality: previewQuality,
+        photoSize: photoSize,
+        videoSize: videoSize,
+        previewSize: previewSize,
+        videoFpsRange: videoFpsRange,
       );
       
       await settingsService.saveSettings(newSettings);
-      cameraService.settings = newSettings;
+      
+      // 如果相机已初始化，重新配置相机以立即应用新设置
+      if (cameraService.isInitialized) {
+        try {
+          // 获取当前相机描述（从main.dart的全局变量获取）
+          if (main_app.cameras.isNotEmpty) {
+            // 优先使用后置相机，如果没有则使用第一个
+            CameraDescription currentCamera;
+            try {
+              currentCamera = main_app.cameras.firstWhere(
+                (camera) => camera.lensDirection == CameraLensDirection.back,
+              );
+            } catch (e) {
+              currentCamera = main_app.cameras.first;
+            }
+            await cameraService.reconfigure(newSettings, currentCamera);
+            logger.log('相机已重新配置，新设置已立即生效', tag: 'SETTINGS');
+          } else {
+            // 如果没有可用相机，只更新设置
+            cameraService.updateSettings(newSettings);
+            logger.log('没有可用相机，设置已保存', tag: 'SETTINGS');
+          }
+        } catch (e, stackTrace) {
+          logger.logError('重新配置相机失败', error: e, stackTrace: stackTrace);
+          // 即使重新配置失败，也更新设置
+          cameraService.updateSettings(newSettings);
+        }
+      } else {
+        // 相机未初始化，只更新设置
+        cameraService.updateSettings(newSettings);
+        logger.log('相机未初始化，设置已保存，将在下次初始化时应用', tag: 'SETTINGS');
+      }
+      
+      logger.log('相机设置已更新', tag: 'SETTINGS');
+      logger.log('视频质量: ${newSettings.videoQuality}, 照片质量: ${newSettings.photoQuality}, 音频: ${newSettings.enableAudio}, 预览FPS: ${newSettings.previewFps}, 预览质量: ${newSettings.previewQuality}', tag: 'SETTINGS');
+      if (newSettings.videoSize != null) {
+        logger.log('视频分辨率: ${newSettings.videoSize!.width}x${newSettings.videoSize!.height}', tag: 'SETTINGS');
+      }
+      if (newSettings.videoFpsRange != null) {
+        logger.log('视频帧率范围: ${newSettings.videoFpsRange!.min}-${newSettings.videoFpsRange!.max} fps', tag: 'SETTINGS');
+      }
       
       return {'success': true};
-    } catch (e) {
+    } catch (e, stackTrace) {
+      logger.logError('更新设置失败', error: e, stackTrace: stackTrace);
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -997,6 +1141,91 @@ class HttpServerService {
         'isLocked': cameraService.status.isLocked,
       },
     };
+  }
+  
+  /// 处理获取相机能力请求
+  Future<Map<String, dynamic>> _handleGetCameraCapabilitiesRequest(Map<String, dynamic> params) async {
+    try {
+      final cameraId = params['cameraId'] as String?;
+      if (cameraId == null) {
+        return {'success': false, 'error': '缺少cameraId参数'};
+      }
+      
+      final capabilities = await cameraService.getCameraCapabilities(cameraId);
+      if (capabilities != null) {
+        return {
+          'success': true,
+          'capabilities': capabilities.toJson(),
+        };
+      } else {
+        return {'success': false, 'error': '无法获取相机能力信息'};
+      }
+    } catch (e, stackTrace) {
+      logger.logError('获取相机能力信息失败', error: e, stackTrace: stackTrace);
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+  
+  /// 处理获取所有相机能力请求
+  Future<Map<String, dynamic>> _handleGetAllCameraCapabilitiesRequest() async {
+    try {
+      final capabilities = await cameraService.getAllCameraCapabilities();
+      return {
+        'success': true,
+        'capabilities': capabilities.map((e) => e.toJson()).toList(),
+      };
+    } catch (e, stackTrace) {
+      logger.logError('获取所有相机能力信息失败', error: e, stackTrace: stackTrace);
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+  
+  /// 处理获取设备信息请求
+  Future<Map<String, dynamic>> _handleGetDeviceInfoRequest() async {
+    try {
+      final deviceInfo = await _deviceInfoService.getDeviceInfo();
+      if (deviceInfo != null) {
+        return {
+          'success': true,
+          'deviceInfo': deviceInfo,
+        };
+      } else {
+        return {'success': false, 'error': '无法获取设备信息'};
+      }
+    } catch (e, stackTrace) {
+      logger.logError('获取设备信息失败', error: e, stackTrace: stackTrace);
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+  
+  /// 处理注册设备请求（设置独占连接的设备型号）
+  Future<Map<String, dynamic>> _handleRegisterDeviceRequest(Map<String, dynamic> params, WebSocketChannel channel) async {
+    try {
+      final deviceModel = params['deviceModel'] as String?;
+      
+      if (deviceModel == null || deviceModel.isEmpty) {
+        return {'success': false, 'error': '缺少deviceModel参数'};
+      }
+      
+      // 检查是否是当前独占连接的客户端
+      if (_exclusiveWebSocketChannel == channel) {
+        _exclusiveClientDeviceModel = deviceModel;
+        logger.log('注册独占连接设备: $deviceModel', tag: 'WEBSOCKET');
+        return {
+          'success': true,
+          'message': '设备注册成功',
+          'exclusive': true,
+        };
+      } else {
+        return {
+          'success': false,
+          'error': '当前连接不是独占连接',
+        };
+      }
+    } catch (e, stackTrace) {
+      logger.logError('注册设备失败', error: e, stackTrace: stackTrace);
+      return {'success': false, 'error': e.toString()};
+    }
   }
   
   /// 广播新文件通知给所有连接的客户端（通过WebSocket）

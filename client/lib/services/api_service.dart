@@ -122,7 +122,13 @@ class ApiService {
         if (messageId != null && _pendingRequests.containsKey(messageId)) {
           final completer = _pendingRequests.remove(messageId)!;
           if (data['success'] == true) {
-            completer.complete(data['data'] as Map<String, dynamic>? ?? {});
+            // 服务器端返回的数据在data字段中，需要转换类型
+            final responseData = data['data'];
+            if (responseData is Map) {
+              completer.complete(_convertMap(responseData));
+            } else {
+              completer.complete(responseData as Map<String, dynamic>? ?? {});
+            }
           } else {
             completer.complete({
               'success': false,
@@ -139,6 +145,28 @@ class ApiService {
     } catch (e) {
       logger.logError('解析WebSocket消息失败', error: e);
     }
+  }
+  
+  // 转换Map类型（从Map<Object?, Object?>转换为Map<String, dynamic>）
+  Map<String, dynamic> _convertMap(Map map) {
+    return Map<String, dynamic>.fromEntries(
+      map.entries.map((entry) {
+        final key = entry.key.toString();
+        final value = entry.value;
+        if (value is Map) {
+          return MapEntry(key, _convertMap(value));
+        } else if (value is List) {
+          return MapEntry(key, value.map((item) {
+            if (item is Map) {
+              return _convertMap(item);
+            }
+            return item;
+          }).toList());
+        } else {
+          return MapEntry(key, value);
+        }
+      }),
+    );
   }
   
   // 通过WebSocket发送请求
@@ -426,7 +454,13 @@ class ApiService {
       final result = await _sendWebSocketRequest('getSettings', {});
       
       if (result['success'] && result['settings'] != null) {
-        result['settings'] = CameraSettings.fromJson(result['settings'] as Map<String, dynamic>);
+        // 转换Map类型，确保是Map<String, dynamic>
+        final settingsMap = result['settings'];
+        if (settingsMap is Map) {
+          result['settings'] = CameraSettings.fromJson(_convertMap(settingsMap));
+        } else {
+          logger.logError('设置数据格式错误', error: Exception('settings不是Map类型: ${settingsMap.runtimeType}'));
+        }
       }
       
       logger.logCommandResponse('getSettings', success: result['success'] == true, result: result['settings'], error: result['error']);
@@ -441,6 +475,66 @@ class ApiService {
   // 获取预览流URL
   String getPreviewStreamUrl() {
     return '$baseUrl/preview/stream';
+  }
+
+  // 获取指定相机的能力信息（完全使用WebSocket）
+  Future<Map<String, dynamic>> getCameraCapabilities(String cameraId) async {
+    try {
+      logger.logCommand('getCameraCapabilities', params: {'cameraId': cameraId}, details: '获取相机能力信息');
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'getCameraCapabilities', 'cameraId': cameraId});
+      final result = await _sendWebSocketRequest('getCameraCapabilities', {'cameraId': cameraId});
+      logger.logCommandResponse('getCameraCapabilities', success: result['success'] == true, result: result, error: result['error']);
+      return result;
+    } catch (e, stackTrace) {
+      logger.logError('获取相机能力信息失败', error: e, stackTrace: stackTrace);
+      logger.logCommandResponse('getCameraCapabilities', success: false, error: e.toString());
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  // 获取所有相机的能力信息（完全使用WebSocket）
+  Future<Map<String, dynamic>> getAllCameraCapabilities() async {
+    try {
+      logger.logCommand('getAllCameraCapabilities', details: '获取所有相机能力信息');
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'getAllCameraCapabilities'});
+      final result = await _sendWebSocketRequest('getAllCameraCapabilities', {});
+      logger.logCommandResponse('getAllCameraCapabilities', success: result['success'] == true, result: result, error: result['error']);
+      return result;
+    } catch (e, stackTrace) {
+      logger.logError('获取所有相机能力信息失败', error: e, stackTrace: stackTrace);
+      logger.logCommandResponse('getAllCameraCapabilities', success: false, error: e.toString());
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  // 获取设备信息（完全使用WebSocket）
+  Future<Map<String, dynamic>> getDeviceInfo() async {
+    try {
+      logger.logCommand('getDeviceInfo', details: '获取设备信息');
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'getDeviceInfo'});
+      final result = await _sendWebSocketRequest('getDeviceInfo', {});
+      logger.logCommandResponse('getDeviceInfo', success: result['success'] == true, result: result, error: result['error']);
+      return result;
+    } catch (e, stackTrace) {
+      logger.logError('获取设备信息失败', error: e, stackTrace: stackTrace);
+      logger.logCommandResponse('getDeviceInfo', success: false, error: e.toString());
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  // 注册设备（完全使用WebSocket）
+  Future<Map<String, dynamic>> registerDevice(String deviceModel) async {
+    try {
+      logger.logCommand('registerDevice', params: {'deviceModel': deviceModel}, details: '注册设备');
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'registerDevice', 'deviceModel': deviceModel});
+      final result = await _sendWebSocketRequest('registerDevice', {'deviceModel': deviceModel});
+      logger.logCommandResponse('registerDevice', success: result['success'] == true, result: result, error: result['error']);
+      return result;
+    } catch (e, stackTrace) {
+      logger.logError('注册设备失败', error: e, stackTrace: stackTrace);
+      logger.logCommandResponse('registerDevice', success: false, error: e.toString());
+      return {'success': false, 'error': e.toString()};
+    }
   }
 
   // 获取文件下载URL

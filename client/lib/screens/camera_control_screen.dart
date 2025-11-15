@@ -10,9 +10,12 @@ import '../models/file_info.dart';
 import '../models/download_task.dart';
 import '../widgets/mjpeg_stream_widget.dart';
 import 'settings_screen.dart';
+import 'advanced_camera_settings_screen.dart';
+import 'settings_selection_screen.dart';
 import 'file_manager_screen.dart';
 import 'client_settings_screen.dart';
 import 'device_connection_screen.dart';
+import 'camera_capabilities_screen.dart';
 import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
@@ -787,55 +790,14 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   }
 
   void _navigateToSettings() async {
-    // 显示选择对话框：相机设置或应用设置
-    final choice = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('选择设置'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.camera_alt),
-              title: const Text('相机设置'),
-              subtitle: const Text('调整相机参数和质量设置'),
-              onTap: () => Navigator.of(context).pop('camera'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.settings),
-              title: const Text('应用设置'),
-              subtitle: const Text('调试模式和日志设置'),
-              onTap: () => Navigator.of(context).pop('app'),
-            ),
-          ],
+    // 直接打开全屏设置选择页面
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => SettingsSelectionScreen(
+          apiService: widget.apiService,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-        ],
       ),
     );
-
-    if (choice == 'camera') {
-      final result = await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => SettingsScreen(apiService: widget.apiService),
-        ),
-      );
-      
-      // 如果设置已更改，可能需要刷新某些状态
-      if (result == true) {
-        // 设置已更新
-      }
-    } else if (choice == 'app') {
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => const ClientSettingsScreen(),
-        ),
-      );
-    }
   }
 
 

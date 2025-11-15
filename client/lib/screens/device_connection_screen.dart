@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/connection_settings_service.dart';
+import '../services/device_config_service.dart';
 import '../services/logger_service.dart';
+import '../models/camera_settings.dart';
 import 'camera_control_screen.dart';
 
 class DeviceConnectionScreen extends StatefulWidget {
@@ -17,6 +19,7 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
   final _portController = TextEditingController(text: '8080');
   
   final _connectionSettings = ConnectionSettingsService();
+  final _deviceConfigService = DeviceConfigService();
   final _logger = ClientLoggerService();
   
   bool _isConnecting = false;
@@ -126,7 +129,46 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
           );
         }
 
+        // 连接WebSocket并获取设备信息
+        await apiService.connectWebSocket();
+        
+        // 获取设备信息
+        String? deviceModel;
+        try {
+          final deviceInfoResult = await apiService.getDeviceInfo();
+          if (deviceInfoResult['success'] == true && deviceInfoResult['deviceInfo'] != null) {
+            final deviceInfo = deviceInfoResult['deviceInfo'] as Map<String, dynamic>;
+            deviceModel = deviceInfo['model'] as String?;
+            _logger.log('获取设备信息成功，型号: $deviceModel', tag: 'CONNECTION');
+            
+            // 注册设备（设置独占连接）
+            if (deviceModel != null && deviceModel.isNotEmpty) {
+              await apiService.registerDevice(deviceModel);
+            }
+          }
+        } catch (e, stackTrace) {
+          _logger.logError('获取设备信息失败', error: e, stackTrace: stackTrace);
+        }
+        
+        // 获取并应用保存的设备配置
+        if (deviceModel != null && deviceModel.isNotEmpty) {
+          try {
+            final savedConfig = await _deviceConfigService.getDeviceConfig(deviceModel);
+            if (savedConfig != null) {
+              _logger.log('找到保存的设备配置，应用配置', tag: 'CONNECTION');
+              // 应用配置到服务器
+              await apiService.updateSettings(savedConfig);
+              _logger.log('设备配置已应用', tag: 'CONNECTION');
+            } else {
+              _logger.log('未找到保存的设备配置，使用默认配置', tag: 'CONNECTION');
+            }
+          } catch (e, stackTrace) {
+            _logger.logError('应用设备配置失败', error: e, stackTrace: stackTrace);
+          }
+        }
+
         // 连接成功，跳转到控制页面
+        if (!mounted) return;
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (context) => CameraControlScreen(apiService: apiService),

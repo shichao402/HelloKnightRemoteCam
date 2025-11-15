@@ -1,3 +1,5 @@
+import 'camera_capabilities.dart';
+
 // 相机设置
 class CameraSettings {
   final String videoQuality;  // 录像质量: ultra, high, medium, low
@@ -5,6 +7,12 @@ class CameraSettings {
   final bool enableAudio;     // 是否启用音频
   final int previewFps;       // 预览帧率
   final int previewQuality;   // 预览JPEG质量 (0-100)
+  
+  // 扩展参数：具体分辨率选择（可选，如果设置则优先使用）
+  final Size? photoSize;      // 照片分辨率（null表示使用质量预设）
+  final Size? videoSize;      // 视频分辨率（null表示使用质量预设）
+  final Size? previewSize;    // 预览分辨率（null表示使用默认）
+  final FpsRange? videoFpsRange;  // 视频帧率范围（null表示使用默认）
 
   const CameraSettings({
     this.videoQuality = 'ultra',
@@ -12,6 +20,10 @@ class CameraSettings {
     this.enableAudio = true,
     this.previewFps = 10,
     this.previewQuality = 70,
+    this.photoSize,
+    this.videoSize,
+    this.previewSize,
+    this.videoFpsRange,
   });
 
   // JSON 序列化
@@ -21,6 +33,10 @@ class CameraSettings {
         'enableAudio': enableAudio,
         'previewFps': previewFps,
         'previewQuality': previewQuality,
+        if (photoSize != null) 'photoSize': photoSize!.toJson(),
+        if (videoSize != null) 'videoSize': videoSize!.toJson(),
+        if (previewSize != null) 'previewSize': previewSize!.toJson(),
+        if (videoFpsRange != null) 'videoFpsRange': videoFpsRange!.toJson(),
       };
 
   // JSON 反序列化
@@ -31,6 +47,18 @@ class CameraSettings {
       enableAudio: json['enableAudio'] as bool? ?? true,
       previewFps: json['previewFps'] as int? ?? 10,
       previewQuality: json['previewQuality'] as int? ?? 70,
+      photoSize: json['photoSize'] != null 
+          ? Size.fromJson(json['photoSize'] as Map<String, dynamic>)
+          : null,
+      videoSize: json['videoSize'] != null
+          ? Size.fromJson(json['videoSize'] as Map<String, dynamic>)
+          : null,
+      previewSize: json['previewSize'] != null
+          ? Size.fromJson(json['previewSize'] as Map<String, dynamic>)
+          : null,
+      videoFpsRange: json['videoFpsRange'] != null
+          ? FpsRange.fromJson(json['videoFpsRange'] as Map<String, dynamic>)
+          : null,
     );
   }
 
@@ -41,6 +69,10 @@ class CameraSettings {
     bool? enableAudio,
     int? previewFps,
     int? previewQuality,
+    Size? photoSize,
+    Size? videoSize,
+    Size? previewSize,
+    FpsRange? videoFpsRange,
   }) {
     return CameraSettings(
       videoQuality: videoQuality ?? this.videoQuality,
@@ -48,6 +80,10 @@ class CameraSettings {
       enableAudio: enableAudio ?? this.enableAudio,
       previewFps: previewFps ?? this.previewFps,
       previewQuality: previewQuality ?? this.previewQuality,
+      photoSize: photoSize ?? this.photoSize,
+      videoSize: videoSize ?? this.videoSize,
+      previewSize: previewSize ?? this.previewSize,
+      videoFpsRange: videoFpsRange ?? this.videoFpsRange,
     );
   }
 

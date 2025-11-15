@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
+import '../models/camera_capabilities.dart';
 import 'logger_service.dart';
 
 /// 原生相机服务 - 使用Android Camera2 API实现同时录制和预览
@@ -131,7 +132,13 @@ class NativeCameraService {
   }
   
   /// 开始录制
-  Future<bool> startRecording(String outputPath) async {
+  Future<bool> startRecording(
+    String outputPath, {
+    String? videoQuality,
+    bool? enableAudio,
+    Map<String, dynamic>? videoSize,
+    Map<String, dynamic>? videoFpsRange,
+  }) async {
     try {
       if (!_isInitialized) {
         _logger.logError('开始录制失败', error: Exception('相机未初始化'));
@@ -143,10 +150,14 @@ class NativeCameraService {
         return false;
       }
       
-      _logger.logCamera('开始录制（原生相机）', details: '输出路径: $outputPath');
+      _logger.logCamera('开始录制（原生相机）', details: '输出路径: $outputPath, 质量: $videoQuality, 音频: $enableAudio, 分辨率: $videoSize, 帧率: $videoFpsRange');
       
       final result = await _methodChannel.invokeMethod<bool>('startRecording', {
         'outputPath': outputPath,
+        'videoQuality': videoQuality ?? 'ultra',
+        'enableAudio': enableAudio ?? true,
+        if (videoSize != null) 'videoSize': videoSize,
+        if (videoFpsRange != null) 'videoFpsRange': videoFpsRange,
       });
       
       if (result == true) {
@@ -242,5 +253,87 @@ class NativeCameraService {
   
   bool get isInitialized => _isInitialized;
   bool get isRecording => _isRecording;
+  
+  /// 获取指定相机的能力信息（不需要初始化相机）
+  Future<CameraCapabilities?> getCameraCapabilities(String cameraId) async {
+    try {
+      _logger.logCamera('获取相机能力信息', details: '相机ID: $cameraId');
+      
+      final result = await _methodChannel.invokeMethod<Map<dynamic, dynamic>>(
+        'getCameraCapabilities',
+        {'cameraId': cameraId},
+      );
+      
+      if (result != null) {
+        // 递归转换Map类型，确保所有嵌套的Map都是Map<String, dynamic>
+        final json = _convertMap(result as Map<dynamic, dynamic>);
+        final capabilities = CameraCapabilities.fromJson(json);
+        _logger.logCamera('获取相机能力信息成功', details: '相机ID: $cameraId');
+        return capabilities;
+      } else {
+        _logger.logError('获取相机能力信息失败', error: Exception('返回null'));
+        return null;
+      }
+    } on PlatformException catch (e, stackTrace) {
+      _logger.logError('获取相机能力信息PlatformException', error: e, stackTrace: stackTrace);
+      return null;
+    } catch (e, stackTrace) {
+      _logger.logError('获取相机能力信息异常', error: e, stackTrace: stackTrace);
+      return null;
+    }
+  }
+  
+  /// 获取所有可用相机的能力信息
+  Future<List<CameraCapabilities>> getAllCameraCapabilities() async {
+    try {
+      _logger.logCamera('获取所有相机能力信息');
+      
+      final result = await _methodChannel.invokeMethod<List<dynamic>>(
+        'getAllCameraCapabilities',
+      );
+      
+      if (result != null) {
+        // 递归转换Map类型，确保所有嵌套的Map都是Map<String, dynamic>
+        final capabilities = result.map((e) {
+          final map = e as Map<dynamic, dynamic>;
+          return CameraCapabilities.fromJson(_convertMap(map));
+        }).toList();
+        _logger.logCamera('获取所有相机能力信息成功', details: '找到${capabilities.length}个相机');
+        return capabilities;
+      } else {
+        _logger.logError('获取所有相机能力信息失败', error: Exception('返回null'));
+        return [];
+      }
+    } on PlatformException catch (e, stackTrace) {
+      _logger.logError('获取所有相机能力信息PlatformException', error: e, stackTrace: stackTrace);
+      return [];
+    } catch (e, stackTrace) {
+      _logger.logError('获取所有相机能力信息异常', error: e, stackTrace: stackTrace);
+      return [];
+    }
+  }
+  
+  /// 递归转换Map类型，确保所有嵌套的Map都是Map<String, dynamic>
+  Map<String, dynamic> _convertMap(Map<dynamic, dynamic> map) {
+    return Map<String, dynamic>.fromEntries(
+      map.entries.map((entry) {
+        final key = entry.key.toString();
+        final value = entry.value;
+        
+        if (value is Map<dynamic, dynamic>) {
+          return MapEntry(key, _convertMap(value));
+        } else if (value is List<dynamic>) {
+          return MapEntry(key, value.map((item) {
+            if (item is Map<dynamic, dynamic>) {
+              return _convertMap(item);
+            }
+            return item;
+          }).toList());
+        } else {
+          return MapEntry(key, value);
+        }
+      }),
+    );
+  }
 }
 

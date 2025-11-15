@@ -44,24 +44,6 @@ if adb devices | grep -q "device$"; then
             echo "读取最新日志文件: $LATEST_LOG_NAME"
             echo ""
             adb shell run-as com.example.remote_cam_server cat "$LATEST_LOG" 2>/dev/null || echo "无法读取日志文件: $LATEST_LOG"
-            
-            # 读取其他最近的日志文件（倒数第2和第3个）
-            OTHER_LOGS=$(echo "$LOG_FILES" | tail -3 | head -2)
-            if [ -n "$OTHER_LOGS" ]; then
-                echo ""
-                echo "其他最近日志文件内容:"
-                echo "$OTHER_LOGS" | while read logpath; do
-                    logpath=$(echo "$logpath" | tr -d '\r\n')
-                    if [ -n "$logpath" ] && [ "$logpath" != "$LATEST_LOG" ]; then
-                        logname=$(basename "$logpath")
-                        echo ""
-                        echo "========================================"
-                        echo "--- $logname ---"
-                        echo "========================================"
-                        adb shell run-as com.example.remote_cam_server cat "$logpath" 2>/dev/null || true
-                    fi
-                done
-            fi
         else
             echo "未找到有效的日志文件"
         fi
@@ -83,53 +65,94 @@ echo ""
 echo "2. 收集Mac客户端日志..."
 echo "----------------------------------------"
 
-# 优先查找沙盒应用路径（macOS应用通常是沙盒应用）
+# 查找沙盒应用路径和非沙盒应用路径
 CLIENT_LOG_DIR_SANDBOX="$HOME/Library/Containers/com.example.remoteCamClient/Data/Library/Logs"
-# 非沙盒应用路径（向后兼容）
 CLIENT_LOG_DIR_NON_SANDBOX="$HOME/Library/Logs/HelloKnightRCC"
 
-CLIENT_LOG_DIR=""
-
+# 收集所有存在的日志目录
+CLIENT_LOG_DIRS=()
 if [ -d "$CLIENT_LOG_DIR_SANDBOX" ]; then
-    CLIENT_LOG_DIR="$CLIENT_LOG_DIR_SANDBOX"
-    echo "✓ 找到客户端日志目录（沙盒应用）: $CLIENT_LOG_DIR"
-elif [ -d "$CLIENT_LOG_DIR_NON_SANDBOX" ]; then
-    CLIENT_LOG_DIR="$CLIENT_LOG_DIR_NON_SANDBOX"
-    echo "✓ 找到客户端日志目录（非沙盒应用）: $CLIENT_LOG_DIR"
+    CLIENT_LOG_DIRS+=("$CLIENT_LOG_DIR_SANDBOX")
+    echo "✓ 找到客户端日志目录（沙盒应用）: $CLIENT_LOG_DIR_SANDBOX"
+fi
+if [ -d "$CLIENT_LOG_DIR_NON_SANDBOX" ]; then
+    CLIENT_LOG_DIRS+=("$CLIENT_LOG_DIR_NON_SANDBOX")
+    echo "✓ 找到客户端日志目录（非沙盒应用）: $CLIENT_LOG_DIR_NON_SANDBOX"
 fi
 
-if [ -n "$CLIENT_LOG_DIR" ] && [ -d "$CLIENT_LOG_DIR" ]; then
-    # 列出日志文件
+if [ ${#CLIENT_LOG_DIRS[@]} -gt 0 ]; then
+    # 列出所有日志文件
     echo ""
     echo "客户端日志文件列表:"
-    ls -lha "$CLIENT_LOG_DIR" 2>/dev/null || echo "无法列出日志文件"
+    for dir in "${CLIENT_LOG_DIRS[@]}"; do
+        echo ""
+        echo "--- $dir ---"
+        LOG_FILES=$(ls -lha "$dir" 2>/dev/null | grep -E "client_debug_.*\.log" || true)
+        if [ -n "$LOG_FILES" ]; then
+            echo "$LOG_FILES"
+        else
+            echo "该目录下无日志文件"
+        fi
+    done
     
     echo ""
     echo "最新日志内容:"
     echo "========================================"
-    # 查找最新的日志文件
-    LATEST_LOG=$(ls -t "$CLIENT_LOG_DIR"/client_debug_*.log 2>/dev/null | head -1)
+    # 从所有目录中查找最新的日志文件（按修改时间排序）
+    # 使用find + stat确保按修改时间排序，而不是文件名
+    LATEST_LOG=""
+    for dir in "${CLIENT_LOG_DIRS[@]}"; do
+        if [ -d "$dir" ]; then
+            FOUND_LOG=$(find "$dir" -name "client_debug_*.log" -type f -print0 2>/dev/null | \
+                xargs -0 stat -f "%m %N" 2>/dev/null | \
+                sort -rn | \
+                head -1 | \
+                awk '{print $2}')
+            
+            if [ -n "$FOUND_LOG" ]; then
+                if [ -z "$LATEST_LOG" ]; then
+                    LATEST_LOG="$FOUND_LOG"
+                else
+                    # 比较修改时间，保留最新的
+                    LATEST_TIME=$(stat -f "%m" "$LATEST_LOG" 2>/dev/null || echo "0")
+                    FOUND_TIME=$(stat -f "%m" "$FOUND_LOG" 2>/dev/null || echo "0")
+                    if [ "$FOUND_TIME" -gt "$LATEST_TIME" ]; then
+                        LATEST_LOG="$FOUND_LOG"
+                    fi
+                fi
+            fi
+        fi
+    done
+    
+    if [ -z "$LATEST_LOG" ]; then
+        # 如果find + stat失败，回退到ls -t方法，合并所有目录
+        ALL_LOGS=""
+        for dir in "${CLIENT_LOG_DIRS[@]}"; do
+            if [ -d "$dir" ]; then
+                DIR_LOGS=$(ls -t "$dir"/client_debug_*.log 2>/dev/null)
+                if [ -n "$DIR_LOGS" ]; then
+                    if [ -z "$ALL_LOGS" ]; then
+                        ALL_LOGS="$DIR_LOGS"
+                    else
+                        ALL_LOGS="$ALL_LOGS"$'\n'"$DIR_LOGS"
+                    fi
+                fi
+            fi
+        done
+        if [ -n "$ALL_LOGS" ]; then
+            LATEST_LOG=$(echo "$ALL_LOGS" | head -1)
+        fi
+    fi
+    
     if [ -n "$LATEST_LOG" ]; then
-        echo "读取最新日志文件: $(basename "$LATEST_LOG")"
+        LATEST_LOG_NAME=$(basename "$LATEST_LOG")
+        LATEST_LOG_TIME=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$LATEST_LOG" 2>/dev/null || echo "未知")
+        LATEST_LOG_DIR=$(dirname "$LATEST_LOG")
+        echo "读取最新日志文件: $LATEST_LOG_NAME"
+        echo "文件路径: $LATEST_LOG"
+        echo "文件修改时间: $LATEST_LOG_TIME"
         echo ""
         cat "$LATEST_LOG" 2>/dev/null || echo "无法读取日志文件"
-        
-        # 读取其他最近的日志文件（倒数第2和第3个）
-        OTHER_LOGS=$(ls -t "$CLIENT_LOG_DIR"/client_debug_*.log 2>/dev/null | head -3 | tail -2)
-        if [ -n "$OTHER_LOGS" ]; then
-            echo ""
-            echo "其他最近日志文件内容:"
-            echo "$OTHER_LOGS" | while read logpath; do
-                if [ -n "$logpath" ] && [ "$logpath" != "$LATEST_LOG" ]; then
-                    logname=$(basename "$logpath")
-                    echo ""
-                    echo "========================================"
-                    echo "--- $logname ---"
-                    echo "========================================"
-                    cat "$logpath" 2>/dev/null || true
-                fi
-            done
-        fi
     else
         echo "未找到日志文件"
     fi

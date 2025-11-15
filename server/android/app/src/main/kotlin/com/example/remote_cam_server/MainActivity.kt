@@ -25,6 +25,7 @@ class MainActivity: FlutterActivity() {
     private val CAMERA2_CHANNEL = "com.example.remote_cam_server/camera2"
     private val PREVIEW_STREAM_CHANNEL = "com.example.remote_cam_server/preview_stream"
     private val FOREGROUND_SERVICE_CHANNEL = "com.example.remote_cam_server/foreground_service"
+    private val DEVICE_INFO_CHANNEL = "com.example.remote_cam_server/device_info"
     
     private var camera2Manager: Camera2Manager? = null
     private var previewStreamHandler: PreviewStreamHandler? = null
@@ -95,8 +96,18 @@ class MainActivity: FlutterActivity() {
                 }
                 "startRecording" -> {
                     val outputPath = call.argument<String>("outputPath")
+                    val videoQuality = call.argument<String>("videoQuality") ?: "ultra"
+                    val enableAudio = call.argument<Boolean>("enableAudio") ?: true
+                    val videoSize = call.argument<Map<*, *>>("videoSize") as? Map<String, Int>
+                    val videoFpsRange = call.argument<Map<*, *>>("videoFpsRange") as? Map<String, Int>
                     if (outputPath != null) {
-                        val success = camera2Manager?.startRecording(outputPath) ?: false
+                        val success = camera2Manager?.startRecording(
+                            outputPath, 
+                            videoQuality, 
+                            enableAudio,
+                            videoSize,
+                            videoFpsRange
+                        ) ?: false
                         result.success(success)
                     } else {
                         result.error("INVALID_ARGUMENT", "outputPath is null", null)
@@ -130,6 +141,19 @@ class MainActivity: FlutterActivity() {
                     camera2Manager?.release()
                     result.success(true)
                 }
+                "getCameraCapabilities" -> {
+                    val cameraId = call.argument<String>("cameraId")
+                    if (cameraId != null) {
+                        val caps = camera2Manager?.getCameraCapabilities(cameraId)
+                        result.success(caps)
+                    } else {
+                        result.error("INVALID_ARGUMENT", "cameraId is null", null)
+                    }
+                }
+                "getAllCameraCapabilities" -> {
+                    val caps = camera2Manager?.getAllCameraCapabilities()
+                    result.success(caps)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -159,6 +183,30 @@ class MainActivity: FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        
+        // Device Info Channel
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DEVICE_INFO_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getDeviceInfo" -> {
+                    val deviceInfo = getDeviceInfo()
+                    result.success(deviceInfo)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+    
+    // 获取设备信息
+    private fun getDeviceInfo(): Map<String, String> {
+        return mapOf(
+            "model" to Build.MODEL,  // 设备型号，如 "AL-00"
+            "manufacturer" to Build.MANUFACTURER,  // 制造商
+            "brand" to Build.BRAND,  // 品牌
+            "device" to Build.DEVICE,  // 设备代号
+            "product" to Build.PRODUCT,  // 产品名称
+            "androidVersion" to Build.VERSION.RELEASE,  // Android版本
+            "sdkInt" to Build.VERSION.SDK_INT.toString(),  // SDK版本
+        )
     }
 
     private fun scanMediaFile(filePath: String) {

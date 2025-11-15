@@ -39,6 +39,7 @@ class Camera2Manager(private val context: Context) {
     
     private val cameraOpenCloseLock = Semaphore(1)
     private var initializationResult: CompletableDeferred<Boolean>? = null
+    private var sessionCreationResult: CompletableDeferred<Boolean>? = null
     
     // 拍照相关
     private var jpegImageReader: ImageReader? = null
@@ -120,14 +121,15 @@ class Camera2Manager(private val context: Context) {
             }, backgroundHandler)
             
             // 打开相机（异步）
+            sessionCreationResult = CompletableDeferred()
             cameraOpenCloseLock.acquire()
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     cameraOpenCloseLock.release()
                     cameraDevice = camera
                     Log.d(TAG, "相机已打开")
-                    createCaptureSession()
                     initializationResult?.complete(true)
+                    createCaptureSession()
                 }
                 
                 override fun onDisconnected(camera: CameraDevice) {
@@ -136,6 +138,7 @@ class Camera2Manager(private val context: Context) {
                     cameraDevice = null
                     Log.e(TAG, "相机已断开连接")
                     initializationResult?.complete(false)
+                    sessionCreationResult?.complete(false)
                 }
                 
                 override fun onError(camera: CameraDevice, error: Int) {
@@ -144,33 +147,67 @@ class Camera2Manager(private val context: Context) {
                     cameraDevice = null
                     Log.e(TAG, "相机打开失败: $error")
                     initializationResult?.complete(false)
+                    sessionCreationResult?.complete(false)
                 }
             }, backgroundHandler)
             
             // 等待相机打开（最多等待5秒）
-            val result = initializationResult?.await() ?: false
+            val cameraOpened = try {
+                withTimeout(5000) {
+                    initializationResult?.await() ?: false
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "等待相机打开超时")
+                false
+            }
+            
+            if (!cameraOpened) {
+                initializationResult = null
+                sessionCreationResult = null
+                return false
+            }
+            
+            // 等待session创建完成（最多等待3秒）
+            val sessionCreated = try {
+                withTimeout(3000) {
+                    sessionCreationResult?.await() ?: false
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "等待session创建超时")
+                false
+            }
+            
             initializationResult = null
-            return result
+            sessionCreationResult = null
+            return sessionCreated
         } catch (e: SecurityException) {
             Log.e(TAG, "初始化相机失败：权限不足", e)
             initializationResult?.complete(false)
+            sessionCreationResult?.complete(false)
             initializationResult = null
+            sessionCreationResult = null
             return false
         } catch (e: CameraAccessException) {
             Log.e(TAG, "初始化相机失败：相机访问异常，错误代码: ${e.reason}", e)
             initializationResult?.complete(false)
+            sessionCreationResult?.complete(false)
             initializationResult = null
+            sessionCreationResult = null
             return false
         } catch (e: IllegalArgumentException) {
             Log.e(TAG, "初始化相机失败：参数错误 - ${e.message}", e)
             initializationResult?.complete(false)
+            sessionCreationResult?.complete(false)
             initializationResult = null
+            sessionCreationResult = null
             return false
         } catch (e: Exception) {
             Log.e(TAG, "初始化相机失败：未知异常 - ${e.javaClass.simpleName}: ${e.message}", e)
             e.printStackTrace()
             initializationResult?.complete(false)
+            sessionCreationResult?.complete(false)
             initializationResult = null
+            sessionCreationResult = null
             return false
         }
     }
@@ -199,12 +236,18 @@ class Camera2Manager(private val context: Context) {
                         captureSession = session
                         startPreview()
                         
+                        // 如果正在等待初始化session创建，通知完成
+                        sessionCreationResult?.complete(true)
+                        
                         // 如果正在等待录制会话配置，通知完成
                         recordingSessionResult?.complete(true)
                     }
                     
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         Log.e(TAG, "创建捕获会话失败")
+                        // 如果正在等待初始化session创建，通知失败
+                        sessionCreationResult?.complete(false)
+                        
                         // 如果正在等待录制会话配置，通知失败
                         recordingSessionResult?.complete(false)
                     }
@@ -219,6 +262,8 @@ class Camera2Manager(private val context: Context) {
             )
         } catch (e: Exception) {
             Log.e(TAG, "创建捕获会话异常", e)
+            // 如果正在等待初始化session创建，通知失败
+            sessionCreationResult?.complete(false)
             // 如果正在等待录制会话配置，通知失败
             recordingSessionResult?.complete(false)
         }
@@ -323,10 +368,30 @@ class Camera2Manager(private val context: Context) {
         }
     }
     
-    fun startRecording(outputPath: String): Boolean {
+    fun startRecording(
+        outputPath: String, 
+        videoQuality: String = "ultra", 
+        enableAudio: Boolean = true,
+        videoSize: Map<String, Int>? = null,
+        videoFpsRange: Map<String, Int>? = null
+    ): Boolean {
         try {
             if (isRecording) {
                 Log.w(TAG, "已经在录制中")
+                return false
+            }
+            
+            // 检查相机设备是否有效
+            val cameraIdStr = cameraDevice?.id
+            if (cameraIdStr == null) {
+                Log.e(TAG, "相机设备ID为空")
+                return false
+            }
+            
+            // 检查会话是否有效
+            val existingSession = captureSession
+            if (existingSession == null) {
+                Log.e(TAG, "录制失败: captureSession为null")
                 return false
             }
             
@@ -335,23 +400,42 @@ class Camera2Manager(private val context: Context) {
             
             // 获取相机特性以确定录制尺寸
             val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            val cameraIdStr = cameraDevice?.id
-            if (cameraIdStr == null) {
-                Log.e(TAG, "相机设备ID为空")
-                return false
-            }
             
             // 使用CamcorderProfile获取设备支持的配置
             val cameraId = cameraIdStr.toIntOrNull() ?: 0
             var profile: CamcorderProfile? = null
-            var videoSize = android.util.Size(1920, 1080)
+            var finalVideoSize = android.util.Size(1920, 1080)
             var videoBitRate = 8000000
             var videoFrameRate = 30
             var audioBitRate = 128000
             var audioSampleRate = 44100
             
-            // 按质量级别降级尝试
+            // 如果用户指定了分辨率，优先使用用户设置
+            val userVideoSize = if (videoSize != null && videoSize.containsKey("width") && videoSize.containsKey("height")) {
+                android.util.Size(videoSize["width"]!!, videoSize["height"]!!)
+            } else {
+                null
+            }
+            
+            // 如果用户指定了帧率，优先使用用户设置
+            val userVideoFrameRate = if (videoFpsRange != null && videoFpsRange.containsKey("max")) {
+                videoFpsRange["max"]!!
+            } else {
+                null
+            }
+            
+            // 根据videoQuality参数选择质量级别（仅在用户未指定分辨率时使用）
+            val targetQualityLevel = when (videoQuality) {
+                "ultra" -> CamcorderProfile.QUALITY_HIGH
+                "high" -> CamcorderProfile.QUALITY_1080P
+                "medium" -> CamcorderProfile.QUALITY_720P
+                "low" -> CamcorderProfile.QUALITY_480P
+                else -> CamcorderProfile.QUALITY_HIGH
+            }
+            
+            // 按质量级别降级尝试（从目标质量开始）
             val qualityLevels = arrayOf(
+                targetQualityLevel,
                 CamcorderProfile.QUALITY_HIGH,
                 CamcorderProfile.QUALITY_1080P,
                 CamcorderProfile.QUALITY_720P,
@@ -359,16 +443,40 @@ class Camera2Manager(private val context: Context) {
                 CamcorderProfile.QUALITY_LOW
             )
             
+            // 先获取MediaRecorder支持的尺寸列表，用于验证用户指定的分辨率
+            val characteristics = cameraManager.getCameraCharacteristics(cameraIdStr)
+            val streamConfigurationMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val videoSizes = streamConfigurationMap?.getOutputSizes(MediaRecorder::class.java)
+            
             for (quality in qualityLevels) {
                 try {
                     if (CamcorderProfile.hasProfile(cameraId, quality)) {
                         profile = CamcorderProfile.get(cameraId, quality)
-                        videoSize = android.util.Size(profile.videoFrameWidth, profile.videoFrameHeight)
+                        val profileVideoSize = android.util.Size(profile.videoFrameWidth, profile.videoFrameHeight)
+                        
+                        // 使用用户指定的分辨率（如果提供），否则使用profile的分辨率
+                        // 注意：由于现在只显示CamcorderProfile支持的分辨率，用户指定的分辨率应该总是支持的
+                        if (userVideoSize != null) {
+                            finalVideoSize = userVideoSize
+                            Log.d(TAG, "使用用户指定的分辨率: ${finalVideoSize.width}x${finalVideoSize.height}")
+                        } else {
+                            finalVideoSize = profileVideoSize
+                            Log.d(TAG, "使用profile的分辨率: ${finalVideoSize.width}x${finalVideoSize.height}")
+                        }
                         videoBitRate = profile.videoBitRate
-                        videoFrameRate = profile.videoFrameRate
+                        // 只有在用户未指定帧率时才使用profile的帧率
+                        if (userVideoFrameRate == null) {
+                            videoFrameRate = profile.videoFrameRate
+                        } else {
+                            videoFrameRate = userVideoFrameRate
+                        }
                         audioBitRate = profile.audioBitRate
                         audioSampleRate = profile.audioSampleRate
-                        Log.d(TAG, "使用CamcorderProfile质量级别: $quality, 尺寸: ${videoSize.width}x${videoSize.height}")
+                        Log.d(TAG, "使用CamcorderProfile质量级别: $quality (请求: $videoQuality)")
+                        Log.d(TAG, "最终录制参数: 尺寸: ${finalVideoSize.width}x${finalVideoSize.height}, 帧率: $videoFrameRate fps, 比特率: $videoBitRate")
+                        if (userVideoFrameRate != null) {
+                            Log.d(TAG, "使用用户指定的帧率: $userVideoFrameRate fps")
+                        }
                         break
                     }
                 } catch (e: Exception) {
@@ -376,13 +484,24 @@ class Camera2Manager(private val context: Context) {
                 }
             }
             
-            // CamcorderProfile不可用时，使用Camera2 API
+            // CamcorderProfile不可用时，使用Camera2 API（理论上不应该发生，因为现在只显示CamcorderProfile支持的分辨率）
             if (profile == null) {
-                val characteristics = cameraManager.getCameraCharacteristics(cameraIdStr)
-                val streamConfigurationMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-                val videoSizes = streamConfigurationMap?.getOutputSizes(MediaRecorder::class.java)
-                videoSize = videoSizes?.firstOrNull() ?: android.util.Size(1920, 1080)
-                Log.d(TAG, "使用Camera2 API获取的录制尺寸: ${videoSize.width}x${videoSize.height}")
+                Log.w(TAG, "警告：CamcorderProfile不可用，使用Camera2 API降级方案")
+                // 如果用户指定了分辨率，使用它；否则使用MediaRecorder支持的第一个分辨率
+                if (userVideoSize != null) {
+                    finalVideoSize = userVideoSize
+                    Log.d(TAG, "使用用户指定的分辨率: ${finalVideoSize.width}x${finalVideoSize.height}")
+                } else {
+                    finalVideoSize = videoSizes?.firstOrNull() ?: android.util.Size(1920, 1080)
+                    Log.d(TAG, "使用Camera2 API获取的录制尺寸: ${finalVideoSize.width}x${finalVideoSize.height}")
+                }
+                
+                if (userVideoFrameRate != null) {
+                    videoFrameRate = userVideoFrameRate
+                    Log.d(TAG, "使用用户指定的帧率: $videoFrameRate fps")
+                } else {
+                    videoFrameRate = 30 // 默认帧率
+                }
             }
             
             currentVideoPath = outputPath
@@ -405,23 +524,29 @@ class Camera2Manager(private val context: Context) {
             
             // 创建MediaRecorder
             mediaRecorder = MediaRecorder().apply {
-                // 设置音频源（必须在视频源之前）
-                setAudioSource(MediaRecorder.AudioSource.MIC)
+                // 设置音频源（必须在视频源之前，仅在启用音频时设置）
+                if (enableAudio) {
+                    setAudioSource(MediaRecorder.AudioSource.MIC)
+                }
                 // 设置视频源
                 setVideoSource(MediaRecorder.VideoSource.SURFACE)
                 // 设置输出格式
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 // 设置输出文件
                 setOutputFile(outputPath)
-                // 设置音频编码器
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioEncodingBitRate(audioBitRate)
-                setAudioSamplingRate(audioSampleRate)
+                // 设置音频编码器（仅在启用音频时设置）
+                if (enableAudio) {
+                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                    setAudioEncodingBitRate(audioBitRate)
+                    setAudioSamplingRate(audioSampleRate)
+                }
                 // 设置视频编码器
                 setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-                setVideoSize(videoSize.width, videoSize.height)
+                setVideoSize(finalVideoSize.width, finalVideoSize.height)
                 setVideoFrameRate(videoFrameRate)
                 setVideoEncodingBitRate(videoBitRate)
+                
+                Log.d(TAG, "MediaRecorder配置: 分辨率=${finalVideoSize.width}x${finalVideoSize.height}, 帧率=${videoFrameRate}fps, 比特率=${videoBitRate}")
                 
                 // 如果使用持久化Surface，设置它
                 val persistentSurfaceToUse = persistentSurface
@@ -477,68 +602,121 @@ class Camera2Manager(private val context: Context) {
                 return false
             }
             
-            // 设置录制标志
+            // 检查当前session是否有效且可以重用
+            val existingSessionForReuse = captureSession
+            val canReuseSession = existingSessionForReuse != null && cameraDevice != null
+            
+            if (canReuseSession) {
+                // 如果session有效，尝试重用现有session
+                // 先停止预览，然后添加MediaRecorder的Surface
+                try {
+                    stopPreview()
+                } catch (e: Exception) {
+                    Log.w(TAG, "停止预览时发生异常: ${e.message}")
+                }
+                
+                // 使用现有session，直接启动MediaRecorder
+                // MediaRecorder的Surface已经在createCaptureSession中添加了（如果isRecording为true）
+                // 但我们需要重新创建session以包含MediaRecorder的Surface
+                Log.d(TAG, "重用现有session，需要重新配置以添加MediaRecorder Surface")
+            }
+            
+            // 设置录制标志（必须在创建session之前设置，因为createCaptureSession会检查isRecording）
             isRecording = true
             
-            // 在关闭旧的captureSession之前，先停止预览请求
-            try {
-                stopPreview()
-            } catch (e: Exception) {
-                Log.w(TAG, "停止预览时发生异常（可能session已关闭）: ${e.message}")
-            }
-            
-            // 现在关闭旧的captureSession，等待它完全关闭（通过回调）
-            captureSession?.close()
-            
-            // 等待旧的session完全关闭（最多2秒）
-            val sessionClosed = kotlinx.coroutines.runBlocking {
-                try {
-                    withTimeout(2000) {
-                        sessionCloseResult?.await()
-                        true
+            if (!canReuseSession) {
+                // 如果没有有效session，创建新的
+                Log.d(TAG, "创建新的captureSession用于录制")
+                createCaptureSession()
+                
+                // 等待captureSession配置完成
+                val sessionConfigured = kotlinx.coroutines.runBlocking {
+                    try {
+                        withTimeout(5000) {
+                            recordingSessionResult?.await() ?: false
+                        }
+                    } catch (e: TimeoutCancellationException) {
+                        Log.e(TAG, "等待captureSession配置超时")
+                        false
                     }
-                } catch (e: TimeoutCancellationException) {
-                    Log.e(TAG, "等待旧的captureSession关闭超时")
-                    false
                 }
-            }
-            
-            if (!sessionClosed) {
-                Log.w(TAG, "旧的captureSession未能及时关闭，继续尝试创建新session")
-            }
-            
-            // 创建新的captureSession，包含MediaRecorder的Surface
-            createCaptureSession()
-            
-            // 等待captureSession配置完成
-            val sessionConfigured = kotlinx.coroutines.runBlocking {
+                
+                if (!sessionConfigured) {
+                    Log.e(TAG, "captureSession配置失败，无法启动录制")
+                    // 注意：如果使用了真正支持的参数仍然失败，可能是设备硬件问题或代码bug
+                    isRecording = false
+                    mediaRecorder?.release()
+                    mediaRecorder = null
+                    persistentSurface?.release()
+                    persistentSurface = null
+                    currentVideoPath = null
+                    recordingSessionResult = null
+                    sessionCloseResult = null
+                    return false
+                }
+            } else {
+                // 如果有有效session，需要重新配置以添加MediaRecorder的Surface
+                // 关闭旧session并创建新session
                 try {
-                    withTimeout(5000) {
-                        recordingSessionResult?.await() ?: false
-                    }
-                } catch (e: TimeoutCancellationException) {
-                    Log.e(TAG, "等待captureSession配置超时")
-                    false
+                    stopPreview()
+                } catch (e: Exception) {
+                    Log.w(TAG, "停止预览时发生异常（可能session已关闭）: ${e.message}")
                 }
-            }
-            
-            if (!sessionConfigured) {
-                Log.e(TAG, "captureSession配置失败，无法启动录制")
-                isRecording = false
-                mediaRecorder?.release()
-                mediaRecorder = null
-                persistentSurface?.release()
-                persistentSurface = null
-                currentVideoPath = null
-                recordingSessionResult = null
-                sessionCloseResult = null
-                return false
+                
+                // 关闭旧的captureSession，等待它完全关闭
+                existingSessionForReuse?.close()
+                
+                // 等待旧的session完全关闭（最多2秒）
+                val sessionClosed = kotlinx.coroutines.runBlocking {
+                    try {
+                        withTimeout(2000) {
+                            sessionCloseResult?.await()
+                            true
+                        }
+                    } catch (e: TimeoutCancellationException) {
+                        Log.e(TAG, "等待旧的captureSession关闭超时")
+                        false
+                    }
+                }
+                
+                if (!sessionClosed) {
+                    Log.w(TAG, "旧的captureSession未能及时关闭，继续尝试创建新session")
+                }
+                
+                // 创建新的captureSession，包含MediaRecorder的Surface
+                createCaptureSession()
+                
+                // 等待captureSession配置完成
+                val sessionConfigured = kotlinx.coroutines.runBlocking {
+                    try {
+                        withTimeout(5000) {
+                            recordingSessionResult?.await() ?: false
+                        }
+                    } catch (e: TimeoutCancellationException) {
+                        Log.e(TAG, "等待captureSession配置超时")
+                        false
+                    }
+                }
+                
+                if (!sessionConfigured) {
+                    Log.e(TAG, "captureSession配置失败，无法启动录制")
+                    // 注意：如果使用了真正支持的参数仍然失败，可能是设备硬件问题或代码bug
+                    isRecording = false
+                    mediaRecorder?.release()
+                    mediaRecorder = null
+                    persistentSurface?.release()
+                    persistentSurface = null
+                    currentVideoPath = null
+                    recordingSessionResult = null
+                    sessionCloseResult = null
+                    return false
+                }
             }
             
             // captureSession配置成功后，启动MediaRecorder
             mediaRecorder?.start()
             
-            Log.d(TAG, "开始录制: $outputPath, 尺寸: ${videoSize.width}x${videoSize.height}")
+            Log.d(TAG, "开始录制: $outputPath, 尺寸: ${finalVideoSize.width}x${finalVideoSize.height}, 帧率: ${videoFrameRate}fps")
             recordingSessionResult = null
             sessionCloseResult = null
             return true
@@ -674,6 +852,11 @@ class Camera2Manager(private val context: Context) {
                 Log.e(TAG, "拍照失败: captureSession为null")
                 return null
             }
+            
+            // 注意：不能通过调用capture来检查会话状态，因为这会触发实际的拍照
+            // 会话状态检查在调用capture之前通过检查session是否为null来完成
+            // 如果session已关闭，会在后续的capture调用中抛出异常，我们会在那里处理
+            
             val camera = cameraDevice ?: run {
                 Log.e(TAG, "拍照失败: cameraDevice为null")
                 return null
@@ -708,26 +891,37 @@ class Camera2Manager(private val context: Context) {
             
             // 触发拍照
             Log.d(TAG, "发送拍照请求...")
-            session.capture(requestBuilder.build(), object : CaptureCallback() {
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult
-                ) {
-                    Log.d(TAG, "拍照请求完成，等待JPEG图像...")
-                }
-                
-                override fun onCaptureFailed(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    failure: CaptureFailure
-                ) {
-                    Log.e(TAG, "拍照请求失败: reason=${failure.reason}, wasImageCaptured=${failure.wasImageCaptured()}")
+            try {
+                session.capture(requestBuilder.build(), object : CaptureCallback() {
+                    override fun onCaptureCompleted(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        result: TotalCaptureResult
+                    ) {
+                        Log.d(TAG, "拍照请求完成，等待JPEG图像...")
+                    }
+                    
+                    override fun onCaptureFailed(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        failure: CaptureFailure
+                    ) {
+                        Log.e(TAG, "拍照请求失败: reason=${failure.reason}, wasImageCaptured=${failure.wasImageCaptured()}")
+                        pictureResult?.complete(null)
+                        pictureResult = null
+                        currentPicturePath = null
+                    }
+                }, backgroundHandler)
+            } catch (e: IllegalStateException) {
+                if (e.message?.contains("closed") == true) {
+                    Log.e(TAG, "拍照失败: captureSession已关闭")
                     pictureResult?.complete(null)
                     pictureResult = null
                     currentPicturePath = null
+                    return null
                 }
-            }, backgroundHandler)
+                throw e
+            }
             
             // 等待JPEG图像处理完成
             Log.d(TAG, "等待JPEG图像处理完成...")
@@ -831,6 +1025,213 @@ class Camera2Manager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "释放相机资源失败", e)
         }
+    }
+    
+    // 获取相机能力信息（不需要初始化相机）
+    fun getCameraCapabilities(cameraId: String): Map<String, Any>? {
+        try {
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val streamConfigurationMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            
+            // 获取支持的输出尺寸
+            val jpegSizes = streamConfigurationMap?.getOutputSizes(ImageFormat.JPEG)?.map { 
+                mapOf("width" to it.width, "height" to it.height)
+            } ?: emptyList()
+            
+            val previewSizes = streamConfigurationMap?.getOutputSizes(ImageFormat.YUV_420_888)?.map {
+                mapOf("width" to it.width, "height" to it.height)
+            } ?: emptyList()
+            
+            // 获取支持的CamcorderProfile质量级别，并收集真正支持的视频分辨率
+            val supportedVideoQualities = mutableListOf<String>()
+            val cameraIdInt = cameraId.toIntOrNull() ?: 0
+            val videoSizesSet = mutableSetOf<Pair<Int, Int>>() // 使用Set去重
+            val resolutionFpsMap = mutableMapOf<Pair<Int, Int>, MutableSet<Int>>() // 记录每个分辨率对应的帧率
+            
+            val qualityLevels = mapOf(
+                "ultra" to CamcorderProfile.QUALITY_HIGH,
+                "high" to CamcorderProfile.QUALITY_1080P,
+                "medium" to CamcorderProfile.QUALITY_720P,
+                "low" to CamcorderProfile.QUALITY_480P
+            )
+            
+            // 遍历所有可能的CamcorderProfile质量级别
+            val allQualityLevels = listOf(
+                CamcorderProfile.QUALITY_2160P,
+                CamcorderProfile.QUALITY_1080P,
+                CamcorderProfile.QUALITY_720P,
+                CamcorderProfile.QUALITY_480P,
+                CamcorderProfile.QUALITY_QVGA,
+                CamcorderProfile.QUALITY_CIF,
+                CamcorderProfile.QUALITY_QCIF,
+                CamcorderProfile.QUALITY_HIGH,
+                CamcorderProfile.QUALITY_LOW,
+                CamcorderProfile.QUALITY_TIME_LAPSE_2160P,
+                CamcorderProfile.QUALITY_TIME_LAPSE_1080P,
+                CamcorderProfile.QUALITY_TIME_LAPSE_720P,
+                CamcorderProfile.QUALITY_TIME_LAPSE_480P,
+                CamcorderProfile.QUALITY_TIME_LAPSE_QVGA,
+                CamcorderProfile.QUALITY_TIME_LAPSE_CIF,
+                CamcorderProfile.QUALITY_TIME_LAPSE_QCIF,
+                CamcorderProfile.QUALITY_TIME_LAPSE_HIGH,
+                CamcorderProfile.QUALITY_TIME_LAPSE_LOW
+            )
+            
+            // 收集所有CamcorderProfile支持的分辨率和对应的帧率（这些是设备保证支持的）
+            for (qualityLevel in allQualityLevels) {
+                try {
+                    if (CamcorderProfile.hasProfile(cameraIdInt, qualityLevel)) {
+                        val profile = CamcorderProfile.get(cameraIdInt, qualityLevel)
+                        val resolution = Pair(profile.videoFrameWidth, profile.videoFrameHeight)
+                        videoSizesSet.add(resolution)
+                        // 记录该分辨率对应的帧率
+                        if (!resolutionFpsMap.containsKey(resolution)) {
+                            resolutionFpsMap[resolution] = mutableSetOf()
+                        }
+                        resolutionFpsMap[resolution]?.add(profile.videoFrameRate)
+                    }
+                } catch (e: Exception) {
+                    // 忽略不支持的profile
+                }
+            }
+            
+            // 检查标准质量级别
+            for ((qualityName, qualityLevel) in qualityLevels) {
+                try {
+                    if (CamcorderProfile.hasProfile(cameraIdInt, qualityLevel)) {
+                        val profile = CamcorderProfile.get(cameraIdInt, qualityLevel)
+                        supportedVideoQualities.add(qualityName)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "无法检查质量级别 $qualityName: ${e.message}")
+                }
+            }
+            
+            // 将Set转换为List，并添加每个分辨率对应的帧率信息
+            val videoSizes = videoSizesSet.map { resolution ->
+                val supportedFps = resolutionFpsMap[resolution]?.sorted() ?: emptyList()
+                mapOf(
+                    "width" to resolution.first,
+                    "height" to resolution.second,
+                    "supportedFps" to supportedFps // 添加该分辨率支持的帧率列表
+                )
+            }
+            
+            Log.d(TAG, "CamcorderProfile支持的视频分辨率数量: ${videoSizes.size}")
+            if (videoSizes.isEmpty()) {
+                Log.w(TAG, "警告：未找到任何CamcorderProfile支持的分辨率，设备可能不支持视频录制")
+            }
+            
+            // 检查是否有参数互相掣肘的情况
+            val conflicts = mutableListOf<String>()
+            for ((resolution, fpsSet) in resolutionFpsMap) {
+                if (fpsSet.size > 1) {
+                    // 同一分辨率支持多个帧率，这是正常的
+                } else if (fpsSet.isEmpty()) {
+                    conflicts.add("分辨率 ${resolution.first}x${resolution.second} 没有对应的帧率信息")
+                }
+            }
+            
+            // 检查是否有分辨率在CamcorderProfile中支持，但在CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES中不支持对应帧率
+            val availableFpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
+            val availableFpsSet = mutableSetOf<Int>()
+            for (fpsRange in availableFpsRanges) {
+                availableFpsSet.add(fpsRange.lower)
+                availableFpsSet.add(fpsRange.upper)
+            }
+            
+            for ((resolution, fpsSet) in resolutionFpsMap) {
+                for (fps in fpsSet) {
+                    if (!availableFpsSet.contains(fps)) {
+                        conflicts.add("分辨率 ${resolution.first}x${resolution.second} 在CamcorderProfile中支持 ${fps}fps，但在CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES中不支持")
+                    }
+                }
+            }
+            
+            if (conflicts.isNotEmpty()) {
+                Log.w(TAG, "检测到参数冲突：")
+                for (conflict in conflicts) {
+                    Log.w(TAG, "  - $conflict")
+                }
+            }
+            
+            // 获取传感器方向
+            val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            
+            // 获取支持的AF模式
+            val afModes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?.toList() ?: emptyList()
+            
+            // 获取支持的AE模式
+            val aeModes = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES)?.toList() ?: emptyList()
+            
+            // 获取支持的AWB模式
+            val awbModes = characteristics.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.toList() ?: emptyList()
+            
+            // 获取支持的帧率范围
+            val fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.map {
+                mapOf("min" to it.lower, "max" to it.upper)
+            } ?: emptyList()
+            
+            // 获取镜头方向
+            val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
+            val lensDirection = when (lensFacing) {
+                CameraCharacteristics.LENS_FACING_BACK -> "back"
+                CameraCharacteristics.LENS_FACING_FRONT -> "front"
+                else -> "unknown"
+            }
+            
+            // 收集CamcorderProfile支持的所有帧率（用于过滤fpsRanges）
+            val supportedFpsSet = mutableSetOf<Int>()
+            for (fpsSet in resolutionFpsMap.values) {
+                supportedFpsSet.addAll(fpsSet)
+            }
+            
+            // 只返回与CamcorderProfile兼容的帧率范围
+            val compatibleFpsRanges = fpsRanges.filter { fpsRange ->
+                val min = fpsRange["min"] as? Int ?: 0
+                val max = fpsRange["max"] as? Int ?: 0
+                // 如果帧率范围内有任何值在supportedFpsSet中，则认为兼容
+                (min..max).any { it in supportedFpsSet }
+            }
+            
+            return mapOf(
+                "cameraId" to cameraId,
+                "lensDirection" to lensDirection,
+                "sensorOrientation" to sensorOrientation,
+                "photoSizes" to jpegSizes,
+                "previewSizes" to previewSizes,
+                "videoSizes" to videoSizes, // 现在包含supportedFps字段
+                "supportedVideoQualities" to supportedVideoQualities,
+                "afModes" to afModes,
+                "aeModes" to aeModes,
+                "awbModes" to awbModes,
+                "fpsRanges" to compatibleFpsRanges, // 只返回兼容的帧率范围
+                "parameterConflicts" to conflicts // 添加参数冲突信息
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "获取相机能力信息失败", e)
+            return null
+        }
+    }
+    
+    // 获取所有可用相机的能力信息
+    fun getAllCameraCapabilities(): List<Map<String, Any>> {
+        val capabilities = mutableListOf<Map<String, Any>>()
+        try {
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val cameraIds = cameraManager.cameraIdList
+            
+            for (cameraId in cameraIds) {
+                val caps = getCameraCapabilities(cameraId)
+                if (caps != null) {
+                    capabilities.add(caps)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "获取所有相机能力信息失败", e)
+        }
+        return capabilities
     }
 }
 

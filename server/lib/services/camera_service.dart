@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../models/camera_status.dart';
 import '../models/camera_settings.dart';
+import '../models/camera_capabilities.dart';
 import '../models/file_info.dart';
 import 'logger_service.dart';
 import 'file_index_service.dart';
@@ -21,6 +22,9 @@ class CameraService {
   
   bool _isRecording = false;
   Uint8List? _lastPreviewFrame;
+  
+  // 保存当前使用的相机描述（用于重新配置）
+  CameraDescription? _currentCamera;
   
   // 互斥锁，确保同一时间只有一个操作调用 takePicture()
   Future<void>? _takePictureLock;
@@ -52,6 +56,9 @@ class CameraService {
     if (initialSettings != null) {
       settings = initialSettings;
     }
+
+    // 保存当前相机描述
+    _currentCamera = camera;
 
     // 初始化原生相机服务（用于录制、预览和拍照，支持同时进行）
     _nativeCamera = NativeCameraService();
@@ -88,8 +95,54 @@ class CameraService {
     status = CameraStatus.reconfiguring;
     settings = newSettings;
     
-    // 原生相机不需要重新配置，设置更改会在下次操作时生效
+    // 如果相机已初始化，需要重新初始化以应用新设置（特别是预览相关设置）
+    if (_nativeCamera != null && _nativeCamera!.isInitialized && _currentCamera != null) {
+      _logger.logCamera('重新配置相机以应用新设置', details: '预览FPS: ${newSettings.previewFps}, 预览质量: ${newSettings.previewQuality}');
+      
+      // 等待所有正在进行的操作完成
+      if (_takePictureLock != null) {
+        _logger.logCamera('等待拍照操作完成');
+        await _takePictureLock;
+      }
+      
+      // 释放当前相机
+      await _nativeCamera!.release();
+      _nativeCamera = null;
+      
+      // 等待一小段时间，确保资源完全释放
+      await Future.delayed(const Duration(milliseconds: 100));
+      
+      // 重新初始化相机
+      _nativeCamera = NativeCameraService();
+      _nativeCamera!.onPreviewFrame = (Uint8List frame) {
+        _lastPreviewFrame = frame;
+      };
+      
+      final cameraId = camera.name;
+      final success = await _nativeCamera!.initialize(
+        cameraId,
+        previewWidth: 640,
+        previewHeight: 480,
+      );
+      
+      if (!success) {
+        _nativeCamera?.release();
+        _nativeCamera = null;
+        _logger.logError('重新配置相机失败', error: Exception('重新初始化失败'));
+        status = CameraStatus.idle;
+        throw Exception('重新配置相机失败：重新初始化失败');
+      }
+      
+      _logger.logCamera('相机重新配置成功', details: '新设置已应用');
+    }
+    
     status = CameraStatus.idle;
+  }
+  
+  // 更新设置（不重新配置相机，设置会在下次操作时生效）
+  void updateSettings(CameraSettings newSettings) {
+    settings = newSettings;
+    _logger.logCamera('设置已更新（不重新配置）', details: '设置将在下次操作时生效');
   }
 
   // 拍照
@@ -231,7 +284,32 @@ class CameraService {
     
     final videoPath = path.join(videoDir.path, fileName);
     
-    final success = await _nativeCamera!.startRecording(videoPath);
+    // 传递设置参数到原生相机
+    Map<String, dynamic>? videoSizeMap;
+    if (settings.videoSize != null) {
+      videoSizeMap = {
+        'width': settings.videoSize!.width,
+        'height': settings.videoSize!.height,
+      };
+    }
+    
+    Map<String, dynamic>? fpsRangeMap;
+    if (settings.videoFpsRange != null) {
+      fpsRangeMap = {
+        'min': settings.videoFpsRange!.min,
+        'max': settings.videoFpsRange!.max,
+      };
+    }
+    
+    _logger.logCamera('开始录制，使用设置', details: '质量: ${settings.videoQuality}, 分辨率: $videoSizeMap, 帧率: $fpsRangeMap');
+    
+    final success = await _nativeCamera!.startRecording(
+      videoPath,
+      videoQuality: settings.videoQuality,
+      enableAudio: settings.enableAudio,
+      videoSize: videoSizeMap,
+      videoFpsRange: fpsRangeMap,
+    );
     if (!success) {
       throw Exception('原生相机开始录制失败');
     }
@@ -411,6 +489,33 @@ class CameraService {
     // 释放原生相机资源
     await _nativeCamera?.release();
     _nativeCamera = null;
+  }
+  
+  /// 获取指定相机的能力信息（不需要初始化相机）
+  Future<CameraCapabilities?> getCameraCapabilities(String cameraId) async {
+    try {
+      // 创建一个临时的NativeCameraService实例来获取能力信息
+      // 这不会初始化相机，只是查询能力
+      final tempService = NativeCameraService();
+      final capabilities = await tempService.getCameraCapabilities(cameraId);
+      return capabilities;
+    } catch (e, stackTrace) {
+      _logger.logError('获取相机能力信息失败', error: e, stackTrace: stackTrace);
+      return null;
+    }
+  }
+  
+  /// 获取所有可用相机的能力信息
+  Future<List<CameraCapabilities>> getAllCameraCapabilities() async {
+    try {
+      // 创建一个临时的NativeCameraService实例来获取能力信息
+      final tempService = NativeCameraService();
+      final capabilities = await tempService.getAllCameraCapabilities();
+      return capabilities;
+    } catch (e, stackTrace) {
+      _logger.logError('获取所有相机能力信息失败', error: e, stackTrace: stackTrace);
+      return [];
+    }
   }
 }
 
