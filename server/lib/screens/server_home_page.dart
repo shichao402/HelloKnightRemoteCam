@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'dart:async';
 import 'dart:io';
 import '../services/camera_service.dart';
@@ -119,6 +120,24 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
       await _logger.initialize();
       _logger.log('应用启动', tag: 'INIT');
       
+      // 检查并请求相机权限
+      final cameraStatus = await Permission.camera.status;
+      _logger.log('相机权限状态: $cameraStatus', tag: 'PERMISSION');
+      
+      if (!cameraStatus.isGranted) {
+        _logger.log('请求相机权限', tag: 'PERMISSION');
+        final result = await Permission.camera.request();
+        _logger.log('相机权限请求结果: $result', tag: 'PERMISSION');
+        
+        if (!result.isGranted) {
+          setState(() {
+            _errorMessage = '需要相机权限才能使用此应用';
+          });
+          _logger.logError('相机权限被拒绝');
+          return;
+        }
+      }
+      
       if (cameras.isEmpty) {
         setState(() {
           _errorMessage = '未检测到相机';
@@ -168,6 +187,12 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
         cameraService: _cameraService,
         settingsService: _settingsService,
       );
+      
+      // 设置自动停止回调
+      _httpServer.setAutoStopCallback(() {
+        _logger.log('自动停止服务器触发', tag: 'AUTO_STOP');
+        _stopServer();
+      });
 
       setState(() {
         _isInitialized = true;
@@ -276,10 +301,14 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
     );
   }
 
-  void _navigateToSettings() {
-    Navigator.of(context).push(
+  void _navigateToSettings() async {
+    await Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => const ServerSettingsScreen()),
     );
+    // 设置页面返回后，更新自动停止设置
+    if (_isServerRunning) {
+      await _httpServer.updateAutoStopSettings();
+    }
   }
 
   @override

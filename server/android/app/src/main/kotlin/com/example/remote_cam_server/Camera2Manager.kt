@@ -43,10 +43,13 @@ class Camera2Manager(private val context: Context) {
     
     suspend fun initialize(cameraId: String, previewWidth: Int, previewHeight: Int): Boolean {
         try {
+            Log.d(TAG, "开始初始化相机，相机ID: $cameraId, 预览尺寸: ${previewWidth}x${previewHeight}")
             initializationResult = CompletableDeferred()
             
             val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            Log.d(TAG, "获取相机管理器成功")
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            Log.d(TAG, "获取相机特性成功")
             
             // 获取支持的输出尺寸
             val streamConfigurationMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
@@ -64,6 +67,9 @@ class Camera2Manager(private val context: Context) {
             }
             
             Log.d(TAG, "选择预览尺寸: ${previewSize.width}x${previewSize.height}")
+            
+            // 先启动后台线程，确保backgroundHandler已初始化
+            startBackgroundThread()
             
             // 创建ImageReader用于预览
             imageReader = ImageReader.newInstance(
@@ -104,8 +110,6 @@ class Camera2Manager(private val context: Context) {
                 }
             }, backgroundHandler)
             
-            startBackgroundThread()
-            
             // 打开相机（异步）
             cameraOpenCloseLock.acquire()
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
@@ -138,8 +142,24 @@ class Camera2Manager(private val context: Context) {
             val result = initializationResult?.await() ?: false
             initializationResult = null
             return result
+        } catch (e: SecurityException) {
+            Log.e(TAG, "初始化相机失败：权限不足", e)
+            initializationResult?.complete(false)
+            initializationResult = null
+            return false
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, "初始化相机失败：相机访问异常，错误代码: ${e.reason}", e)
+            initializationResult?.complete(false)
+            initializationResult = null
+            return false
+        } catch (e: IllegalArgumentException) {
+            Log.e(TAG, "初始化相机失败：参数错误 - ${e.message}", e)
+            initializationResult?.complete(false)
+            initializationResult = null
+            return false
         } catch (e: Exception) {
-            Log.e(TAG, "初始化相机失败", e)
+            Log.e(TAG, "初始化相机失败：未知异常 - ${e.javaClass.simpleName}: ${e.message}", e)
+            e.printStackTrace()
             initializationResult?.complete(false)
             initializationResult = null
             return false

@@ -40,11 +40,17 @@ class NativeCameraService {
         _logger.logCamera('原生相机初始化成功');
         return true;
       } else {
-        _logger.logError('原生相机初始化失败', error: Exception('返回false'));
+        _logger.logError('原生相机初始化失败', error: Exception('原生方法返回false，相机ID: $cameraId, 预览尺寸: ${previewWidth}x$previewHeight'));
         _previewSubscription?.cancel();
         _previewSubscription = null;
         return false;
       }
+    } on PlatformException catch (e, stackTrace) {
+      _logger.logError('初始化原生相机PlatformException', error: e, stackTrace: stackTrace);
+      _logger.logError('错误代码: ${e.code}, 错误消息: ${e.message}, 错误详情: ${e.details}');
+      _previewSubscription?.cancel();
+      _previewSubscription = null;
+      return false;
     } catch (e, stackTrace) {
       _logger.logError('初始化原生相机异常', error: e, stackTrace: stackTrace);
       _previewSubscription?.cancel();

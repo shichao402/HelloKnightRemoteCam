@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
@@ -12,6 +13,7 @@ import 'foreground_service.dart';
 import 'media_scanner_service.dart';
 import '../models/camera_settings.dart';
 import '../models/camera_status.dart';
+import '../screens/server_settings_screen.dart';
 
 class ConnectedDevice {
   final String ipAddress;
@@ -36,11 +38,39 @@ class HttpServerService {
   String? _ipAddress;
   int _port = 8080;
   final Map<String, ConnectedDevice> _connectedDevices = {};
+  
+  // 自动停止相关
+  Timer? _autoStopTimer;
+  DateTime? _noConnectionStartTime;
+  bool _autoStopEnabled = false;
+  int _autoStopMinutes = 15;
+  VoidCallback? _onAutoStop;
 
   HttpServerService({
     required this.cameraService,
     required this.settingsService,
   });
+  
+  // 设置自动停止回调
+  void setAutoStopCallback(VoidCallback? callback) {
+    _onAutoStop = callback;
+  }
+  
+  // 更新自动停止设置
+  Future<void> updateAutoStopSettings() async {
+    final enabled = await ServerSettings.getAutoStopEnabled();
+    final minutes = await ServerSettings.getAutoStopMinutes();
+    
+    _autoStopEnabled = enabled;
+    _autoStopMinutes = minutes;
+    
+    // 如果启用了自动停止，检查当前状态
+    if (_autoStopEnabled && isRunning) {
+      _checkAutoStop();
+    } else {
+      _cancelAutoStopTimer();
+    }
+  }
 
   // 更新连接设备信息
   void _updateConnectedDevice(String ipAddress) {
@@ -51,6 +81,7 @@ class HttpServerService {
     
     final now = DateTime.now();
     final wasNew = !_connectedDevices.containsKey(ipAddress);
+    final hadConnections = _connectedDevices.isNotEmpty;
     
     if (_connectedDevices.containsKey(ipAddress)) {
       _connectedDevices[ipAddress]!.lastActivity = now;
@@ -74,10 +105,90 @@ class HttpServerService {
       return inactive;
     });
     
+    // 检查自动停止状态
+    if (_autoStopEnabled && isRunning) {
+      if (_connectedDevices.isEmpty && hadConnections) {
+        // 从有连接到无连接，开始计时
+        _noConnectionStartTime = now;
+        _startAutoStopTimer();
+      } else if (_connectedDevices.isNotEmpty) {
+        // 有连接，取消计时
+        _noConnectionStartTime = null;
+        _cancelAutoStopTimer();
+      }
+    }
+    
     // 如果有变化，通知监听者（如果实现了）
     if (wasNew || removed.isNotEmpty) {
       _notifyListeners();
     }
+  }
+  
+  // 检查自动停止状态
+  void _checkAutoStop() {
+    if (!_autoStopEnabled || !isRunning) {
+      _cancelAutoStopTimer();
+      _noConnectionStartTime = null;
+      return;
+    }
+    
+    // 清理过期的连接（5分钟未活动）
+    final now = DateTime.now();
+    _connectedDevices.removeWhere((ip, device) {
+      return now.difference(device.lastActivity).inMinutes > 5;
+    });
+    
+    if (_connectedDevices.isEmpty) {
+      // 没有连接，开始计时
+      if (_noConnectionStartTime == null) {
+        _noConnectionStartTime = DateTime.now();
+      }
+      _startAutoStopTimer();
+    } else {
+      // 有连接，取消计时
+      _noConnectionStartTime = null;
+      _cancelAutoStopTimer();
+    }
+  }
+  
+  // 启动自动停止定时器
+  void _startAutoStopTimer() {
+    _cancelAutoStopTimer();
+    
+    if (_noConnectionStartTime == null) {
+      return;
+    }
+    
+    // 如果设置为0分钟，表示无限时间，不启动定时器
+    if (_autoStopMinutes == 0) {
+      logger.log('自动停止设置为无限时间，不会自动停止服务器', tag: 'AUTO_STOP');
+      return;
+    }
+    
+    // 每秒检查一次
+    _autoStopTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_noConnectionStartTime == null) {
+        timer.cancel();
+        return;
+      }
+      
+      final elapsed = DateTime.now().difference(_noConnectionStartTime!);
+      final elapsedMinutes = elapsed.inMinutes;
+      
+      // 如果达到设定的分钟数，执行自动停止
+      if (elapsedMinutes >= _autoStopMinutes) {
+        timer.cancel();
+        _autoStopTimer = null;
+        logger.log('自动停止服务器：无客户端连接已超过${_autoStopMinutes}分钟', tag: 'AUTO_STOP');
+        _onAutoStop?.call();
+      }
+    });
+  }
+  
+  // 取消自动停止定时器
+  void _cancelAutoStopTimer() {
+    _autoStopTimer?.cancel();
+    _autoStopTimer = null;
   }
   
   // 通知监听者（用于UI更新）
@@ -663,12 +774,20 @@ class HttpServerService {
 
     // 启动前台服务（保持应用在后台运行时继续工作）
     await _foregroundService.start();
+    
+    // 加载自动停止设置并检查
+    await updateAutoStopSettings();
+    _checkAutoStop();
 
     return _ipAddress ?? 'localhost';
   }
 
   // 停止服务器
   Future<void> stop() async {
+    // 取消自动停止定时器
+    _cancelAutoStopTimer();
+    _noConnectionStartTime = null;
+    
     // 停止前台服务
     await _foregroundService.stop();
     

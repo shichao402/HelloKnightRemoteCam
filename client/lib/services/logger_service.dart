@@ -12,7 +12,7 @@ class ClientLoggerService {
   
   File? _logFile;
   bool _initialized = false;
-  bool _debugEnabled = true; // 默认启用日志
+  bool _debugEnabled = false; // 默认关闭日志以提高效率
   Directory? _logsDir;
   
   bool get debugEnabled => _debugEnabled;
@@ -20,20 +20,15 @@ class ClientLoggerService {
   // 初始化日志服务
   Future<void> initialize() async {
     if (_initialized) {
-      print('[LOGGER] 日志服务已初始化，跳过');
       return;
     }
     
     try {
-      print('[LOGGER] ========== 开始初始化客户端日志服务 ==========');
-      
       // 从SharedPreferences读取调试模式设置
       final prefs = await SharedPreferences.getInstance();
-      _debugEnabled = prefs.getBool(_debugModeKey) ?? true; // 默认true
-      print('[LOGGER] 调试模式: $_debugEnabled');
+      _debugEnabled = prefs.getBool(_debugModeKey) ?? false; // 默认false
       
       if (!_debugEnabled) {
-        print('[LOGGER] 调试模式已禁用，仅输出到控制台');
         _initialized = true;
         return;
       }
@@ -43,7 +38,6 @@ class ClientLoggerService {
       await _initLogFile();
       
       _initialized = true;
-      print('[LOGGER] ✓ 日志服务初始化成功');
       
       // 写入初始日志
       log('客户端日志系统初始化成功', tag: 'INIT');
@@ -51,8 +45,11 @@ class ClientLoggerService {
         log('日志文件: ${_logFile!.path}', tag: 'INIT');
       }
     } catch (e, stackTrace) {
-      print('[LOGGER] ✗ 初始化日志文件失败: $e');
-      print('[LOGGER] ✗ 堆栈: $stackTrace');
+      // 调试模式关闭时不输出错误
+      if (_debugEnabled) {
+        print('[LOGGER] ✗ 初始化日志文件失败: $e');
+        print('[LOGGER] ✗ 堆栈: $stackTrace');
+      }
       _initialized = false;
       rethrow; // 重新抛出异常，让调用者知道初始化失败
     }
@@ -66,7 +63,7 @@ class ClientLoggerService {
       await testFile.delete();
       return true;
     } catch (e) {
-      print('[LOGGER] 写入权限测试失败: $e');
+      // 调试模式关闭时不输出错误
       return false;
     }
   }
@@ -95,21 +92,18 @@ class ClientLoggerService {
   Future<void> _initLogDirectory() async {
     // 检查应用是否为沙盒应用
     final Directory appSupportDir = await getApplicationSupportDirectory();
-    print('[LOGGER] Application Support目录: ${appSupportDir.path}');
     
     String logsDirPath;
     
     // 判断是否为沙盒应用：沙盒应用的Application Support路径包含Containers
     if (appSupportDir.path.contains('/Containers/')) {
       // 沙盒应用：日志存储在 ~/Library/Containers/<Bundle ID>/Data/Library/Logs/
-      print('[LOGGER] 检测到沙盒应用');
       final String appSupportPath = appSupportDir.path;
       // 从 Application Support 构建到 Library/Logs
       final String libraryPath = appSupportPath.replaceAll('/Application Support/com.example.remoteCamClient', '');
       logsDirPath = path.join(libraryPath, 'Logs');
     } else {
       // 非沙盒应用：日志存储在 ~/Library/Logs/<应用名称>/
-      print('[LOGGER] 检测到非沙盒应用');
       final String homeDir = Platform.environment['HOME'] ?? '';
       if (homeDir.isEmpty) {
         throw Exception('无法获取用户主目录');
@@ -120,24 +114,16 @@ class ClientLoggerService {
     
     _logsDir = Directory(logsDirPath);
     
-    print('[LOGGER] 日志目录路径: $logsDirPath');
-    
     // 确保日志目录存在
     if (!await _logsDir!.exists()) {
-      print('[LOGGER] 日志目录不存在，正在创建: $logsDirPath');
       await _logsDir!.create(recursive: true);
-      print('[LOGGER] 日志目录创建成功');
-    } else {
-      print('[LOGGER] 日志目录已存在: $logsDirPath');
     }
     
     // 验证目录权限
     final canWrite = await _testWritePermission(_logsDir!);
     if (!canWrite) {
-      print('[LOGGER] 错误: 无法写入日志目录');
       throw Exception('无法写入日志目录: $logsDirPath');
     }
-    print('[LOGGER] 目录权限验证通过');
   }
 
   // 初始化日志文件（内部方法）
@@ -165,30 +151,39 @@ class ClientLoggerService {
       await _logFile!.writeAsString('Log Dir: ${_logsDir!.path}\n');
       await _logFile!.writeAsString('Log File: $filePath\n');
       await _logFile!.writeAsString('=' * 60 + '\n\n');
-      
-      print('[LOGGER] ✓ 日志文件初始化成功: $filePath');
     } catch (e, stackTrace) {
-      print('[LOGGER] ✗ 初始化日志文件失败: $e');
-      print('[LOGGER] ✗ 堆栈: $stackTrace');
+      // 调试模式关闭时不输出错误
+      if (_debugEnabled) {
+        print('[LOGGER] ✗ 初始化日志文件失败: $e');
+        print('[LOGGER] ✗ 堆栈: $stackTrace');
+      }
       _logFile = null;
     }
   }
 
   // 记录日志
   void log(String message, {String? tag}) {
+    // 调试模式关闭时不输出任何日志
+    if (!_debugEnabled) {
+      return;
+    }
+    
     final timestamp = DateTime.now().toString();
     final tagStr = tag != null ? '[$tag] ' : '';
     final line = '[$timestamp] $tagStr$message\n';
     
-    // 打印到控制台
+    // 打印到控制台（仅在调试模式启用时）
     print('$tagStr$message');
     
-    // 写入文件（仅在调试模式启用时）
-    if (_debugEnabled && _initialized && _logFile != null) {
+    // 写入文件
+    if (_initialized && _logFile != null) {
       try {
         _logFile!.writeAsStringSync(line, mode: FileMode.append, flush: true);
       } catch (e) {
-        print('[LOGGER] 写入日志失败: $e');
+        // 调试模式关闭时不输出错误
+        if (_debugEnabled) {
+          print('[LOGGER] 写入日志失败: $e');
+        }
         // 尝试重新初始化
         _initialized = false;
       }
@@ -285,7 +280,7 @@ class ClientLoggerService {
           .toList()
         ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
     } catch (e) {
-      print('[LOGGER] 获取日志文件列表失败: $e');
+      // 调试模式关闭时不输出错误
       return [];
     }
   }
@@ -295,11 +290,8 @@ class ClientLoggerService {
     try {
       final files = await getLogFiles();
       if (files.isEmpty) {
-        print('[LOGGER] 没有旧日志文件需要清理');
         return;
       }
-      
-      print('[LOGGER] 找到 ${files.length} 个日志文件，开始清理...');
       
       // 按修改时间排序（最新的在前）
       files.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
@@ -313,7 +305,6 @@ class ClientLoggerService {
         
         // 如果文件超过10MB，删除
         if (size > 10 * 1024 * 1024) {
-          print('[LOGGER] 删除超大日志文件: ${file.path} (${(size / 1024 / 1024).toStringAsFixed(2)}MB)');
           await file.delete();
           deletedCount++;
           continue;
@@ -321,7 +312,6 @@ class ClientLoggerService {
         
         // 如果总大小超过50MB，删除
         if (totalSize + size > 50 * 1024 * 1024) {
-          print('[LOGGER] 删除日志文件（总大小限制）: ${file.path}');
           await file.delete();
           deletedCount++;
           continue;
@@ -329,7 +319,6 @@ class ClientLoggerService {
         
         // 如果保留的文件超过10个，删除
         if (keptCount >= 10) {
-          print('[LOGGER] 删除旧日志文件: ${file.path}');
           await file.delete();
           deletedCount++;
           continue;
@@ -339,9 +328,9 @@ class ClientLoggerService {
         keptCount++;
       }
       
-      print('[LOGGER] 日志清理完成: 保留 $keptCount 个，删除 $deletedCount 个');
+      // 调试模式关闭时不输出清理信息
     } catch (e) {
-      print('[LOGGER] 清理旧日志失败: $e');
+      // 调试模式关闭时不输出错误
     }
   }
 
@@ -373,20 +362,16 @@ class ClientLoggerService {
       }
       
       if (!await _logsDir!.exists()) {
-        print('[LOGGER] 日志目录不存在，无需清理');
         return;
       }
       
       final files = await getLogFiles();
-      print('[LOGGER] 清理所有日志文件，共 ${files.length} 个');
       
       for (var file in files) {
         await file.delete();
       }
-      
-      print('[LOGGER] 所有日志文件已清理');
     } catch (e) {
-      print('[LOGGER] 清理所有日志失败: $e');
+      // 调试模式关闭时不输出错误
       rethrow;
     }
   }

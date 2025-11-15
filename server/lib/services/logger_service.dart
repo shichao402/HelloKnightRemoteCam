@@ -11,7 +11,7 @@ class LoggerService {
   static const String _debugModeKey = 'debug_mode_enabled';
   
   final List<LogEntry> _logs = [];
-  bool _debugEnabled = true; // 默认启用日志
+  bool _debugEnabled = false; // 默认关闭日志以提高效率
   File? _logFile;
   Directory? _logsDir;
 
@@ -21,23 +21,20 @@ class LoggerService {
   // 初始化日志服务
   Future<void> initialize() async {
     try {
-      print('[SERVER-LOGGER] ========== 开始初始化服务器日志服务 ==========');
-      
-      // 默认启用日志（开发阶段）
+      // 默认关闭日志（生产环境）
       final prefs = await SharedPreferences.getInstance();
-      _debugEnabled = prefs.getBool(_debugModeKey) ?? true; // 默认true
-      
-      print('[SERVER-LOGGER] 调试模式: $_debugEnabled');
+      _debugEnabled = prefs.getBool(_debugModeKey) ?? false; // 默认false
       
       if (_debugEnabled) {
         await _initLogFile();
-      } else {
-        print('[SERVER-LOGGER] 调试模式已禁用，仅输出到控制台');
       }
+      // 调试模式关闭时不输出任何日志
     } catch (e, stackTrace) {
-      print('[SERVER-LOGGER] ✗ 初始化日志服务失败: $e');
-      print('[SERVER-LOGGER] ✗ 堆栈: $stackTrace');
-      // 即使初始化失败，也继续运行
+      // 即使初始化失败，也继续运行（调试模式关闭时不输出错误）
+      if (_debugEnabled) {
+        print('[SERVER-LOGGER] ✗ 初始化日志服务失败: $e');
+        print('[SERVER-LOGGER] ✗ 堆栈: $stackTrace');
+      }
     }
   }
 
@@ -57,12 +54,9 @@ class LoggerService {
   // 初始化日志文件（每次启动都创建新文件）
   Future<void> _initLogFile() async {
     try {
-      print('[SERVER-LOGGER] 开始初始化日志文件...');
-      
       // Android: 使用应用自己的目录 (/data/data/com.example.remote_cam_server/app_flutter/)
       // Mac/iOS: 使用应用沙盒目录
       final Directory appDir = await getApplicationSupportDirectory();
-      print('[SERVER-LOGGER] Application Support目录: ${appDir.path}');
       
       // 创建日志目录
       final String logsDirPath = path.join(appDir.path, 'logs');
@@ -70,11 +64,7 @@ class LoggerService {
       
       // 确保日志目录存在
       if (!await _logsDir!.exists()) {
-        print('[SERVER-LOGGER] 日志目录不存在，正在创建: $logsDirPath');
         await _logsDir!.create(recursive: true);
-        print('[SERVER-LOGGER] 日志目录创建成功');
-      } else {
-        print('[SERVER-LOGGER] 日志目录已存在: $logsDirPath');
       }
       
       // 清理旧日志（在创建新日志之前）
@@ -83,7 +73,6 @@ class LoggerService {
       // 创建新的日志文件（每次启动都创建新文件）
       final String timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
       final String filePath = path.join(logsDirPath, 'debug_$timestamp.log');
-      print('[SERVER-LOGGER] 创建新日志文件: $filePath');
       
       _logFile = File(filePath);
       
@@ -95,14 +84,15 @@ class LoggerService {
       await _logFile!.writeAsString('Log File: $filePath\n');
       await _logFile!.writeAsString('=' * 60 + '\n\n');
       
-      print('[SERVER-LOGGER] ✓ 日志文件初始化成功: $filePath');
-      
       // 写入初始日志
       log('服务器日志系统初始化成功', tag: 'INIT');
       log('日志文件: $filePath', tag: 'INIT');
     } catch (e, stackTrace) {
-      print('[SERVER-LOGGER] ✗ 初始化日志文件失败: $e');
-      print('[SERVER-LOGGER] ✗ 堆栈: $stackTrace');
+      // 调试模式关闭时不输出错误
+      if (_debugEnabled) {
+        print('[SERVER-LOGGER] ✗ 初始化日志文件失败: $e');
+        print('[SERVER-LOGGER] ✗ 堆栈: $stackTrace');
+      }
       _logFile = null;
     }
   }
@@ -123,11 +113,16 @@ class LoggerService {
       _logs.removeAt(0);
     }
     
-    // 打印到控制台
+    // 调试模式关闭时不输出任何日志
+    if (!_debugEnabled) {
+      return;
+    }
+    
+    // 打印到控制台（仅在调试模式启用时）
     print('[${entry.levelString}] ${entry.tag != null ? "[${entry.tag}] " : ""}${entry.message}');
     
     // 写入文件
-    if (_debugEnabled && _logFile != null) {
+    if (_logFile != null) {
       _writeToFile(entry);
     }
   }
@@ -162,7 +157,10 @@ class LoggerService {
       final line = '[${entry.timestamp.toString()}] [${entry.levelString}] ${entry.tag != null ? "[${entry.tag}] " : ""}${entry.message}\n';
       await _logFile!.writeAsString(line, mode: FileMode.append);
     } catch (e) {
-      print('[SERVER-LOGGER] 写入日志文件失败: $e');
+      // 调试模式关闭时不输出错误
+      if (_debugEnabled) {
+        print('[SERVER-LOGGER] 写入日志文件失败: $e');
+      }
       // 如果写入失败，尝试重新初始化
       _logFile = null;
     }
@@ -198,7 +196,10 @@ class LoggerService {
           .toList()
         ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
     } catch (e) {
-      print('[SERVER-LOGGER] 获取日志文件列表失败: $e');
+      // 调试模式关闭时不输出错误
+      if (_debugEnabled) {
+        print('[SERVER-LOGGER] 获取日志文件列表失败: $e');
+      }
       return [];
     }
   }
@@ -208,11 +209,8 @@ class LoggerService {
     try {
       final files = await getLogFiles();
       if (files.isEmpty) {
-        print('[SERVER-LOGGER] 没有旧日志文件需要清理');
         return;
       }
-      
-      print('[SERVER-LOGGER] 找到 ${files.length} 个日志文件，开始清理...');
       
       // 按修改时间排序（最新的在前）
       files.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
@@ -226,7 +224,6 @@ class LoggerService {
         
         // 如果文件超过10MB，删除
         if (size > 10 * 1024 * 1024) {
-          print('[SERVER-LOGGER] 删除超大日志文件: ${file.path} (${(size / 1024 / 1024).toStringAsFixed(2)}MB)');
           await file.delete();
           deletedCount++;
           continue;
@@ -234,7 +231,6 @@ class LoggerService {
         
         // 如果总大小超过50MB，删除
         if (totalSize + size > 50 * 1024 * 1024) {
-          print('[SERVER-LOGGER] 删除日志文件（总大小限制）: ${file.path}');
           await file.delete();
           deletedCount++;
           continue;
@@ -242,7 +238,6 @@ class LoggerService {
         
         // 如果保留的文件超过10个，删除
         if (keptCount >= 10) {
-          print('[SERVER-LOGGER] 删除旧日志文件: ${file.path}');
           await file.delete();
           deletedCount++;
           continue;
@@ -252,9 +247,9 @@ class LoggerService {
         keptCount++;
       }
       
-      print('[SERVER-LOGGER] 日志清理完成: 保留 $keptCount 个，删除 $deletedCount 个');
+      // 调试模式关闭时不输出清理信息
     } catch (e) {
-      print('[SERVER-LOGGER] 清理旧日志失败: $e');
+      // 调试模式关闭时不输出错误
     }
   }
 
@@ -273,20 +268,16 @@ class LoggerService {
       }
       
       if (!await _logsDir!.exists()) {
-        print('[SERVER-LOGGER] 日志目录不存在，无需清理');
         return;
       }
       
       final files = await getLogFiles();
-      print('[SERVER-LOGGER] 清理所有日志文件，共 ${files.length} 个');
       
       for (var file in files) {
         await file.delete();
       }
-      
-      print('[SERVER-LOGGER] 所有日志文件已清理');
     } catch (e) {
-      print('[SERVER-LOGGER] 清理所有日志失败: $e');
+      // 调试模式关闭时不输出错误
       rethrow;
     }
   }
