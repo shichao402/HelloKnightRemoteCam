@@ -15,11 +15,13 @@ import '../services/download_settings_service.dart';
 class FileManagerScreen extends StatefulWidget {
   final ApiService apiService;
   final String? highlightFileName; // 要高亮显示的文件名（用于定位）
+  final bool showAppBar; // 是否显示 AppBar（嵌入模式时设为 false）
 
   const FileManagerScreen({
     Key? key,
     required this.apiService,
     this.highlightFileName,
+    this.showAppBar = true, // 默认显示 AppBar
   }) : super(key: key);
 
   @override
@@ -57,7 +59,7 @@ class _FileManagerScreenState extends State<FileManagerScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 2, vsync: this); // 只有"全部文件"和"下载"两个页签
     _downloadManager = DownloadManager(
       baseUrl: widget.apiService.baseUrl,
     );
@@ -696,8 +698,139 @@ class _FileManagerScreenState extends State<FileManagerScreen>
 
   @override
   Widget build(BuildContext context) {
+    // 构建工具栏
+    Widget buildToolbar() {
+      return Container(
+        color: Theme.of(context).appBarTheme.backgroundColor ?? Colors.blue,
+        child: Row(
+          children: [
+            if (!widget.showAppBar)
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    _isSelectionMode ? '已选择 ${_selectedFiles.length} 项' : '文件管理',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+            const Spacer(),
+            if (_isSelectionMode) ...[
+              // 全选按钮
+              IconButton(
+                icon: const Icon(Icons.select_all, color: Colors.white, size: 20),
+                onPressed: _selectAll,
+                tooltip: '全选',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+              ),
+              IconButton(
+                icon: const Icon(Icons.download, color: Colors.white, size: 20),
+                onPressed: _selectedFiles.isEmpty ? null : _batchDownload,
+                tooltip: '批量下载',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete, color: Colors.white, size: 20),
+                onPressed: _selectedFiles.isEmpty ? null : _batchDeleteLocal,
+                tooltip: '批量删除本地文件',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 20),
+                onPressed: () {
+                  setState(() {
+                    _isSelectionMode = false;
+                    _selectedFiles.clear();
+                  });
+                },
+                tooltip: '取消选择',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+              ),
+            ] else ...[
+              // 视图模式切换
+              IconButton(
+                icon: Icon(
+                  _viewMode == 'list' ? Icons.grid_view : Icons.list,
+                  color: Colors.white,
+                  size: 20,
+                ),
+                onPressed: () async {
+                  setState(() {
+                    _viewMode = _viewMode == 'list' ? 'grid' : 'list';
+                  });
+                  await _saveViewPreferences();
+                },
+                tooltip: _viewMode == 'list' ? '切换到网格视图' : '切换到列表视图',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+              ),
+              // 网格大小调整（仅在网格模式下显示）
+              if (_viewMode == 'grid') ...[
+                IconButton(
+                  icon: const Icon(Icons.zoom_out, color: Colors.white, size: 20),
+                  onPressed: _gridItemSize > _minGridSize
+                      ? () async {
+                          setState(() {
+                            _gridItemSize = (_gridItemSize - 50).clamp(_minGridSize, _maxGridSize);
+                          });
+                          await _saveViewPreferences();
+                        }
+                      : null,
+                  tooltip: '缩小网格',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.zoom_in, color: Colors.white, size: 20),
+                  onPressed: _gridItemSize < _maxGridSize
+                      ? () async {
+                          setState(() {
+                            _gridItemSize = (_gridItemSize + 50).clamp(_minGridSize, _maxGridSize);
+                          });
+                          await _saveViewPreferences();
+                        }
+                      : null,
+                  tooltip: '放大网格',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                ),
+              ],
+              // 多选模式
+              IconButton(
+                icon: const Icon(Icons.checklist, color: Colors.white, size: 20),
+                onPressed: () {
+                  setState(() {
+                    _isSelectionMode = true;
+                  });
+                },
+                tooltip: '多选模式',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+              ),
+              IconButton(
+                icon: const Icon(Icons.refresh, color: Colors.white, size: 20),
+                onPressed: _refreshFileList,
+                tooltip: '刷新',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
     return Scaffold(
-      appBar: AppBar(
+      appBar: widget.showAppBar ? AppBar(
         title: Text(_isSelectionMode ? '已选择 ${_selectedFiles.length} 项' : '文件管理'),
         actions: [
           if (_isSelectionMode) ...[
@@ -787,12 +920,8 @@ class _FileManagerScreenState extends State<FileManagerScreen>
           controller: _tabController,
           tabs: [
             Tab(
-              icon: const Icon(Icons.image),
-              text: '照片 (${_pictures.length})',
-            ),
-            Tab(
-              icon: const Icon(Icons.videocam),
-              text: '视频 (${_videos.length})',
+              icon: const Icon(Icons.folder),
+              text: '全部文件 (${_pictures.length + _videos.length})',
             ),
             Tab(
               icon: const Icon(Icons.download),
@@ -800,14 +929,121 @@ class _FileManagerScreenState extends State<FileManagerScreen>
             ),
           ],
         ),
+      ) : null,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          return Column(
+            children: [
+              if (!widget.showAppBar) ...[
+                SizedBox(
+                  width: constraints.maxWidth,
+                  child: buildToolbar(),
+                ),
+                SizedBox(
+                  width: constraints.maxWidth,
+                  child: TabBar(
+                    controller: _tabController,
+                    isScrollable: false,
+                    tabAlignment: TabAlignment.fill,
+                    tabs: [
+                      Tab(
+                        icon: const Icon(Icons.folder, size: 18),
+                        text: '全部文件 (${_pictures.length + _videos.length})',
+                      ),
+                      Tab(
+                        icon: const Icon(Icons.download, size: 18),
+                        text: '下载 (${_downloadTasks.length})',
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              Expanded(
+                child: TabBarView(
+                  controller: _tabController,
+                  children: [
+                    _buildAllFilesList(), // 合并的照片和视频列表
+                    _buildDownloadList(),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
       ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          _buildFileList(_pictures),
-          _buildFileList(_videos),
-          _buildDownloadList(),
-        ],
+    );
+  }
+
+  /// 构建合并的照片和视频列表（用图标区分）
+  Widget _buildAllFilesList() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    // 合并照片和视频，按修改时间排序
+    final allFiles = [..._pictures, ..._videos]
+      ..sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+
+    if (allFiles.isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.folder_open, size: 64, color: Colors.grey),
+            SizedBox(height: 16),
+            Text('暂无文件'),
+          ],
+        ),
+      );
+    }
+
+    if (_viewMode == 'grid') {
+      return RefreshIndicator(
+        onRefresh: _refreshFileList,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // 使用实际可用宽度计算列数，避免溢出
+            // 考虑 padding (左右各8px) 和 spacing (列间距8px)
+            const padding = 16.0; // 左右各8px
+            const spacing = 8.0; // 列间距
+            final availableWidth = constraints.maxWidth - padding;
+            
+            // 计算列数：availableWidth = crossAxisCount * itemWidth + (crossAxisCount - 1) * spacing
+            // 即：availableWidth = crossAxisCount * (itemWidth + spacing) - spacing
+            // crossAxisCount = (availableWidth + spacing) / (itemWidth + spacing)
+            // 确保至少减去一个 spacing 来避免溢出
+            final crossAxisCount = ((availableWidth - spacing) / (_gridItemSize + spacing)).floor().clamp(1, 10);
+            
+            return GridView.builder(
+              padding: const EdgeInsets.all(8),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: crossAxisCount,
+                crossAxisSpacing: spacing,
+                mainAxisSpacing: 8,
+                childAspectRatio: 1.2,
+              ),
+              itemCount: allFiles.length,
+              itemBuilder: (context, index) {
+                final file = allFiles[index];
+                return _buildGridItem(file);
+              },
+            );
+          },
+        ),
+      );
+    }
+
+    // 列表视图
+    return RefreshIndicator(
+      onRefresh: _refreshFileList,
+      child: ListView.builder(
+        controller: _scrollController,
+        itemCount: allFiles.length,
+        itemBuilder: (context, index) {
+          final file = allFiles[index];
+          final isHighlighted = widget.highlightFileName == file.name;
+          return _buildListItem(file, isHighlighted: isHighlighted);
+        },
       ),
     );
   }
@@ -833,18 +1069,34 @@ class _FileManagerScreenState extends State<FileManagerScreen>
     if (_viewMode == 'grid') {
       return RefreshIndicator(
         onRefresh: _refreshFileList,
-        child: GridView.builder(
-          padding: const EdgeInsets.all(8),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: (MediaQuery.of(context).size.width / _gridItemSize).floor().clamp(1, 10),
-            crossAxisSpacing: 8,
-            mainAxisSpacing: 8,
-            childAspectRatio: 1.2, // 横向长方形，适合照片显示（约5:4比例）
-          ),
-          itemCount: files.length,
-          itemBuilder: (context, index) {
-            final file = files[index];
-            return _buildGridItem(file);
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // 使用实际可用宽度计算列数，避免溢出
+            // 考虑 padding (左右各8px) 和 spacing (列间距8px)
+            const padding = 16.0; // 左右各8px
+            const spacing = 8.0; // 列间距
+            final availableWidth = constraints.maxWidth - padding;
+            
+            // 计算列数：availableWidth = crossAxisCount * itemWidth + (crossAxisCount - 1) * spacing
+            // 即：availableWidth = crossAxisCount * (itemWidth + spacing) - spacing
+            // crossAxisCount = (availableWidth + spacing) / (itemWidth + spacing)
+            // 确保至少减去一个 spacing 来避免溢出
+            final crossAxisCount = ((availableWidth - spacing) / (_gridItemSize + spacing)).floor().clamp(1, 10);
+            
+            return GridView.builder(
+              padding: const EdgeInsets.all(8),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: crossAxisCount,
+                crossAxisSpacing: spacing,
+                mainAxisSpacing: 8,
+                childAspectRatio: 1.2,
+              ),
+              itemCount: files.length,
+              itemBuilder: (context, index) {
+                final file = files[index];
+                return _buildGridItem(file);
+              },
+            );
           },
         ),
       );
@@ -1033,11 +1285,13 @@ class _FileManagerScreenState extends State<FileManagerScreen>
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Text(
-                        file.formattedSize,
-                        style: const TextStyle(fontSize: 9, color: Colors.grey),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      Flexible(
+                        child: Text(
+                          file.formattedSize,
+                          style: const TextStyle(fontSize: 9, color: Colors.grey),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                       // 按钮区域 - 紧贴在大小旁边
                       if (!_isSelectionMode)
@@ -1394,4 +1648,5 @@ class _FileManagerScreenState extends State<FileManagerScreen>
     super.dispose();
   }
 }
+
 

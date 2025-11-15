@@ -41,6 +41,9 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   Timer? _reconnectTimer;
   Timer? _connectionCheckTimer;
   final ClientLoggerService _logger = ClientLoggerService();
+  
+  // 左右布局比例（0.0-1.0，表示左侧占比）
+  double _leftPanelRatio = 0.3; // 默认左侧30%
 
   @override
   void initState() {
@@ -549,243 +552,231 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            const Text('远程相机控制'),
-            const SizedBox(width: 8),
-            // 连接状态指示器
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: _isConnected ? Colors.green : Colors.red,
-              ),
-            ),
-            if (_isReconnecting) ...[
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(kToolbarHeight),
+        child: AppBar(
+          title: Row(
+            children: [
+              const Text('远程相机控制'),
               const SizedBox(width: 8),
-              const SizedBox(
-                width: 12,
-                height: 12,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              // 连接状态指示器
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _isConnected ? Colors.green : Colors.red,
+                ),
+              ),
+              if (_isReconnecting) ...[
+                const SizedBox(width: 8),
+                const SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            // 重连按钮
+            if (!_isConnected)
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: _isReconnecting ? null : _manualReconnect,
+                tooltip: '重连',
+              ),
+            // 返回连接页面按钮
+            if (!_isConnected)
+              IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: _returnToConnectionScreen,
+                tooltip: '返回连接页面',
+              ),
+            IconButton(
+              icon: const Icon(Icons.settings),
+              onPressed: _navigateToSettings,
+              tooltip: '设置',
+            ),
+            IconButton(
+              icon: const Icon(Icons.folder),
+              onPressed: () => _navigateToFileManager(null),
+              tooltip: '文件管理',
+            ),
+          ],
+          flexibleSpace: Stack(
+            children: [
+              // 拍照和录像按钮（固定在中间区域）
+              Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 拍照按钮
+                    SizedBox(
+                      width: 90,
+                      child: ElevatedButton.icon(
+                        onPressed: _isOperating || _isRecording ? null : _takePicture,
+                        icon: const Icon(Icons.camera, size: 18),
+                        label: const Text('拍照', style: TextStyle(fontSize: 12)),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          backgroundColor: Colors.blue,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // 录像按钮
+                    SizedBox(
+                      width: 90,
+                      child: ElevatedButton.icon(
+                        onPressed: _isOperating ? null : _toggleRecording,
+                        icon: Icon(
+                          _isRecording ? Icons.stop : Icons.videocam,
+                          size: 18,
+                        ),
+                        label: Text(
+                          _isRecording ? '停止' : '录像',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          backgroundColor: _isRecording ? Colors.red : Colors.green,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
-          ],
+          ),
         ),
-        actions: [
-          // 重连按钮
-          if (!_isConnected)
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              onPressed: _isReconnecting ? null : _manualReconnect,
-              tooltip: '重连',
-            ),
-          // 返回连接页面按钮
-          if (!_isConnected)
-            IconButton(
-              icon: const Icon(Icons.arrow_back),
-              onPressed: _returnToConnectionScreen,
-              tooltip: '返回连接页面',
-            ),
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: _navigateToSettings,
-            tooltip: '设置',
-          ),
-          IconButton(
-            icon: const Icon(Icons.folder),
-            onPressed: () => _navigateToFileManager(null),
-            tooltip: '文件管理',
-          ),
-        ],
       ),
-      body: Column(
-        children: [
-          // 预览区域
-          Expanded(
-            flex: 3,
-            child: Container(
-              margin: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.black,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.grey),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Stack(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final totalWidth = constraints.maxWidth;
+          const dividerWidth = 4.0; // 分割线宽度
+          final leftWidth = totalWidth * _leftPanelRatio;
+          // 右侧宽度 = 总宽度 - 左侧宽度 - 分割线宽度，确保不溢出
+          final rightWidth = totalWidth - leftWidth - dividerWidth;
+          
+          return Row(
+            children: [
+              // 左侧：视频预览区域（按照常规手机视频尺寸比例，9:16竖屏）
+              SizedBox(
+                width: leftWidth,
+                child: Column(
                   children: [
-                    Center(
-                      child: MjpegStreamWidget(
-                        streamUrl: widget.apiService.getPreviewStreamUrl(),
-                        fit: BoxFit.contain,
-                      ),
-                    ),
-                    if (_isRecording)
-                      Positioned(
-                        top: 16,
-                        right: 16,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.red,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: const [
-                              Icon(
-                                Icons.fiber_manual_record,
-                                color: Colors.white,
-                                size: 16,
-                              ),
-                              SizedBox(width: 4),
-                              Text(
-                                '录像中',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
+                    // 预览区域
+                    Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.black,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Stack(
+                            children: [
+                              Center(
+                                child: AspectRatio(
+                                  aspectRatio: 9 / 16, // 常规手机视频比例（竖屏）
+                                  child: MjpegStreamWidget(
+                                    streamUrl: widget.apiService.getPreviewStreamUrl(),
+                                    fit: BoxFit.cover,
+                                  ),
                                 ),
                               ),
+                              if (_isRecording)
+                                Positioned(
+                                  top: 16,
+                                  right: 16,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red,
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: const [
+                                        Icon(
+                                          Icons.fiber_manual_record,
+                                          color: Colors.white,
+                                          size: 16,
+                                        ),
+                                        SizedBox(width: 4),
+                                        Text(
+                                          '录像中',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
                             ],
                           ),
                         ),
                       ),
+                    ),
                   ],
                 ),
               ),
-            ),
-          ),
 
-          // 控制按钮区域
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                // 拍照按钮
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _isOperating || _isRecording ? null : _takePicture,
-                    icon: const Icon(Icons.camera),
-                    label: const Text('拍照'),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      backgroundColor: Colors.blue,
+              // 可拖拽的分割线
+              GestureDetector(
+                onPanUpdate: (details) {
+                  setState(() {
+                    final newLeftWidth = leftWidth + details.delta.dx;
+                    final newRatio = newLeftWidth / totalWidth;
+                    // 限制比例在 0.2 到 0.7 之间
+                    _leftPanelRatio = newRatio.clamp(0.2, 0.7);
+                  });
+                },
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.resizeColumn,
+                  child: SizedBox(
+                    width: dividerWidth,
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[400],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
                 ),
-                const SizedBox(width: 16),
-                
-                // 录像按钮
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _isOperating ? null : _toggleRecording,
-                    icon: Icon(_isRecording ? Icons.stop : Icons.videocam),
-                    label: Text(_isRecording ? '停止录像' : '开始录像'),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      backgroundColor: _isRecording ? Colors.red : Colors.green,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // 文件快速预览
-          Expanded(
-            flex: 2,
-            child: Card(
-              margin: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          '最近文件',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        TextButton.icon(
-                          onPressed: _refreshFileList,
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('刷新'),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Divider(height: 1),
-                  Expanded(
-                    child: _buildFileQuickList(),
-                  ),
-                ],
               ),
-            ),
-          ),
-        ],
+
+              // 右侧：直接嵌入完整的文件管理界面（无 AppBar）
+              SizedBox(
+                width: rightWidth,
+                child: ClipRect(
+                  child: FileManagerScreen(
+                    apiService: widget.apiService,
+                    highlightFileName: null,
+                    showAppBar: false,
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 
-  Widget _buildFileQuickList() {
-    final allFiles = [..._pictures, ..._videos]
-      ..sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
-    
-    if (allFiles.isEmpty) {
-      return const Center(
-        child: Text('暂无文件'),
-      );
-    }
-
-    final recentFiles = allFiles.take(5).toList();
-
-    return ListView.builder(
-      itemCount: recentFiles.length,
-      itemBuilder: (context, index) {
-        final file = recentFiles[index];
-        return Card(
-          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: Column(
-            children: [
-              ListTile(
-                leading: Icon(
-                  file.isVideo ? Icons.videocam : Icons.image,
-                  color: file.isVideo ? Colors.red : Colors.blue,
-                ),
-                title: Text(file.name),
-                subtitle: Text(file.formattedSize),
-                trailing: IconButton(
-                  icon: const Icon(Icons.location_on, size: 20),
-                  onPressed: () => _navigateToFileManager(file.name),
-                  tooltip: '定位到文件',
-                ),
-              ),
-              // 操作按钮区域
-              _buildFileActionButtons(file, compact: false),
-            ],
-          ),
-        );
-      },
-    );
-  }
-  
-  /// 导航到文件管理并定位到指定文件
+  /// 导航到文件管理并定位到指定文件（全屏模式）
   void _navigateToFileManager(String? fileName) {
     Navigator.push(
       context,
@@ -794,126 +785,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           apiService: widget.apiService,
           highlightFileName: fileName,
         ),
-      ),
-    );
-  }
-
-  /// 构建文件操作按钮（直接显示）
-  Widget _buildFileActionButtons(FileInfo file, {bool compact = false}) {
-    final isDownloaded = _downloadedStatusCache[file.name] == true;
-    
-    if (compact) {
-      // 紧凑模式
-      return PopupMenuButton<String>(
-        icon: const Icon(Icons.more_vert, size: 18),
-        onSelected: (value) async {
-          switch (value) {
-            case 'download':
-              await _downloadFile(file);
-              break;
-            case 'open_in_manager':
-              await _openInFileManager(file);
-              break;
-            case 'copy':
-              await _copyFile(file);
-              break;
-            case 'delete_local':
-              await _deleteLocalFile(file);
-              break;
-          }
-        },
-        itemBuilder: (context) => [
-          PopupMenuItem(
-            value: 'download',
-            enabled: !isDownloaded,
-            child: Row(
-              children: [
-                Icon(Icons.download, color: isDownloaded ? Colors.grey : null),
-                const SizedBox(width: 8),
-                const Text('下载'),
-              ],
-            ),
-          ),
-          PopupMenuItem(
-            value: 'open_in_manager',
-            enabled: isDownloaded,
-            child: Row(
-              children: [
-                Icon(Icons.folder_open, color: isDownloaded ? null : Colors.grey),
-                const SizedBox(width: 8),
-                const Text('在资源管理器中打开'),
-              ],
-            ),
-          ),
-          PopupMenuItem(
-            value: 'copy',
-            enabled: isDownloaded,
-            child: Row(
-              children: [
-                Icon(Icons.copy, color: isDownloaded ? null : Colors.grey),
-                const SizedBox(width: 8),
-                const Text('复制文件'),
-              ],
-            ),
-          ),
-          const PopupMenuDivider(),
-          PopupMenuItem(
-            value: 'delete_local',
-            enabled: isDownloaded,
-            child: Row(
-              children: [
-                Icon(Icons.delete_forever, color: isDownloaded ? Colors.red : Colors.grey),
-                const SizedBox(width: 8),
-                Text(
-                  '删除本地文件',
-                  style: TextStyle(color: isDownloaded ? Colors.red : Colors.grey),
-                ),
-              ],
-            ),
-          ),
-        ],
-      );
-    }
-    
-    // 完整模式（列表视图）
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          Expanded(
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.download, size: 16),
-              label: const Text('下载', style: TextStyle(fontSize: 12)),
-              onPressed: isDownloaded ? null : () => _downloadFile(file),
-            ),
-          ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.folder_open, size: 16),
-              label: const Text('打开', style: TextStyle(fontSize: 12)),
-              onPressed: isDownloaded ? () => _openInFileManager(file) : null,
-            ),
-          ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.copy, size: 16),
-              label: const Text('复制', style: TextStyle(fontSize: 12)),
-              onPressed: isDownloaded ? () => _copyFile(file) : null,
-            ),
-          ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.delete_forever, size: 16),
-              label: const Text('删除', style: TextStyle(fontSize: 12)),
-              style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-              onPressed: isDownloaded ? () => _deleteLocalFile(file) : null,
-            ),
-          ),
-        ],
       ),
     );
   }
