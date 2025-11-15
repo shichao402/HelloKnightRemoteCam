@@ -483,12 +483,11 @@ class Camera2Manager(private val context: Context) {
             // 在关闭旧的captureSession之前，先停止预览请求
             try {
                 stopPreview()
-                Thread.sleep(100)
             } catch (e: Exception) {
                 Log.w(TAG, "停止预览时发生异常（可能session已关闭）: ${e.message}")
             }
             
-            // 现在关闭旧的captureSession，等待它完全关闭
+            // 现在关闭旧的captureSession，等待它完全关闭（通过回调）
             captureSession?.close()
             
             // 等待旧的session完全关闭（最多2秒）

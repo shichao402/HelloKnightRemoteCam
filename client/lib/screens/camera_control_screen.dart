@@ -358,18 +358,9 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       final result = await widget.apiService.capture();
       if (result['success']) {
         _showSuccess('拍照成功');
-        
-        // 等待文件索引写入完成（数据库操作可能需要一点时间）
-        await Future.delayed(const Duration(milliseconds: 300));
-        
-        // 使用增量更新刷新文件列表（只获取新文件）
-        await _incrementalRefreshFileList();
-        
-        // 自动下载最新照片
-        if (_pictures.isNotEmpty) {
-          final latestPicture = _pictures.first; // 最新的照片在第一位
-          await _autoDownloadPicture(latestPicture);
-        }
+        _logger.log('拍照成功，等待WebSocket通知更新文件列表', tag: 'CAMERA');
+        // 不再手动刷新，依赖WebSocket通知来更新文件列表
+        // 文件列表更新和自动下载会在 _handleNewFilesNotification 中处理
       } else {
         _showError('拍照失败: ${result['error']}');
       }
@@ -388,11 +379,14 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   /// 处理新文件通知（直接使用通知中的文件信息）
   Future<void> _handleNewFilesNotification(Map<String, dynamic> data) async {
     try {
+      _logger.log('收到新文件通知，开始处理', tag: 'FILE_NOTIFICATION');
       final fileType = data['fileType'] as String?;
       final filesData = data['files'] as List<dynamic>?;
       
+      _logger.log('文件类型: $fileType, 文件数量: ${filesData?.length ?? 0}', tag: 'FILE_NOTIFICATION');
+      
       if (filesData == null || filesData.isEmpty) {
-        // 如果没有文件信息，回退到增量刷新
+        _logger.log('没有文件信息，回退到增量刷新', tag: 'FILE_NOTIFICATION');
         await _incrementalRefreshFileList();
         return;
       }
@@ -403,14 +397,18 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         try {
           final fileInfo = FileInfo.fromJson(fileJson as Map<String, dynamic>);
           newFiles.add(fileInfo);
+          _logger.log('解析文件成功: ${fileInfo.name}', tag: 'FILE_NOTIFICATION');
         } catch (e) {
           _logger.logError('解析文件信息失败', error: e);
         }
       }
       
       if (newFiles.isEmpty) {
+        _logger.log('解析后没有有效文件，跳过更新', tag: 'FILE_NOTIFICATION');
         return;
       }
+      
+      _logger.log('成功解析 ${newFiles.length} 个文件，准备更新UI', tag: 'FILE_NOTIFICATION');
       
       // 检查新文件的下载状态
       await _checkDownloadStatus(newFiles);
@@ -453,11 +451,14 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       updatedPictures.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
       updatedVideos.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
       
+      _logger.log('更新文件列表: 照片 ${updatedPictures.length} 张, 视频 ${updatedVideos.length} 个', tag: 'FILE_NOTIFICATION');
+      
       if (mounted) {
         setState(() {
           _pictures = updatedPictures;
           _videos = updatedVideos;
         });
+        _logger.log('UI已更新', tag: 'FILE_NOTIFICATION');
         
         // 自动下载最新照片/视频
         if (fileType == 'image' && updatedPictures.isNotEmpty) {
@@ -674,16 +675,10 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         if (!wasRecording && _isRecording) {
           // 录像已开始
         } else if (wasRecording && !_isRecording) {
-          // 录像已停止，等待文件索引写入完成
-          await Future.delayed(const Duration(milliseconds: 300));
-          
-          // 使用增量更新刷新文件列表（只获取新文件）
-          await _incrementalRefreshFileList();
-          
-          if (_videos.isNotEmpty) {
-            final latestVideo = _videos.first; // 最新的视频在第一位
-            await _autoDownloadVideo(latestVideo);
-          }
+          // 录像已停止，等待WebSocket通知更新文件列表
+          _logger.log('录像已停止，等待WebSocket通知更新文件列表', tag: 'CAMERA');
+          // 不再手动刷新，依赖WebSocket通知来更新文件列表
+          // 文件列表更新和自动下载会在 _handleNewFilesNotification 中处理
         }
       } else {
         _showError('操作失败: ${result['error']}');

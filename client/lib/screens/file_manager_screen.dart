@@ -364,11 +364,14 @@ class _FileManagerScreenState extends State<FileManagerScreen>
   /// 处理新文件通知（直接使用通知中的文件信息）
   Future<void> _handleNewFilesNotification(Map<String, dynamic> data) async {
     try {
+      print('[FILE_NOTIFICATION] 收到新文件通知，开始处理');
       final fileType = data['fileType'] as String?;
       final filesData = data['files'] as List<dynamic>?;
       
+      print('[FILE_NOTIFICATION] 文件类型: $fileType, 文件数量: ${filesData?.length ?? 0}');
+      
       if (filesData == null || filesData.isEmpty) {
-        // 如果没有文件信息，回退到增量刷新
+        print('[FILE_NOTIFICATION] 没有文件信息，回退到增量刷新');
         await _incrementalRefreshFileList();
         return;
       }
@@ -379,14 +382,18 @@ class _FileManagerScreenState extends State<FileManagerScreen>
         try {
           final fileInfo = FileInfo.fromJson(fileJson as Map<String, dynamic>);
           newFiles.add(fileInfo);
+          print('[FILE_NOTIFICATION] 解析文件成功: ${fileInfo.name}');
         } catch (e) {
-          print('解析文件信息失败: $e');
+          print('[FILE_NOTIFICATION] 解析文件信息失败: $e');
         }
       }
       
       if (newFiles.isEmpty) {
+        print('[FILE_NOTIFICATION] 解析后没有有效文件，跳过更新');
         return;
       }
+      
+      print('[FILE_NOTIFICATION] 成功解析 ${newFiles.length} 个文件，准备更新UI');
       
       // 检查新文件的下载状态
       await _checkDownloadStatus(newFiles);
@@ -436,11 +443,14 @@ class _FileManagerScreenState extends State<FileManagerScreen>
         _lastUpdateTime = allFiles.first.modifiedTime.millisecondsSinceEpoch;
       }
       
+      print('[FILE_NOTIFICATION] 更新文件列表: 照片 ${updatedPictures.length} 张, 视频 ${updatedVideos.length} 个');
+      
       if (mounted) {
         setState(() {
           _pictures = updatedPictures;
           _videos = updatedVideos;
         });
+        print('[FILE_NOTIFICATION] UI已更新');
       }
     } catch (e) {
       print('处理新文件通知失败: $e');

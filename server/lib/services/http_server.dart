@@ -842,19 +842,31 @@ class HttpServerService {
   /// 处理拍照请求
   Future<Map<String, dynamic>> _handleCaptureRequest(Map<String, dynamic> params, String? clientIp) async {
     logger.logCamera('开始拍照（WebSocket）');
-    final filePath = await cameraService.takePicture();
-    logger.logCamera('拍照成功（WebSocket）', details: filePath);
-    
-    final fileName = filePath.split('/').last;
-    operationLog.addLog(
-      type: OperationType.takePicture,
-      clientIp: clientIp ?? 'websocket_client',
-      fileName: fileName,
-    );
-    
-    await broadcastNewFiles([fileName], 'image');
-    
-    return {'success': true, 'path': filePath};
+    try {
+      final filePath = await cameraService.takePicture();
+      logger.logCamera('拍照成功（WebSocket）', details: filePath);
+      
+      if (filePath == null || filePath.isEmpty) {
+        logger.logError('拍照返回空路径', error: Exception('filePath为空'));
+        return {'success': false, 'error': '拍照返回空路径'};
+      }
+      
+      final fileName = filePath.split('/').last;
+      operationLog.addLog(
+        type: OperationType.takePicture,
+        clientIp: clientIp ?? 'websocket_client',
+        fileName: fileName,
+      );
+      
+      // 广播新文件通知
+      logger.log('准备广播新照片文件: $fileName', tag: 'WEBSOCKET');
+      await broadcastNewFiles([fileName], 'image');
+      
+      return {'success': true, 'path': filePath};
+    } catch (e, stackTrace) {
+      logger.logError('拍照失败', error: e, stackTrace: stackTrace);
+      return {'success': false, 'error': e.toString()};
+    }
   }
   
   /// 处理开始录像请求
@@ -876,19 +888,31 @@ class HttpServerService {
   /// 处理停止录像请求
   Future<Map<String, dynamic>> _handleStopRecordingRequest(Map<String, dynamic> params, String? clientIp) async {
     logger.logCamera('停止录像（WebSocket）');
-    final filePath = await cameraService.stopRecording();
-    logger.logCamera('录像停止成功（WebSocket）', details: filePath);
-    
-    final fileName = filePath.split('/').last;
-    operationLog.addLog(
-      type: OperationType.stopRecording,
-      clientIp: clientIp ?? 'websocket_client',
-      fileName: fileName,
-    );
-    
-    await broadcastNewFiles([fileName], 'video');
-    
-    return {'success': true, 'path': filePath};
+    try {
+      final filePath = await cameraService.stopRecording();
+      logger.logCamera('录像停止成功（WebSocket）', details: filePath);
+      
+      if (filePath == null || filePath.isEmpty) {
+        logger.logError('停止录制返回空路径', error: Exception('filePath为空'));
+        return {'success': false, 'error': '停止录制返回空路径'};
+      }
+      
+      final fileName = filePath.split('/').last;
+      operationLog.addLog(
+        type: OperationType.stopRecording,
+        clientIp: clientIp ?? 'websocket_client',
+        fileName: fileName,
+      );
+      
+      // 广播新文件通知
+      logger.log('准备广播新视频文件: $fileName', tag: 'WEBSOCKET');
+      await broadcastNewFiles([fileName], 'video');
+      
+      return {'success': true, 'path': filePath};
+    } catch (e, stackTrace) {
+      logger.logError('停止录制失败', error: e, stackTrace: stackTrace);
+      return {'success': false, 'error': e.toString()};
+    }
   }
   
   /// 处理获取文件列表请求
@@ -985,19 +1009,19 @@ class HttpServerService {
     }
     
     // 获取文件信息列表
+    // 注意：由于 takePicture() 和 stopRecording() 已经 await 了 addFile()，
+    // 所以文件索引应该已经完成，可以直接查询
     final List<Map<String, dynamic>> filesData = [];
     for (final fileName in fileNames) {
       try {
-        // 等待一小段时间，确保文件索引已经添加（数据库操作可能需要时间）
-        await Future.delayed(const Duration(milliseconds: 100));
-        
+        // 直接从索引获取文件信息（索引已经在 takePicture/stopRecording 中完成）
         final fileInfo = await cameraService.getFileByName(fileName);
         if (fileInfo != null) {
           filesData.add(fileInfo.toJson());
-          logger.log('成功获取文件信息: $fileName', tag: 'WEBSOCKET');
+          logger.log('成功从索引获取文件信息: $fileName', tag: 'WEBSOCKET');
         } else {
-          logger.log('无法获取文件信息: $fileName，尝试从文件系统获取', tag: 'WEBSOCKET');
-          // 如果索引中没有，尝试从文件系统获取基本信息
+          logger.log('索引中未找到文件: $fileName，尝试从文件系统获取', tag: 'WEBSOCKET');
+          // 如果索引中没有，尝试从文件系统获取基本信息（作为后备方案）
           try {
             final externalDir = await getExternalStorageDirectory();
             if (externalDir != null) {
@@ -1016,6 +1040,8 @@ class HttpServerService {
                   'modifiedTime': stat.modified.millisecondsSinceEpoch,
                 });
                 logger.log('从文件系统获取文件信息: $fileName', tag: 'WEBSOCKET');
+              } else {
+                logger.log('文件不存在: $filePath', tag: 'WEBSOCKET');
               }
             }
           } catch (e) {

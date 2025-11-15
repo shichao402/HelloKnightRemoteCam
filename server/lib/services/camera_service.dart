@@ -267,17 +267,45 @@ class CameraService {
     _logger.logCamera('录像已停止', details: '文件路径: $savedPath');
     _logger.logCamera('原生相机预览继续运行', details: '预览未中断');
     
-    // 等待文件完全写入
+    // 等待文件完全写入（使用指数退避策略，最多等待2秒）
     final videoFile = File(savedPath);
     int retries = 0;
-    while (!await videoFile.exists() && retries < 20) {
-      await Future.delayed(const Duration(milliseconds: 100));
+    int delayMs = 50; // 初始延迟50ms
+    const maxRetries = 20; // 最多重试20次（总共约2秒）
+    
+    while (!await videoFile.exists() && retries < maxRetries) {
+      await Future.delayed(Duration(milliseconds: delayMs));
       retries++;
+      // 指数退避：前几次快速检查，后面逐渐增加延迟
+      if (retries < 5) {
+        delayMs = 50;
+      } else if (retries < 10) {
+        delayMs = 100;
+      } else {
+        delayMs = 200;
+      }
     }
     
     if (!await videoFile.exists()) {
       _logger.logError('录像文件不存在', error: Exception('文件不存在: $savedPath'));
       throw Exception('录像文件不存在: $savedPath');
+    }
+    
+    // 等待文件大小稳定（确保文件写入完成）
+    int lastSize = 0;
+    int stableCount = 0;
+    for (int i = 0; i < 5; i++) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      final currentSize = await videoFile.length();
+      if (currentSize == lastSize && currentSize > 0) {
+        stableCount++;
+        if (stableCount >= 2) {
+          break; // 文件大小连续2次相同，认为写入完成
+        }
+      } else {
+        stableCount = 0;
+        lastSize = currentSize;
+      }
     }
     
     _logger.logCamera('录像文件已存在', details: '文件大小: ${await videoFile.length()} bytes');

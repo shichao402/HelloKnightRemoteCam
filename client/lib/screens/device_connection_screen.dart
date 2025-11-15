@@ -54,9 +54,10 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
         setState(() {
           _isAutoConnecting = true;
         });
-        // 延迟一下确保UI已更新
-        await Future.delayed(const Duration(milliseconds: 100));
-        await _connect(saveSettings: false);
+        // 使用postFrameCallback确保UI已更新后再连接
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _connect(saveSettings: false);
+        });
       }
     } catch (e, stackTrace) {
       _logger.logError('加载连接设置失败', error: e, stackTrace: stackTrace);

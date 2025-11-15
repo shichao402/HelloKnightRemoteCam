@@ -3,6 +3,7 @@ import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import '../services/camera_service.dart';
 import '../services/settings_service.dart';
 import '../services/http_server.dart';
@@ -76,22 +77,37 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
         return;
       }
 
-      // 等待一小段时间，让应用完全恢复
-      await Future.delayed(const Duration(milliseconds: 500));
-
       // 尝试恢复预览流
       _logger.log('尝试恢复预览流', tag: 'LIFECYCLE');
       await _cameraService.resumePreview();
       
-      // 等待一段时间后检查预览帧是否恢复
-      await Future.delayed(const Duration(milliseconds: 1000));
+      // 使用智能轮询等待预览帧恢复（最多等待3秒）
+      // 使用指数退避策略：前几次快速检查，后面逐渐增加延迟
+      int retries = 0;
+      int delayMs = 100; // 初始延迟100ms
+      const maxRetries = 15; // 最多重试15次（总共约3秒）
       
-      final lastFrame = _cameraService.lastPreviewFrame;
-      if (lastFrame == null) {
-        _logger.log('预览帧仍为null，预览流可能未恢复', tag: 'LIFECYCLE');
-      } else {
-        _logger.log('预览流已恢复，最后预览帧大小: ${lastFrame.length} 字节', tag: 'LIFECYCLE');
+      while (retries < maxRetries) {
+        await Future.delayed(Duration(milliseconds: delayMs));
+        
+        final lastFrame = _cameraService.lastPreviewFrame;
+        if (lastFrame != null && lastFrame.isNotEmpty) {
+          _logger.log('预览流已恢复，预览帧大小: ${lastFrame.length} 字节', tag: 'LIFECYCLE');
+          return;
+        }
+        
+        retries++;
+        // 指数退避：前5次100ms，接下来5次200ms，最后5次300ms
+        if (retries < 5) {
+          delayMs = 100;
+        } else if (retries < 10) {
+          delayMs = 200;
+        } else {
+          delayMs = 300;
+        }
       }
+      
+      _logger.log('等待预览帧恢复超时，预览流可能未恢复', tag: 'LIFECYCLE');
     } catch (e, stackTrace) {
       _logger.logError('检查预览流状态失败', error: e, stackTrace: stackTrace);
     }

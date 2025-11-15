@@ -26,11 +26,8 @@ class NativeCameraService {
     try {
       _logger.logCamera('初始化原生相机', details: '相机ID: $cameraId, 预览尺寸: ${previewWidth}x$previewHeight');
       
-      // 先启动预览流监听（确保EventChannel监听已启动）
+      // 先启动预览流监听（EventChannel的listen是同步注册的，不需要延迟）
       _startPreviewStream();
-      
-      // 等待一小段时间，确保EventChannel监听已启动
-      await Future.delayed(const Duration(milliseconds: 100));
       
       final result = await _methodChannel.invokeMethod<bool>('initialize', {
         'cameraId': cameraId,
