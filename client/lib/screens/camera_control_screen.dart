@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
 import 'dart:async';
+import 'dart:convert';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../services/api_service.dart';
 import '../services/download_manager.dart';
 import '../models/file_info.dart';
@@ -40,6 +42,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   bool _isReconnecting = false;
   Timer? _reconnectTimer;
   Timer? _connectionCheckTimer;
+  StreamSubscription? _webSocketSubscription; // WebSocket通知消息订阅
   final ClientLoggerService _logger = ClientLoggerService();
   
   // 左右布局比例（0.0-1.0，表示左侧占比）
@@ -52,6 +55,9 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     _downloadManager.initialize();
     _refreshFileList();
     _startConnectionCheck();
+    _startFileListRefreshTimer(); // 启动WebSocket连接并监听通知
+    // 连接WebSocket（用于API调用）
+    widget.apiService.connectWebSocket();
   }
 
   @override
@@ -59,7 +65,74 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     _downloadSubscription?.cancel();
     _reconnectTimer?.cancel();
     _connectionCheckTimer?.cancel();
+    _webSocketSubscription?.cancel();
     super.dispose();
+  }
+  
+  /// 启动WebSocket连接（监听server的新文件通知）
+  void _startFileListRefreshTimer() {
+    _logger.log('准备启动WebSocket通知监听', tag: 'WEBSOCKET');
+    _connectToWebSocketNotifications();
+  }
+  
+  /// 连接到WebSocket通知流（监听服务器推送的通知）
+  void _connectToWebSocketNotifications() async {
+    try {
+      // 确保ApiService的WebSocket已连接
+      await widget.apiService.connectWebSocket();
+      
+      // 监听通知消息
+      final notificationStream = widget.apiService.webSocketNotifications;
+      if (notificationStream != null) {
+        _webSocketSubscription = notificationStream.listen(
+          (notification) {
+            if (!mounted || !_isConnected) {
+              return;
+            }
+            
+            try {
+              final event = notification['event'] as String?;
+              final data = notification['data'] as Map<String, dynamic>?;
+              
+              _logger.log('收到WebSocket通知: event=$event', tag: 'WEBSOCKET');
+              
+              // 处理新文件通知
+              if (event == 'new_files' && data != null) {
+                _logger.log('收到新文件通知，直接使用通知中的文件信息', tag: 'WEBSOCKET');
+                // 收到新文件通知，直接使用通知中的文件信息
+                _handleNewFilesNotification(data);
+              } else if (event == 'connected') {
+                _logger.log('WebSocket连接确认', tag: 'WEBSOCKET');
+              }
+            } catch (e) {
+              _logger.logError('处理WebSocket通知失败', error: e);
+            }
+          },
+          onError: (error) {
+            _logger.logError('WebSocket通知流错误', error: error);
+            // 连接失败，5秒后重试
+            if (mounted && _isConnected) {
+              Future.delayed(const Duration(seconds: 5), () {
+                if (mounted && _isConnected) {
+                  _connectToWebSocketNotifications();
+                }
+              });
+            }
+          },
+          cancelOnError: false,
+        );
+      }
+    } catch (e, stackTrace) {
+      _logger.logError('连接WebSocket通知流失败', error: e, stackTrace: stackTrace);
+      // 连接失败，5秒后重试
+      if (mounted && _isConnected) {
+        Future.delayed(const Duration(seconds: 5), () {
+          if (mounted && _isConnected) {
+            _connectToWebSocketNotifications();
+          }
+        });
+      }
+    }
   }
   
   // 开始连接检查
@@ -72,29 +145,33 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       
       try {
         final pingSuccess = await widget.apiService.ping();
-        if (mounted) {
+        if (!mounted) return;
+        
+        // 只在连接状态实际变化时才调用 setState
+        if (!pingSuccess && _isConnected) {
+          // 连接断开
           setState(() {
-            if (!pingSuccess && _isConnected) {
-              // 连接断开
-              _isConnected = false;
-              _logger.log('检测到连接断开', tag: 'CONNECTION');
-              _startReconnect();
-            } else if (pingSuccess && !_isConnected) {
-              // 连接恢复
-              _isConnected = true;
-              _isReconnecting = false;
-              _logger.log('连接已恢复', tag: 'CONNECTION');
-              _refreshFileList();
-            }
+            _isConnected = false;
           });
+          _logger.log('检测到连接断开', tag: 'CONNECTION');
+          _startReconnect();
+        } else if (pingSuccess && !_isConnected) {
+          // 连接恢复
+          setState(() {
+            _isConnected = true;
+            _isReconnecting = false;
+          });
+          _logger.log('连接已恢复', tag: 'CONNECTION');
+          _refreshFileList();
         }
+        // 如果连接状态没有变化（pingSuccess == _isConnected），不调用 setState
       } catch (e) {
         if (mounted && _isConnected) {
           setState(() {
             _isConnected = false;
-            _logger.logError('连接检查失败', error: e);
-            _startReconnect();
           });
+          _logger.logError('连接检查失败', error: e);
+          _startReconnect();
         }
       }
     });
@@ -237,7 +314,12 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       final result = await widget.apiService.capture();
       if (result['success']) {
         _showSuccess('拍照成功');
-        await _refreshFileList();
+        
+        // 等待文件索引写入完成（数据库操作可能需要一点时间）
+        await Future.delayed(const Duration(milliseconds: 300));
+        
+        // 使用增量更新刷新文件列表（只获取新文件）
+        await _incrementalRefreshFileList();
         
         // 自动下载最新照片
         if (_pictures.isNotEmpty) {
@@ -255,6 +337,172 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           _isOperating = false;
         });
       }
+    }
+  }
+  
+  /// 增量更新文件列表（只获取新增/修改的文件）
+  /// 处理新文件通知（直接使用通知中的文件信息）
+  Future<void> _handleNewFilesNotification(Map<String, dynamic> data) async {
+    try {
+      final fileType = data['fileType'] as String?;
+      final filesData = data['files'] as List<dynamic>?;
+      
+      if (filesData == null || filesData.isEmpty) {
+        // 如果没有文件信息，回退到增量刷新
+        await _incrementalRefreshFileList();
+        return;
+      }
+      
+      // 解析文件信息
+      final List<FileInfo> newFiles = [];
+      for (var fileJson in filesData) {
+        try {
+          final fileInfo = FileInfo.fromJson(fileJson as Map<String, dynamic>);
+          newFiles.add(fileInfo);
+        } catch (e) {
+          _logger.logError('解析文件信息失败', error: e);
+        }
+      }
+      
+      if (newFiles.isEmpty) {
+        return;
+      }
+      
+      // 检查新文件的下载状态
+      await _checkDownloadStatus(newFiles);
+      
+      // 合并新文件到现有列表（去重，按修改时间排序）
+      final existingFileNames = <String>{};
+      for (var file in [..._pictures, ..._videos]) {
+        existingFileNames.add(file.name);
+      }
+      
+      final updatedPictures = <FileInfo>[..._pictures];
+      final updatedVideos = <FileInfo>[..._videos];
+      
+      for (var file in newFiles) {
+        if (!existingFileNames.contains(file.name)) {
+          // 根据文件类型添加到对应列表
+          if (fileType == 'image' || file.isImage) {
+            updatedPictures.add(file);
+          } else if (fileType == 'video' || file.isVideo) {
+            updatedVideos.add(file);
+          }
+          existingFileNames.add(file.name);
+        } else {
+          // 更新已存在的文件
+          if (fileType == 'image' || file.isImage) {
+            final index = updatedPictures.indexWhere((f) => f.name == file.name);
+            if (index >= 0) {
+              updatedPictures[index] = file;
+            }
+          } else if (fileType == 'video' || file.isVideo) {
+            final index = updatedVideos.indexWhere((f) => f.name == file.name);
+            if (index >= 0) {
+              updatedVideos[index] = file;
+            }
+          }
+        }
+      }
+      
+      // 按修改时间排序
+      updatedPictures.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+      updatedVideos.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+      
+      if (mounted) {
+        setState(() {
+          _pictures = updatedPictures;
+          _videos = updatedVideos;
+        });
+        
+        // 自动下载最新照片/视频
+        if (fileType == 'image' && updatedPictures.isNotEmpty) {
+          final latestPicture = updatedPictures.first;
+          await _autoDownloadPicture(latestPicture);
+        } else if (fileType == 'video' && updatedVideos.isNotEmpty) {
+          final latestVideo = updatedVideos.first;
+          await _autoDownloadVideo(latestVideo);
+        }
+      }
+    } catch (e) {
+      _logger.logError('处理新文件通知失败', error: e);
+      // 如果处理失败，回退到增量刷新
+      await _incrementalRefreshFileList();
+    }
+  }
+  
+  Future<void> _incrementalRefreshFileList() async {
+    try {
+      // 计算最后更新时间（使用最新文件的修改时间，减去1秒以确保能获取到新文件）
+      int? since;
+      if (_pictures.isNotEmpty || _videos.isNotEmpty) {
+        final allFiles = [..._pictures, ..._videos];
+        allFiles.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+        // 减去1秒，确保能获取到刚刚创建的文件（即使时间戳相同）
+        since = allFiles.first.modifiedTime.millisecondsSinceEpoch - 1000;
+      }
+      
+      final result = await widget.apiService.getFileList(since: since);
+      
+      if (result['success'] && mounted) {
+        final newPictures = result['pictures'] as List<FileInfo>;
+        final newVideos = result['videos'] as List<FileInfo>;
+        
+        if (newPictures.isEmpty && newVideos.isEmpty) {
+          // 没有新文件，不需要更新
+          return;
+        }
+        
+        // 检查新文件的下载状态
+        await _checkDownloadStatus([...newPictures, ...newVideos]);
+        
+        // 合并新文件到现有列表（去重，按修改时间排序）
+        final existingFileNames = <String>{};
+        for (var file in [..._pictures, ..._videos]) {
+          existingFileNames.add(file.name);
+        }
+        
+        final updatedPictures = <FileInfo>[..._pictures];
+        final updatedVideos = <FileInfo>[..._videos];
+        
+        for (var file in newPictures) {
+          if (!existingFileNames.contains(file.name)) {
+            updatedPictures.add(file);
+            existingFileNames.add(file.name);
+          } else {
+            // 更新已存在的文件
+            final index = updatedPictures.indexWhere((f) => f.name == file.name);
+            if (index >= 0) {
+              updatedPictures[index] = file;
+            }
+          }
+        }
+        
+        for (var file in newVideos) {
+          if (!existingFileNames.contains(file.name)) {
+            updatedVideos.add(file);
+            existingFileNames.add(file.name);
+          } else {
+            // 更新已存在的文件
+            final index = updatedVideos.indexWhere((f) => f.name == file.name);
+            if (index >= 0) {
+              updatedVideos[index] = file;
+            }
+          }
+        }
+        
+        // 按修改时间排序
+        updatedPictures.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+        updatedVideos.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+        
+        setState(() {
+          _pictures = updatedPictures;
+          _videos = updatedVideos;
+        });
+      }
+    } catch (e) {
+      // 增量更新失败不影响UI，只记录错误
+      print('增量更新文件列表失败: $e');
     }
   }
 
@@ -382,8 +630,11 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         if (!wasRecording && _isRecording) {
           // 录像已开始
         } else if (wasRecording && !_isRecording) {
-          // 录像已停止，刷新文件列表并自动下载最新视频
-          await _refreshFileList();
+          // 录像已停止，等待文件索引写入完成
+          await Future.delayed(const Duration(milliseconds: 300));
+          
+          // 使用增量更新刷新文件列表（只获取新文件）
+          await _incrementalRefreshFileList();
           
           if (_videos.isNotEmpty) {
             final latestVideo = _videos.first; // 最新的视频在第一位

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/camera_settings.dart';
 import '../models/file_info.dart';
 import 'logger_service.dart';
@@ -12,6 +13,26 @@ class ApiService {
   final int port;
   final ClientLoggerService logger = ClientLoggerService();
   late final HttpClient _httpClient;
+  
+  // WebSocket连接管理
+  WebSocketChannel? _webSocketChannel;
+  StreamSubscription? _webSocketSubscription;
+  final Map<String, Completer<Map<String, dynamic>>> _pendingRequests = {};
+  int _messageIdCounter = 0;
+  bool _useWebSocket = true; // 是否使用WebSocket（默认true）
+  
+  // WebSocket通知流（用于监听服务器推送的通知）
+  // 注意：这个stream会与_handleWebSocketMessage共享同一个stream，所以需要创建一个广播stream
+  StreamController<Map<String, dynamic>>? _notificationController;
+  
+  Stream<Map<String, dynamic>>? get webSocketNotifications {
+    if (_webSocketChannel == null) {
+      return null;
+    }
+    // 如果还没有创建通知控制器，创建一个广播stream
+    _notificationController ??= StreamController<Map<String, dynamic>>.broadcast();
+    return _notificationController!.stream;
+  }
 
   ApiService({
     required String host,
@@ -28,7 +49,124 @@ class ApiService {
 
   // 释放资源
   void dispose() {
+    _webSocketSubscription?.cancel();
+    _webSocketChannel?.sink.close();
+    _notificationController?.close();
     _httpClient.close(force: true);
+  }
+  
+  // 连接WebSocket
+  Future<void> connectWebSocket() async {
+    if (_webSocketChannel != null) {
+      return; // 已经连接
+    }
+    
+    try {
+      final wsUrl = baseUrl.replaceFirst('http://', 'ws://').replaceFirst('https://', 'wss://');
+      final uri = Uri.parse('$wsUrl/ws');
+      logger.log('连接WebSocket: $uri', tag: 'WEBSOCKET');
+      
+      _webSocketChannel = WebSocketChannel.connect(uri);
+      
+      // 创建通知控制器（如果还没有创建）
+      _notificationController ??= StreamController<Map<String, dynamic>>.broadcast();
+      
+      _webSocketSubscription = _webSocketChannel!.stream.listen(
+        (message) {
+          _handleWebSocketMessage(message);
+        },
+        onError: (error) {
+          logger.logError('WebSocket错误', error: error);
+          _webSocketChannel = null;
+          _notificationController?.close();
+          _notificationController = null;
+          _useWebSocket = false; // 回退到HTTP
+        },
+        onDone: () {
+          logger.log('WebSocket连接关闭', tag: 'WEBSOCKET');
+          _webSocketChannel = null;
+          _notificationController?.close();
+          _notificationController = null;
+          _useWebSocket = false; // 回退到HTTP
+        },
+        cancelOnError: false,
+      );
+      
+      logger.log('WebSocket连接成功', tag: 'WEBSOCKET');
+    } catch (e, stackTrace) {
+      logger.logError('WebSocket连接失败', error: e, stackTrace: stackTrace);
+      _webSocketChannel = null;
+      _useWebSocket = false; // 回退到HTTP
+    }
+  }
+  
+  // 处理WebSocket消息
+  void _handleWebSocketMessage(dynamic message) {
+    try {
+      final data = json.decode(message) as Map<String, dynamic>;
+      final messageType = data['type'] as String?;
+      
+      if (messageType == 'response') {
+        // 处理响应消息
+        final messageId = data['id'] as String?;
+        if (messageId != null && _pendingRequests.containsKey(messageId)) {
+          final completer = _pendingRequests.remove(messageId)!;
+          if (data['success'] == true) {
+            completer.complete(data['data'] as Map<String, dynamic>? ?? {});
+          } else {
+            completer.complete({
+              'success': false,
+              'error': data['error'] as String? ?? '未知错误',
+            });
+          }
+        }
+      } else if (messageType == 'notification') {
+        // 处理通知消息（如new_files）
+        // 广播通知消息给所有监听者
+        logger.log('收到WebSocket通知: $data', tag: 'WEBSOCKET');
+        _notificationController?.add(data);
+      }
+    } catch (e) {
+      logger.logError('解析WebSocket消息失败', error: e);
+    }
+  }
+  
+  // 通过WebSocket发送请求
+  Future<Map<String, dynamic>> _sendWebSocketRequest(String action, Map<String, dynamic> params) async {
+    if (_webSocketChannel == null) {
+      await connectWebSocket();
+    }
+    
+    if (_webSocketChannel == null) {
+      throw Exception('WebSocket未连接');
+    }
+    
+    final messageId = 'msg_${++_messageIdCounter}_${DateTime.now().millisecondsSinceEpoch}';
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingRequests[messageId] = completer;
+    
+    try {
+      final request = json.encode({
+        'id': messageId,
+        'type': 'request',
+        'action': action,
+        'params': params,
+      });
+      
+      _webSocketChannel!.sink.add(request);
+      
+      // 设置超时（10秒）
+      return await completer.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          _pendingRequests.remove(messageId);
+          return {'success': false, 'error': '请求超时'};
+        },
+      );
+    } catch (e) {
+      _pendingRequests.remove(messageId);
+      rethrow;
+    }
   }
 
   Map<String, String> get _headers => {
@@ -92,47 +230,42 @@ class ApiService {
     }
   }
 
-  // 测试连接
+  // 测试连接（完全使用WebSocket）
   Future<bool> ping() async {
     try {
-      logger.logCommand('ping', details: '测试服务器连接');
-      logger.logApiCall('GET', '/ping');
-      logger.log('尝试连接到: $baseUrl/ping', tag: 'CONNECTION');
+      logger.logCommand('ping', details: '测试服务器连接（WebSocket）');
       
-      // 强制使用IPv4解析
-      final addresses = await InternetAddress.lookup(host, type: InternetAddressType.IPv4);
-      if (addresses.isEmpty) {
-        logger.logError('无法解析主机地址', error: Exception('无法解析: $host'));
-        logger.logCommandResponse('ping', success: false, error: '无法解析主机地址: $host');
+      // 如果WebSocket未连接，先尝试连接
+      if (_webSocketChannel == null) {
+        try {
+          await connectWebSocket();
+        } catch (e) {
+          logger.log('WebSocket连接失败: $e', tag: 'CONNECTION');
+          logger.logCommandResponse('ping', success: false, error: 'WebSocket连接失败: $e');
+          return false;
+        }
+      }
+      
+      // 使用WebSocket ping
+      if (_webSocketChannel == null) {
+        logger.logCommandResponse('ping', success: false, error: 'WebSocket未连接');
         return false;
       }
       
-      final uri = Uri.parse('$baseUrl/ping');
-      // 使用超时包装，确保快速失败
-      final request = await _httpClient.getUrl(uri).timeout(
-        const Duration(seconds: 3),
-        onTimeout: () {
-          throw TimeoutException('Ping超时', const Duration(seconds: 3));
-        },
-      );
-      final response = await request.close().timeout(
-        const Duration(seconds: 3),
-        onTimeout: () {
-          throw TimeoutException('响应超时', const Duration(seconds: 3));
-        },
-      );
-      final responseBody = await response.transform(utf8.decoder).join().timeout(
-        const Duration(seconds: 2),
-        onTimeout: () {
-          throw TimeoutException('读取响应超时', const Duration(seconds: 2));
-        },
-      );
-      
-      logger.logApiResponse('/ping', response.statusCode, body: responseBody);
-      final success = response.statusCode == 200 && responseBody.trim() == 'pong';
-      logger.log('Ping结果: $success (状态码: ${response.statusCode}, 响应: ${responseBody.trim()})', tag: 'CONNECTION');
-      logger.logCommandResponse('ping', success: success, result: {'statusCode': response.statusCode, 'response': responseBody});
-      return success;
+      try {
+        logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'ping'});
+        final result = await _sendWebSocketRequest('ping', {});
+        final success = result['success'] == true;
+        logger.logCommandResponse('ping', success: success, result: result);
+        return success;
+      } catch (e) {
+        logger.log('WebSocket ping失败: $e', tag: 'CONNECTION');
+        logger.logCommandResponse('ping', success: false, error: e.toString());
+        // WebSocket ping失败，重置连接状态
+        _webSocketChannel = null;
+        _useWebSocket = false;
+        return false;
+      }
     } catch (e, stackTrace) {
       logger.logError('Ping失败', error: e, stackTrace: stackTrace);
       logger.log('连接错误详情: $e', tag: 'CONNECTION');
@@ -141,18 +274,12 @@ class ApiService {
     }
   }
 
-  // 拍照
+  // 拍照（完全使用WebSocket）
   Future<Map<String, dynamic>> capture() async {
     try {
       logger.logCommand('capture', details: '拍照指令');
-      logger.logApiCall('POST', '/capture', headers: _headers);
-      final result = await _sendRequest(
-        method: 'POST',
-        path: '/capture',
-        headers: _headers,
-      );
-      final statusCode = result['success'] == true ? 200 : 500;
-      logger.logApiResponse('/capture', statusCode, body: result, error: result['success'] == false ? result['error'] : null);
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'capture'});
+      final result = await _sendWebSocketRequest('capture', {});
       logger.logCommandResponse('capture', success: result['success'] == true, result: result, error: result['error']);
       return result;
     } catch (e, stackTrace) {
@@ -162,18 +289,12 @@ class ApiService {
     }
   }
 
-  // 开始录像
+  // 开始录像（完全使用WebSocket）
   Future<Map<String, dynamic>> startRecording() async {
     try {
       logger.logCommand('startRecording', details: '开始录像指令');
-      logger.logApiCall('POST', '/recording/start', headers: _headers);
-      final result = await _sendRequest(
-        method: 'POST',
-        path: '/recording/start',
-        headers: _headers,
-      );
-      final statusCode = result['success'] == true ? 200 : 500;
-      logger.logApiResponse('/recording/start', statusCode, body: result, error: result['success'] == false ? result['error'] : null);
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'startRecording'});
+      final result = await _sendWebSocketRequest('startRecording', {});
       logger.logCommandResponse('startRecording', success: result['success'] == true, result: result, error: result['error']);
       return result;
     } catch (e, stackTrace) {
@@ -183,18 +304,12 @@ class ApiService {
     }
   }
 
-  // 停止录像
+  // 停止录像（完全使用WebSocket）
   Future<Map<String, dynamic>> stopRecording() async {
     try {
       logger.logCommand('stopRecording', details: '停止录像指令');
-      logger.logApiCall('POST', '/recording/stop', headers: _headers);
-      final result = await _sendRequest(
-        method: 'POST',
-        path: '/recording/stop',
-        headers: _headers,
-      );
-      final statusCode = result['success'] == true ? 200 : 500;
-      logger.logApiResponse('/recording/stop', statusCode, body: result, error: result['success'] == false ? result['error'] : null);
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'stopRecording'});
+      final result = await _sendWebSocketRequest('stopRecording', {});
       logger.logCommandResponse('stopRecording', success: result['success'] == true, result: result, error: result['error']);
       return result;
     } catch (e, stackTrace) {
@@ -204,30 +319,42 @@ class ApiService {
     }
   }
 
-  // 获取文件列表
-  Future<Map<String, dynamic>> getFileList() async {
+  // 获取文件列表（支持分页和增量获取，完全使用WebSocket）
+  /// [page] 页码，从1开始
+  /// [pageSize] 每页大小
+  /// [since] 增量获取：只获取该时间之后新增/修改的文件（时间戳，毫秒）
+  Future<Map<String, dynamic>> getFileList({
+    int? page,
+    int? pageSize,
+    int? since,
+  }) async {
     try {
-      logger.logCommand('getFileList', details: '获取文件列表指令');
-      logger.logApiCall('GET', '/files', headers: _headers);
-      final result = await _sendRequest(
-        method: 'GET',
-        path: '/files',
-        headers: _headers,
-      );
+      final params = <String, dynamic>{};
+      if (page != null) params['page'] = page;
+      if (pageSize != null) params['pageSize'] = pageSize;
+      if (since != null) params['since'] = since;
+      
+      logger.logCommand('getFileList', details: '获取文件列表指令${params.isNotEmpty ? ' ($params)' : ''}');
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'getFiles', ...params});
+      final result = await _sendWebSocketRequest('getFiles', params);
       
       if (result['success']) {
         // 将JSON转换为FileInfo对象
-        result['pictures'] = (result['pictures'] as List)
-            .map((json) => FileInfo.fromJson(json))
-            .toList();
-        result['videos'] = (result['videos'] as List)
-            .map((json) => FileInfo.fromJson(json))
-            .toList();
+        result['pictures'] = (result['pictures'] as List?)
+            ?.map((json) => FileInfo.fromJson(json))
+            .toList() ?? [];
+        result['videos'] = (result['videos'] as List?)
+            ?.map((json) => FileInfo.fromJson(json))
+            .toList() ?? [];
       }
       
-      final statusCode = result['success'] == true ? 200 : 500;
-      logger.logApiResponse('/files', statusCode, body: {'pictures_count': (result['pictures'] as List?)?.length ?? 0, 'videos_count': (result['videos'] as List?)?.length ?? 0}, error: result['success'] == false ? result['error'] : null);
-      logger.logCommandResponse('getFileList', success: result['success'] == true, result: {'pictures_count': (result['pictures'] as List?)?.length ?? 0, 'videos_count': (result['videos'] as List?)?.length ?? 0}, error: result['error']);
+      logger.logCommandResponse('getFileList', success: result['success'] == true, result: {
+        'pictures_count': (result['pictures'] as List?)?.length ?? 0,
+        'videos_count': (result['videos'] as List?)?.length ?? 0,
+        'total': result['total'],
+        'page': result['page'],
+        'hasMore': result['hasMore'],
+      }, error: result['error']);
       return result;
     } catch (e, stackTrace) {
       logger.logError('获取文件列表失败', error: e, stackTrace: stackTrace);
@@ -236,20 +363,12 @@ class ApiService {
     }
   }
 
-  // 删除文件
+  // 删除文件（完全使用WebSocket）
   Future<Map<String, dynamic>> deleteFile(String remotePath) async {
     try {
       logger.logCommand('deleteFile', params: {'path': remotePath}, details: '删除文件指令');
-      final uri = Uri.parse('$baseUrl/file/delete')
-          .replace(queryParameters: {'path': remotePath});
-      logger.logApiCall('DELETE', uri.path + (uri.query.isNotEmpty ? '?${uri.query}' : ''), params: {'path': remotePath}, headers: _headers);
-      final result = await _sendRequest(
-        method: 'DELETE',
-        path: uri.path + (uri.query.isNotEmpty ? '?${uri.query}' : ''),
-        headers: _headers,
-      );
-      final statusCode = result['success'] == true ? 200 : 500;
-      logger.logApiResponse('/file/delete', statusCode, body: result, error: result['success'] == false ? result['error'] : null);
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'deleteFile', 'path': remotePath});
+      final result = await _sendWebSocketRequest('deleteFile', {'path': remotePath});
       logger.logCommandResponse('deleteFile', success: result['success'] == true, result: result, error: result['error']);
       return result;
     } catch (e, stackTrace) {
@@ -259,18 +378,12 @@ class ApiService {
     }
   }
 
-  // 获取设置状态
+  // 获取设置状态（完全使用WebSocket）
   Future<Map<String, dynamic>> getSettingsStatus() async {
     try {
       logger.logCommand('getSettingsStatus', details: '获取设置状态指令');
-      logger.logApiCall('GET', '/settings/status', headers: _headers);
-      final result = await _sendRequest(
-        method: 'GET',
-        path: '/settings/status',
-        headers: _headers,
-      );
-      final statusCode = result['success'] == true ? 200 : 500;
-      logger.logApiResponse('/settings/status', statusCode, body: result, error: result['success'] == false ? result['error'] : null);
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'getStatus'});
+      final result = await _sendWebSocketRequest('getStatus', {});
       logger.logCommandResponse('getSettingsStatus', success: result['success'] == true, result: result, error: result['error']);
       return result;
     } catch (e, stackTrace) {
@@ -280,20 +393,12 @@ class ApiService {
     }
   }
 
-  // 更新设置
+  // 更新设置（完全使用WebSocket）
   Future<Map<String, dynamic>> updateSettings(CameraSettings settings) async {
     try {
       logger.logCommand('updateSettings', params: settings.toJson(), details: '更新相机设置');
-      final body = json.encode(settings.toJson());
-      logger.logApiCall('POST', '/settings/update', headers: _headers, body: body);
-      final result = await _sendRequest(
-        method: 'POST',
-        path: '/settings/update',
-        headers: _headers,
-        body: body,
-      );
-      final statusCode = result['success'] == true ? 200 : 500;
-      logger.logApiResponse('/settings/update', statusCode, body: result, error: result['success'] == false ? result['error'] : null);
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'updateSettings', ...settings.toJson()});
+      final result = await _sendWebSocketRequest('updateSettings', settings.toJson());
       logger.logCommandResponse('updateSettings', success: result['success'] == true, result: result, error: result['error']);
       return result;
     } catch (e, stackTrace) {
@@ -303,23 +408,17 @@ class ApiService {
     }
   }
 
-  // 获取当前设置
+  // 获取当前设置（完全使用WebSocket）
   Future<Map<String, dynamic>> getSettings() async {
     try {
       logger.logCommand('getSettings', details: '获取相机设置指令');
-      logger.logApiCall('GET', '/settings', headers: _headers);
-      final result = await _sendRequest(
-        method: 'GET',
-        path: '/settings',
-        headers: _headers,
-      );
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'getSettings'});
+      final result = await _sendWebSocketRequest('getSettings', {});
       
       if (result['success'] && result['settings'] != null) {
-        result['settings'] = CameraSettings.fromJson(result['settings']);
+        result['settings'] = CameraSettings.fromJson(result['settings'] as Map<String, dynamic>);
       }
       
-      final statusCode = result['success'] == true ? 200 : 500;
-      logger.logApiResponse('/settings', statusCode, body: result['settings'], error: result['success'] == false ? result['error'] : null);
       logger.logCommandResponse('getSettings', success: result['success'] == true, result: result['settings'], error: result['error']);
       return result;
     } catch (e, stackTrace) {

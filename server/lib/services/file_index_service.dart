@@ -92,17 +92,58 @@ class FileIndexService {
     }
   }
 
-  /// 获取文件列表
-  Future<Map<String, List<FileInfo>>> getFileList() async {
+  /// 获取文件列表（支持分页和增量获取）
+  /// [page] 页码，从1开始
+  /// [pageSize] 每页大小
+  /// [since] 增量获取：只获取该时间之后新增/修改的文件（时间戳，毫秒）
+  Future<Map<String, dynamic>> getFileList({
+    int? page,
+    int? pageSize,
+    int? since,
+  }) async {
     if (_database == null) {
       await initialize();
     }
 
     try {
-      final List<Map<String, dynamic>> maps = await _database!.query(
+      // 构建查询条件
+      String? whereClause;
+      List<dynamic>? whereArgs;
+      
+      if (since != null) {
+        whereClause = 'modified_time >= ?';
+        whereArgs = [since];
+      }
+      
+      // 先获取总数（用于分页）
+      final countResult = await _database!.rawQuery(
+        'SELECT COUNT(*) as count FROM $_tableName${whereClause != null ? ' WHERE $whereClause' : ''}',
+        whereArgs,
+      );
+      final totalCount = countResult.first['count'] as int;
+      
+      // 构建查询
+      var query = _database!.query(
         _tableName,
+        where: whereClause,
+        whereArgs: whereArgs,
         orderBy: 'modified_time DESC',
       );
+      
+      // 应用分页
+      if (page != null && pageSize != null) {
+        final offset = (page - 1) * pageSize;
+        query = _database!.query(
+          _tableName,
+          where: whereClause,
+          whereArgs: whereArgs,
+          orderBy: 'modified_time DESC',
+          limit: pageSize,
+          offset: offset,
+        );
+      }
+      
+      final List<Map<String, dynamic>> maps = await query;
 
       final List<FileInfo> pictures = [];
       final List<FileInfo> videos = [];
@@ -132,13 +173,84 @@ class FileIndexService {
         }
       }
 
+      // 计算分页信息
+      final hasMore = page != null && pageSize != null 
+          ? (page * pageSize < totalCount)
+          : false;
+      final totalPages = page != null && pageSize != null
+          ? ((totalCount + pageSize - 1) ~/ pageSize)
+          : 1;
+
       return {
         'pictures': pictures,
         'videos': videos,
+        'total': totalCount,
+        'page': page ?? 1,
+        'pageSize': pageSize ?? totalCount,
+        'totalPages': totalPages,
+        'hasMore': hasMore,
       };
     } catch (e, stackTrace) {
       _logger.logError('获取文件列表失败', error: e, stackTrace: stackTrace);
-      return {'pictures': [], 'videos': []};
+      return {
+        'pictures': <FileInfo>[],
+        'videos': <FileInfo>[],
+        'total': 0,
+        'page': 1,
+        'pageSize': 0,
+        'totalPages': 0,
+        'hasMore': false,
+      };
+    }
+  }
+  
+  /// 获取文件列表（兼容旧接口）
+  Future<Map<String, List<FileInfo>>> getFileListLegacy() async {
+    final result = await getFileList();
+    return {
+      'pictures': result['pictures'] as List<FileInfo>,
+      'videos': result['videos'] as List<FileInfo>,
+    };
+  }
+
+  /// 根据文件名获取文件信息
+  Future<FileInfo?> getFileByName(String fileName) async {
+    if (_database == null) {
+      await initialize();
+    }
+
+    try {
+      final maps = await _database!.query(
+        _tableName,
+        where: 'name = ?',
+        whereArgs: [fileName],
+        limit: 1,
+      );
+
+      if (maps.isEmpty) {
+        return null;
+      }
+
+      final map = maps.first;
+      final galleryPath = map['gallery_path'] as String;
+      
+      // 验证文件是否仍然存在
+      final file = File(galleryPath);
+      if (!await file.exists()) {
+        // 文件不存在，从索引中删除
+        await _database!.delete(_tableName, where: 'gallery_path = ?', whereArgs: [galleryPath]);
+        return null;
+      }
+
+      return FileInfo(
+        name: map['name'] as String,
+        path: galleryPath,
+        size: map['size'] as int,
+        modifiedTime: DateTime.fromMillisecondsSinceEpoch(map['modified_time'] as int),
+      );
+    } catch (e, stackTrace) {
+      _logger.logError('根据文件名获取文件信息失败', error: e, stackTrace: stackTrace);
+      return null;
     }
   }
 

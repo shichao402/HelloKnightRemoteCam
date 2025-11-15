@@ -83,23 +83,62 @@ echo ""
 echo "2. 收集Mac客户端日志..."
 echo "----------------------------------------"
 
-CLIENT_LOG_DIR="$HOME/Library/Logs/HelloKnightRCC"
+# 优先查找沙盒应用路径（macOS应用通常是沙盒应用）
+CLIENT_LOG_DIR_SANDBOX="$HOME/Library/Containers/com.example.remoteCamClient/Data/Library/Logs"
+# 非沙盒应用路径（向后兼容）
+CLIENT_LOG_DIR_NON_SANDBOX="$HOME/Library/Logs/HelloKnightRCC"
 
-if [ -d "$CLIENT_LOG_DIR" ]; then
-    echo "✓ 找到客户端日志目录: $CLIENT_LOG_DIR"
-    
+CLIENT_LOG_DIR=""
+
+if [ -d "$CLIENT_LOG_DIR_SANDBOX" ]; then
+    CLIENT_LOG_DIR="$CLIENT_LOG_DIR_SANDBOX"
+    echo "✓ 找到客户端日志目录（沙盒应用）: $CLIENT_LOG_DIR"
+elif [ -d "$CLIENT_LOG_DIR_NON_SANDBOX" ]; then
+    CLIENT_LOG_DIR="$CLIENT_LOG_DIR_NON_SANDBOX"
+    echo "✓ 找到客户端日志目录（非沙盒应用）: $CLIENT_LOG_DIR"
+fi
+
+if [ -n "$CLIENT_LOG_DIR" ] && [ -d "$CLIENT_LOG_DIR" ]; then
     # 列出日志文件
     echo ""
     echo "客户端日志文件列表:"
-    ls -lha "$CLIENT_LOG_DIR"
+    ls -lha "$CLIENT_LOG_DIR" 2>/dev/null || echo "无法列出日志文件"
     
     echo ""
     echo "最新日志内容:"
     echo "========================================"
-    cat "$CLIENT_LOG_DIR"/client_debug_*.log 2>/dev/null || echo "无日志文件"
+    # 查找最新的日志文件
+    LATEST_LOG=$(ls -t "$CLIENT_LOG_DIR"/client_debug_*.log 2>/dev/null | head -1)
+    if [ -n "$LATEST_LOG" ]; then
+        echo "读取最新日志文件: $(basename "$LATEST_LOG")"
+        echo ""
+        cat "$LATEST_LOG" 2>/dev/null || echo "无法读取日志文件"
+        
+        # 读取其他最近的日志文件（倒数第2和第3个）
+        OTHER_LOGS=$(ls -t "$CLIENT_LOG_DIR"/client_debug_*.log 2>/dev/null | head -3 | tail -2)
+        if [ -n "$OTHER_LOGS" ]; then
+            echo ""
+            echo "其他最近日志文件内容:"
+            echo "$OTHER_LOGS" | while read logpath; do
+                if [ -n "$logpath" ] && [ "$logpath" != "$LATEST_LOG" ]; then
+                    logname=$(basename "$logpath")
+                    echo ""
+                    echo "========================================"
+                    echo "--- $logname ---"
+                    echo "========================================"
+                    cat "$logpath" 2>/dev/null || true
+                fi
+            done
+        fi
+    else
+        echo "未找到日志文件"
+    fi
     echo "========================================"
 else
-    echo "✗ 客户端日志目录不存在: $CLIENT_LOG_DIR"
+    echo "✗ 客户端日志目录不存在"
+    echo "  已检查路径:"
+    echo "    - $CLIENT_LOG_DIR_SANDBOX"
+    echo "    - $CLIENT_LOG_DIR_NON_SANDBOX"
 fi
 
 echo ""

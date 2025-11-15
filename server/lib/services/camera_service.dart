@@ -327,9 +327,27 @@ class CameraService {
     return frame;
   }
 
-  // 获取文件列表（从文件索引读取）
-  Future<Map<String, List<FileInfo>>> getFileList() async {
-    return await _fileIndex.getFileList();
+  // 获取文件列表（从文件索引读取，支持分页和增量获取）
+  Future<Map<String, dynamic>> getFileList({
+    int? page,
+    int? pageSize,
+    int? since,
+  }) async {
+    return await _fileIndex.getFileList(
+      page: page,
+      pageSize: pageSize,
+      since: since,
+    );
+  }
+  
+  // 获取文件列表（兼容旧接口）
+  Future<Map<String, List<FileInfo>>> getFileListLegacy() async {
+    return await _fileIndex.getFileListLegacy();
+  }
+
+  // 根据文件名获取文件信息
+  Future<FileInfo?> getFileByName(String fileName) async {
+    return await _fileIndex.getFileByName(fileName);
   }
 
   // 删除文件（从相册和索引中删除）

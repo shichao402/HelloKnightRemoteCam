@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
 import 'dart:async';
+import 'dart:convert';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:open_file/open_file.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
@@ -37,10 +39,17 @@ class _FileManagerScreenState extends State<FileManagerScreen>
   List<FileInfo> _videos = [];
   List<DownloadTask> _downloadTasks = [];
   bool _isLoading = true;
+  bool _isLoadingMore = false; // 是否正在加载更多
   final DownloadSettingsService _downloadSettings = DownloadSettingsService();
   final Map<String, bool> _downloadedStatusCache = {}; // 缓存下载状态
   final Map<String, String> _thumbnailCache = {}; // 缓存缩略图路径：文件名 -> 本地缩略图路径
   Directory? _thumbnailCacheDir; // 缩略图缓存目录
+  
+  // 分页相关
+  int _currentPage = 1;
+  static const int _pageSize = 20; // 每页20个文件
+  bool _hasMore = true;
+  int? _lastUpdateTime; // 最后更新时间戳（用于增量获取）
   
   // 显示模式：list 或 grid
   String _viewMode = 'list'; // 'list' 或 'grid'
@@ -52,9 +61,13 @@ class _FileManagerScreenState extends State<FileManagerScreen>
   bool _isSelectionMode = false;
   final Set<String> _selectedFiles = {}; // 选中的文件名集合
   
-  // 滚动控制器（用于定位文件）
+  // 滚动控制器（用于定位文件和检测滚动到底部）
   final ScrollController _scrollController = ScrollController();
+  final ScrollController _gridScrollController = ScrollController(); // 网格视图的滚动控制器
   final GlobalKey _highlightKey = GlobalKey();
+  
+  // WebSocket通知消息订阅（用于接收server的新文件通知）
+  StreamSubscription? _webSocketSubscription;
 
   @override
   void initState() {
@@ -64,10 +77,104 @@ class _FileManagerScreenState extends State<FileManagerScreen>
       baseUrl: widget.apiService.baseUrl,
     );
     
+    // 监听滚动，实现滚动到底部自动加载更多
+    _scrollController.addListener(_onScroll);
+    _gridScrollController.addListener(_onGridScroll);
+    
     _initializeThumbnailCache();
     _loadViewPreferences();
     _initializeDownloadManager();
     _refreshFileList();
+    _startFileListRefreshTimer(); // 启动WebSocket连接并监听通知
+    // 连接WebSocket（用于API调用）
+    widget.apiService.connectWebSocket();
+  }
+  
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _gridScrollController.removeListener(_onGridScroll);
+    _scrollController.dispose();
+    _gridScrollController.dispose();
+    _tabController.dispose();
+    _downloadManager.dispose();
+    _webSocketSubscription?.cancel();
+    super.dispose();
+  }
+  
+  /// 启动WebSocket连接（监听server的新文件通知）
+  void _startFileListRefreshTimer() {
+    print('[FileManager] 准备启动WebSocket通知监听');
+    _connectToWebSocketNotifications();
+  }
+  
+  /// 连接到WebSocket通知流（监听服务器推送的通知）
+  void _connectToWebSocketNotifications() async {
+    try {
+      // 确保ApiService的WebSocket已连接
+      await widget.apiService.connectWebSocket();
+      
+      // 监听通知消息
+      final notificationStream = widget.apiService.webSocketNotifications;
+      if (notificationStream != null) {
+        _webSocketSubscription = notificationStream.listen(
+          (notification) {
+            if (!mounted) {
+              return;
+            }
+            
+            try {
+              final event = notification['event'] as String?;
+              final data = notification['data'] as Map<String, dynamic>?;
+              
+              // 处理新文件通知
+              if (event == 'new_files' && data != null) {
+                // 收到新文件通知，直接使用通知中的文件信息
+                _handleNewFilesNotification(data);
+              }
+            } catch (e) {
+              // 解析失败，忽略
+            }
+          },
+          onError: (error) {
+            // 连接失败，5秒后重试
+            if (mounted) {
+              Future.delayed(const Duration(seconds: 5), () {
+                if (mounted) {
+                  _connectToWebSocketNotifications();
+                }
+              });
+            }
+          },
+          cancelOnError: false,
+        );
+      }
+    } catch (e) {
+      // 连接失败，5秒后重试
+      if (mounted) {
+        Future.delayed(const Duration(seconds: 5), () {
+          if (mounted) {
+            _connectToWebSocketNotifications();
+          }
+        });
+      }
+    }
+  }
+  
+  /// 列表视图滚动监听（检测是否滚动到底部）
+  void _onScroll() {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+      // 距离底部200像素时加载更多
+      _loadMoreFiles();
+    }
+  }
+  
+  /// 网格视图滚动监听（检测是否滚动到底部）
+  void _onGridScroll() {
+    if (_gridScrollController.position.pixels >= _gridScrollController.position.maxScrollExtent - 200) {
+      // 距离底部200像素时加载更多
+      _loadMoreFiles();
+    }
   }
 
   /// 初始化缩略图缓存目录
@@ -205,13 +312,21 @@ class _FileManagerScreenState extends State<FileManagerScreen>
     });
   }
 
+  /// 刷新文件列表（完整刷新，重置分页）
   Future<void> _refreshFileList() async {
     setState(() {
       _isLoading = true;
+      _currentPage = 1;
+      _hasMore = true;
+      _lastUpdateTime = null; // 重置增量更新时间
     });
 
     try {
-      final result = await widget.apiService.getFileList();
+      final result = await widget.apiService.getFileList(
+        page: _currentPage,
+        pageSize: _pageSize,
+      );
+      
       if (result['success'] && mounted) {
         final pictures = result['pictures'] as List<FileInfo>;
         final videos = result['videos'] as List<FileInfo>;
@@ -219,9 +334,17 @@ class _FileManagerScreenState extends State<FileManagerScreen>
         // 检查所有文件的下载状态
         await _checkDownloadStatus([...pictures, ...videos]);
         
+        // 更新最后更新时间（使用最新文件的修改时间）
+        if (pictures.isNotEmpty || videos.isNotEmpty) {
+          final allFiles = [...pictures, ...videos];
+          allFiles.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+          _lastUpdateTime = allFiles.first.modifiedTime.millisecondsSinceEpoch;
+        }
+        
         setState(() {
           _pictures = pictures;
           _videos = videos;
+          _hasMore = result['hasMore'] as bool? ?? false;
           _isLoading = false;
         });
       } else {
@@ -235,6 +358,222 @@ class _FileManagerScreenState extends State<FileManagerScreen>
       setState(() {
         _isLoading = false;
       });
+    }
+  }
+  
+  /// 处理新文件通知（直接使用通知中的文件信息）
+  Future<void> _handleNewFilesNotification(Map<String, dynamic> data) async {
+    try {
+      final fileType = data['fileType'] as String?;
+      final filesData = data['files'] as List<dynamic>?;
+      
+      if (filesData == null || filesData.isEmpty) {
+        // 如果没有文件信息，回退到增量刷新
+        await _incrementalRefreshFileList();
+        return;
+      }
+      
+      // 解析文件信息
+      final List<FileInfo> newFiles = [];
+      for (var fileJson in filesData) {
+        try {
+          final fileInfo = FileInfo.fromJson(fileJson as Map<String, dynamic>);
+          newFiles.add(fileInfo);
+        } catch (e) {
+          print('解析文件信息失败: $e');
+        }
+      }
+      
+      if (newFiles.isEmpty) {
+        return;
+      }
+      
+      // 检查新文件的下载状态
+      await _checkDownloadStatus(newFiles);
+      
+      // 合并新文件到现有列表（去重，按修改时间排序）
+      final existingFileNames = <String>{};
+      for (var file in [..._pictures, ..._videos]) {
+        existingFileNames.add(file.name);
+      }
+      
+      final updatedPictures = <FileInfo>[..._pictures];
+      final updatedVideos = <FileInfo>[..._videos];
+      
+      for (var file in newFiles) {
+        if (!existingFileNames.contains(file.name)) {
+          // 根据文件类型添加到对应列表
+          if (fileType == 'image' || file.isImage) {
+            updatedPictures.add(file);
+          } else if (fileType == 'video' || file.isVideo) {
+            updatedVideos.add(file);
+          }
+          existingFileNames.add(file.name);
+        } else {
+          // 更新已存在的文件
+          if (fileType == 'image' || file.isImage) {
+            final index = updatedPictures.indexWhere((f) => f.name == file.name);
+            if (index >= 0) {
+              updatedPictures[index] = file;
+            }
+          } else if (fileType == 'video' || file.isVideo) {
+            final index = updatedVideos.indexWhere((f) => f.name == file.name);
+            if (index >= 0) {
+              updatedVideos[index] = file;
+            }
+          }
+        }
+      }
+      
+      // 按修改时间排序
+      updatedPictures.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+      updatedVideos.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+      
+      // 更新最后更新时间
+      if (updatedPictures.isNotEmpty || updatedVideos.isNotEmpty) {
+        final allFiles = [...updatedPictures, ...updatedVideos];
+        allFiles.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+        _lastUpdateTime = allFiles.first.modifiedTime.millisecondsSinceEpoch;
+      }
+      
+      if (mounted) {
+        setState(() {
+          _pictures = updatedPictures;
+          _videos = updatedVideos;
+        });
+      }
+    } catch (e) {
+      print('处理新文件通知失败: $e');
+      // 如果处理失败，回退到增量刷新
+      await _incrementalRefreshFileList();
+    }
+  }
+  
+  /// 增量更新文件列表（只获取新增/修改的文件）
+  Future<void> _incrementalRefreshFileList() async {
+    if (_lastUpdateTime == null) {
+      // 如果没有最后更新时间，执行完整刷新
+      await _refreshFileList();
+      return;
+    }
+    
+    try {
+      // 减去1秒，确保能获取到刚刚创建的文件（即使时间戳相同）
+      final since = _lastUpdateTime! - 1000;
+      final result = await widget.apiService.getFileList(
+        since: since,
+      );
+      
+      if (result['success'] && mounted) {
+        final newPictures = result['pictures'] as List<FileInfo>;
+        final newVideos = result['videos'] as List<FileInfo>;
+        
+        if (newPictures.isEmpty && newVideos.isEmpty) {
+          // 没有新文件，不需要更新
+          return;
+        }
+        
+        // 检查新文件的下载状态
+        await _checkDownloadStatus([...newPictures, ...newVideos]);
+        
+        // 合并新文件到现有列表（去重，按修改时间排序）
+        final existingFileNames = <String>{};
+        for (var file in [..._pictures, ..._videos]) {
+          existingFileNames.add(file.name);
+        }
+        
+        final updatedPictures = <FileInfo>[..._pictures];
+        final updatedVideos = <FileInfo>[..._videos];
+        
+        for (var file in newPictures) {
+          if (!existingFileNames.contains(file.name)) {
+            updatedPictures.add(file);
+            existingFileNames.add(file.name);
+          } else {
+            // 更新已存在的文件
+            final index = updatedPictures.indexWhere((f) => f.name == file.name);
+            if (index >= 0) {
+              updatedPictures[index] = file;
+            }
+          }
+        }
+        
+        for (var file in newVideos) {
+          if (!existingFileNames.contains(file.name)) {
+            updatedVideos.add(file);
+            existingFileNames.add(file.name);
+          } else {
+            // 更新已存在的文件
+            final index = updatedVideos.indexWhere((f) => f.name == file.name);
+            if (index >= 0) {
+              updatedVideos[index] = file;
+            }
+          }
+        }
+        
+        // 按修改时间排序
+        updatedPictures.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+        updatedVideos.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+        
+        // 更新最后更新时间
+        final allFiles = [...updatedPictures, ...updatedVideos];
+        if (allFiles.isNotEmpty) {
+          allFiles.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+          _lastUpdateTime = allFiles.first.modifiedTime.millisecondsSinceEpoch;
+        }
+        
+        setState(() {
+          _pictures = updatedPictures;
+          _videos = updatedVideos;
+        });
+      }
+    } catch (e) {
+      // 增量更新失败不影响UI，只记录错误
+      print('增量更新文件列表失败: $e');
+    }
+  }
+  
+  /// 加载更多文件（分页加载）
+  Future<void> _loadMoreFiles() async {
+    if (_isLoadingMore || !_hasMore) {
+      return;
+    }
+    
+    setState(() {
+      _isLoadingMore = true;
+    });
+    
+    try {
+      final nextPage = _currentPage + 1;
+      final result = await widget.apiService.getFileList(
+        page: nextPage,
+        pageSize: _pageSize,
+      );
+      
+      if (result['success'] && mounted) {
+        final newPictures = result['pictures'] as List<FileInfo>;
+        final newVideos = result['videos'] as List<FileInfo>;
+        
+        // 检查新文件的下载状态
+        await _checkDownloadStatus([...newPictures, ...newVideos]);
+        
+        setState(() {
+          _pictures.addAll(newPictures);
+          _videos.addAll(newVideos);
+          _currentPage = nextPage;
+          _hasMore = result['hasMore'] as bool? ?? false;
+          _isLoadingMore = false;
+        });
+      } else {
+        setState(() {
+          _isLoadingMore = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _isLoadingMore = false;
+      });
+      _showError('加载更多失败: $e');
     }
   }
   
@@ -1015,6 +1354,7 @@ class _FileManagerScreenState extends State<FileManagerScreen>
             final crossAxisCount = ((availableWidth - spacing) / (_gridItemSize + spacing)).floor().clamp(1, 10);
             
             return GridView.builder(
+              controller: _gridScrollController,
               padding: const EdgeInsets.all(8),
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: crossAxisCount,
@@ -1022,8 +1362,19 @@ class _FileManagerScreenState extends State<FileManagerScreen>
                 mainAxisSpacing: 8,
                 childAspectRatio: 1.2,
               ),
-              itemCount: allFiles.length,
+              itemCount: allFiles.length + (_hasMore ? 1 : 0), // 如果有更多，添加一个加载指示器
               itemBuilder: (context, index) {
+                if (index == allFiles.length) {
+                  // 加载更多指示器
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: _isLoadingMore
+                          ? const CircularProgressIndicator()
+                          : const SizedBox.shrink(),
+                    ),
+                  );
+                }
                 final file = allFiles[index];
                 return _buildGridItem(file);
               },
@@ -1038,8 +1389,19 @@ class _FileManagerScreenState extends State<FileManagerScreen>
       onRefresh: _refreshFileList,
       child: ListView.builder(
         controller: _scrollController,
-        itemCount: allFiles.length,
+        itemCount: allFiles.length + (_hasMore ? 1 : 0), // 如果有更多，添加一个加载指示器
         itemBuilder: (context, index) {
+          if (index == allFiles.length) {
+            // 加载更多指示器
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: _isLoadingMore
+                    ? const CircularProgressIndicator()
+                    : const SizedBox.shrink(),
+              ),
+            );
+          }
           final file = allFiles[index];
           final isHighlighted = widget.highlightFileName == file.name;
           return _buildListItem(file, isHighlighted: isHighlighted);
@@ -1084,6 +1446,7 @@ class _FileManagerScreenState extends State<FileManagerScreen>
             final crossAxisCount = ((availableWidth - spacing) / (_gridItemSize + spacing)).floor().clamp(1, 10);
             
             return GridView.builder(
+              controller: _gridScrollController,
               padding: const EdgeInsets.all(8),
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: crossAxisCount,
@@ -1091,8 +1454,19 @@ class _FileManagerScreenState extends State<FileManagerScreen>
                 mainAxisSpacing: 8,
                 childAspectRatio: 1.2,
               ),
-              itemCount: files.length,
+              itemCount: files.length + (_hasMore ? 1 : 0), // 如果有更多，添加一个加载指示器
               itemBuilder: (context, index) {
+                if (index == files.length) {
+                  // 加载更多指示器
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: _isLoadingMore
+                          ? const CircularProgressIndicator()
+                          : const SizedBox.shrink(),
+                    ),
+                  );
+                }
                 final file = files[index];
                 return _buildGridItem(file);
               },
@@ -1640,13 +2014,6 @@ class _FileManagerScreenState extends State<FileManagerScreen>
         '${dateTime.minute.toString().padLeft(2, '0')}';
   }
 
-  @override
-  void dispose() {
-    _tabController.dispose();
-    _scrollController.dispose();
-    _downloadManager.dispose();
-    super.dispose();
-  }
 }
 
 
