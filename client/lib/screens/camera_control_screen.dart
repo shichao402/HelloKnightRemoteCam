@@ -16,6 +16,7 @@ import 'device_connection_screen.dart';
 import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
+import '../services/connection_settings_service.dart';
 
 class CameraControlScreen extends StatefulWidget {
   final ApiService apiService;
@@ -264,6 +265,49 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         });
         _showError('重连失败: $e');
       }
+    }
+  }
+  
+  // 主动断开连接
+  Future<void> _disconnect() async {
+    try {
+      _logger.log('主动断开连接', tag: 'CONNECTION');
+      
+      // 设置跳过本次自动连接标志（用户主动断开后，本次不自动连接）
+      final connectionSettings = ConnectionSettingsService();
+      await connectionSettings.setSkipAutoConnectOnce(true);
+      
+      // 停止连接检查定时器
+      _connectionCheckTimer?.cancel();
+      _connectionCheckTimer = null;
+      
+      // 停止重连定时器
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+      
+      // 取消WebSocket订阅
+      _webSocketSubscription?.cancel();
+      _webSocketSubscription = null;
+      
+      // 关闭WebSocket连接
+      widget.apiService.disconnectWebSocket();
+      
+      // 更新连接状态
+      if (mounted) {
+        setState(() {
+          _isConnected = false;
+          _isReconnecting = false;
+        });
+      }
+      
+      _logger.log('连接已断开', tag: 'CONNECTION');
+      
+      // 返回连接页面
+      _returnToConnectionScreen();
+    } catch (e) {
+      _logger.logError('断开连接失败', error: e);
+      // 即使出错也返回连接页面
+      _returnToConnectionScreen();
     }
   }
   
@@ -833,6 +877,12 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
             ],
           ),
           actions: [
+            // 断开连接按钮（右上角第一个）
+            IconButton(
+              icon: const Icon(Icons.link_off),
+              onPressed: _disconnect,
+              tooltip: '断开连接',
+            ),
             // 重连按钮
             if (!_isConnected)
               IconButton(

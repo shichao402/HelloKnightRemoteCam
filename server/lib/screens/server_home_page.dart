@@ -138,6 +138,47 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
         }
       }
       
+      // 检查并请求存储权限
+      // Android 10-12需要WRITE_EXTERNAL_STORAGE
+      // Android 13+不再需要存储权限（使用MediaStore API）
+      try {
+        final storageStatus = await Permission.storage.status;
+        _logger.log('存储权限状态: $storageStatus', tag: 'PERMISSION');
+        
+        if (!storageStatus.isGranted) {
+          _logger.log('请求存储权限', tag: 'PERMISSION');
+          final result = await Permission.storage.request();
+          _logger.log('存储权限请求结果: $result', tag: 'PERMISSION');
+          
+          if (!result.isGranted) {
+            _logger.log('存储权限被拒绝，可能影响文件保存', tag: 'PERMISSION');
+            // 不阻止应用启动，但会记录警告
+          }
+        }
+      } catch (e) {
+        _logger.log('检查存储权限失败: $e（可能是Android 13+，不需要此权限）', tag: 'PERMISSION');
+      }
+      
+      // 检查并请求音频权限（用于录像）
+      // Android 13+需要动态请求RECORD_AUDIO权限
+      try {
+        final audioStatus = await Permission.microphone.status;
+        _logger.log('音频权限状态: $audioStatus', tag: 'PERMISSION');
+        
+        if (!audioStatus.isGranted) {
+          _logger.log('请求音频权限', tag: 'PERMISSION');
+          final result = await Permission.microphone.request();
+          _logger.log('音频权限请求结果: $result', tag: 'PERMISSION');
+          
+          if (!result.isGranted) {
+            _logger.log('音频权限被拒绝，录像功能可能无法使用', tag: 'PERMISSION');
+            // 不阻止应用启动，但会记录警告
+          }
+        }
+      } catch (e) {
+        _logger.logError('检查音频权限失败', error: e);
+      }
+      
       if (cameras.isEmpty) {
         setState(() {
           _errorMessage = '未检测到相机';

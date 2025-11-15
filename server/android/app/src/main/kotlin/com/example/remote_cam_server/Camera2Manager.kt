@@ -4,8 +4,11 @@ import android.content.Context
 import android.graphics.ImageFormat
 import android.hardware.camera2.*
 import android.hardware.camera2.CameraCaptureSession.CaptureCallback
+import android.media.CamcorderProfile
 import android.media.ImageReader
+import android.media.MediaCodec
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
@@ -30,6 +33,9 @@ class Camera2Manager(private val context: Context) {
     
     private var isRecording = false
     private var currentVideoPath: String? = null
+    private var recordingStartTime: Long = 0
+    private var recordingSessionResult: CompletableDeferred<Boolean>? = null
+    private var sessionCloseResult: CompletableDeferred<Unit>? = null
     
     private val cameraOpenCloseLock = Semaphore(1)
     private var initializationResult: CompletableDeferred<Boolean>? = null
@@ -40,6 +46,9 @@ class Camera2Manager(private val context: Context) {
     
     // 预览帧回调
     var previewFrameCallback: ((ByteArray) -> Unit)? = null
+    
+    // 持久化Surface（用于兼容性）
+    private var persistentSurface: Surface? = null
     
     suspend fun initialize(cameraId: String, previewWidth: Int, previewHeight: Int): Boolean {
         try {
@@ -173,12 +182,12 @@ class Camera2Manager(private val context: Context) {
             
             val surfaces = mutableListOf<Surface>(imageReaderSurface)
             
-            // 添加JPEG ImageReader的Surface（用于拍照）
-            jpegImageReader?.surface?.let { surfaces.add(it) }
-            
-            // 如果正在录制，添加MediaRecorder的Surface
-            if (isRecording && mediaRecorder != null) {
-                mediaRecorder?.surface?.let { surfaces.add(it) }
+            // 录制时只使用预览和录制Surface，非录制时添加JPEG Surface用于拍照
+            if (isRecording) {
+                val surfaceToAdd = persistentSurface ?: mediaRecorder?.surface
+                surfaceToAdd?.let { surfaces.add(it) }
+            } else {
+                jpegImageReader?.surface?.let { surfaces.add(it) }
             }
             
             Log.d(TAG, "创建捕获会话，surfaces数量: ${surfaces.size}")
@@ -186,18 +195,32 @@ class Camera2Manager(private val context: Context) {
                 surfaces,
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
+                        Log.d(TAG, "捕获会话配置成功")
                         captureSession = session
                         startPreview()
+                        
+                        // 如果正在等待录制会话配置，通知完成
+                        recordingSessionResult?.complete(true)
                     }
                     
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         Log.e(TAG, "创建捕获会话失败")
+                        // 如果正在等待录制会话配置，通知失败
+                        recordingSessionResult?.complete(false)
+                    }
+                    
+                    override fun onClosed(session: CameraCaptureSession) {
+                        super.onClosed(session)
+                        Log.d(TAG, "捕获会话已关闭")
+                        sessionCloseResult?.complete(Unit) // 通知session已关闭
                     }
                 },
                 backgroundHandler
             )
         } catch (e: Exception) {
             Log.e(TAG, "创建捕获会话异常", e)
+            // 如果正在等待录制会话配置，通知失败
+            recordingSessionResult?.complete(false)
         }
     }
     
@@ -209,9 +232,10 @@ class Camera2Manager(private val context: Context) {
             val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
             imageReader?.surface?.let { requestBuilder.addTarget(it) }
             
-            // 如果正在录制，添加MediaRecorder的Surface
-            if (isRecording && mediaRecorder != null) {
-                mediaRecorder?.surface?.let { requestBuilder.addTarget(it) }
+            // 录制时添加MediaRecorder的Surface
+            if (isRecording) {
+                val surfaceToAdd = persistentSurface ?: mediaRecorder?.surface
+                surfaceToAdd?.let { requestBuilder.addTarget(it) }
             }
             
             requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
@@ -221,6 +245,16 @@ class Camera2Manager(private val context: Context) {
             Log.d(TAG, "预览已启动")
         } catch (e: Exception) {
             Log.e(TAG, "启动预览失败", e)
+        }
+    }
+    
+    private fun stopPreview() {
+        try {
+            val session = captureSession ?: return
+            session.stopRepeating()
+            Log.d(TAG, "预览已停止")
+        } catch (e: Exception) {
+            Log.e(TAG, "停止预览失败", e)
         }
     }
 
@@ -306,11 +340,70 @@ class Camera2Manager(private val context: Context) {
                 Log.e(TAG, "相机设备ID为空")
                 return false
             }
-            val characteristics = cameraManager.getCameraCharacteristics(cameraIdStr)
-            val streamConfigurationMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            val videoSizes = streamConfigurationMap?.getOutputSizes(MediaRecorder::class.java)
-            val videoSize = videoSizes?.firstOrNull() ?: android.util.Size(1920, 1080)
             
+            // 使用CamcorderProfile获取设备支持的配置
+            val cameraId = cameraIdStr.toIntOrNull() ?: 0
+            var profile: CamcorderProfile? = null
+            var videoSize = android.util.Size(1920, 1080)
+            var videoBitRate = 8000000
+            var videoFrameRate = 30
+            var audioBitRate = 128000
+            var audioSampleRate = 44100
+            
+            // 按质量级别降级尝试
+            val qualityLevels = arrayOf(
+                CamcorderProfile.QUALITY_HIGH,
+                CamcorderProfile.QUALITY_1080P,
+                CamcorderProfile.QUALITY_720P,
+                CamcorderProfile.QUALITY_480P,
+                CamcorderProfile.QUALITY_LOW
+            )
+            
+            for (quality in qualityLevels) {
+                try {
+                    if (CamcorderProfile.hasProfile(cameraId, quality)) {
+                        profile = CamcorderProfile.get(cameraId, quality)
+                        videoSize = android.util.Size(profile.videoFrameWidth, profile.videoFrameHeight)
+                        videoBitRate = profile.videoBitRate
+                        videoFrameRate = profile.videoFrameRate
+                        audioBitRate = profile.audioBitRate
+                        audioSampleRate = profile.audioSampleRate
+                        Log.d(TAG, "使用CamcorderProfile质量级别: $quality, 尺寸: ${videoSize.width}x${videoSize.height}")
+                        break
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "无法获取CamcorderProfile质量级别 $quality: ${e.message}")
+                }
+            }
+            
+            // CamcorderProfile不可用时，使用Camera2 API
+            if (profile == null) {
+                val characteristics = cameraManager.getCameraCharacteristics(cameraIdStr)
+                val streamConfigurationMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                val videoSizes = streamConfigurationMap?.getOutputSizes(MediaRecorder::class.java)
+                videoSize = videoSizes?.firstOrNull() ?: android.util.Size(1920, 1080)
+                Log.d(TAG, "使用Camera2 API获取的录制尺寸: ${videoSize.width}x${videoSize.height}")
+            }
+            
+            currentVideoPath = outputPath
+            recordingStartTime = System.currentTimeMillis()
+            recordingSessionResult = CompletableDeferred()
+            sessionCloseResult = CompletableDeferred()
+            
+            // 使用持久化Surface（Android API 23+）以提高兼容性
+            var recorderSurface: Surface? = null
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                try {
+                    // 创建持久化Surface
+                    persistentSurface = MediaCodec.createPersistentInputSurface()
+                    Log.d(TAG, "创建持久化Surface成功")
+                } catch (e: Exception) {
+                    Log.e(TAG, "创建持久化Surface失败，回退到普通Surface: ${e.message}")
+                    persistentSurface = null
+                }
+            }
+            
+            // 创建MediaRecorder
             mediaRecorder = MediaRecorder().apply {
                 // 设置音频源（必须在视频源之前）
                 setAudioSource(MediaRecorder.AudioSource.MIC)
@@ -322,65 +415,256 @@ class Camera2Manager(private val context: Context) {
                 setOutputFile(outputPath)
                 // 设置音频编码器
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioEncodingBitRate(128000) // 128 kbps
-                setAudioSamplingRate(44100) // 44.1 kHz
+                setAudioEncodingBitRate(audioBitRate)
+                setAudioSamplingRate(audioSampleRate)
                 // 设置视频编码器
                 setVideoEncoder(MediaRecorder.VideoEncoder.H264)
                 setVideoSize(videoSize.width, videoSize.height)
-                setVideoFrameRate(30)
-                setVideoEncodingBitRate(8000000)
+                setVideoFrameRate(videoFrameRate)
+                setVideoEncodingBitRate(videoBitRate)
                 
-                prepare()
+                // 如果使用持久化Surface，设置它
+                val persistentSurfaceToUse = persistentSurface
+                if (persistentSurfaceToUse != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    try {
+                        setInputSurface(persistentSurfaceToUse)
+                        recorderSurface = persistentSurfaceToUse
+                        Log.d(TAG, "使用持久化Surface设置MediaRecorder")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "设置持久化Surface失败，回退到普通Surface: ${e.message}")
+                        persistentSurface = null
+                    }
+                }
+                
+                // 设置监听器为null
+                setOnErrorListener(null)
+                setOnInfoListener(null)
             }
             
-            currentVideoPath = outputPath
+            // 准备MediaRecorder
+            try {
+                mediaRecorder?.prepare()
+                Log.d(TAG, "MediaRecorder.prepare()成功")
+            } catch (e: Exception) {
+                Log.e(TAG, "MediaRecorder.prepare()失败: ${e.javaClass.simpleName} - ${e.message}", e)
+                isRecording = false
+                mediaRecorder?.release()
+                mediaRecorder = null
+                persistentSurface?.release()
+                persistentSurface = null
+                currentVideoPath = null
+                recordingSessionResult = null
+                sessionCloseResult = null
+                return false
+            }
+            
+            // 如果没有使用持久化Surface，获取普通的Surface
+            if (recorderSurface == null) {
+                recorderSurface = mediaRecorder?.surface
+            }
+            
+            // 验证Surface是否有效
+            if (recorderSurface == null) {
+                Log.e(TAG, "无法获取MediaRecorder的Surface")
+                isRecording = false
+                mediaRecorder?.release()
+                mediaRecorder = null
+                persistentSurface?.release()
+                persistentSurface = null
+                currentVideoPath = null
+                recordingSessionResult = null
+                sessionCloseResult = null
+                return false
+            }
+            
+            // 设置录制标志
             isRecording = true
             
-            // 重新创建捕获会话以包含MediaRecorder的Surface
+            // 在关闭旧的captureSession之前，先停止预览请求
+            try {
+                stopPreview()
+                Thread.sleep(100)
+            } catch (e: Exception) {
+                Log.w(TAG, "停止预览时发生异常（可能session已关闭）: ${e.message}")
+            }
+            
+            // 现在关闭旧的captureSession，等待它完全关闭
             captureSession?.close()
+            
+            // 等待旧的session完全关闭（最多2秒）
+            val sessionClosed = kotlinx.coroutines.runBlocking {
+                try {
+                    withTimeout(2000) {
+                        sessionCloseResult?.await()
+                        true
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    Log.e(TAG, "等待旧的captureSession关闭超时")
+                    false
+                }
+            }
+            
+            if (!sessionClosed) {
+                Log.w(TAG, "旧的captureSession未能及时关闭，继续尝试创建新session")
+            }
+            
+            // 创建新的captureSession，包含MediaRecorder的Surface
             createCaptureSession()
             
+            // 等待captureSession配置完成
+            val sessionConfigured = kotlinx.coroutines.runBlocking {
+                try {
+                    withTimeout(5000) {
+                        recordingSessionResult?.await() ?: false
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    Log.e(TAG, "等待captureSession配置超时")
+                    false
+                }
+            }
+            
+            if (!sessionConfigured) {
+                Log.e(TAG, "captureSession配置失败，无法启动录制")
+                isRecording = false
+                mediaRecorder?.release()
+                mediaRecorder = null
+                persistentSurface?.release()
+                persistentSurface = null
+                currentVideoPath = null
+                recordingSessionResult = null
+                sessionCloseResult = null
+                return false
+            }
+            
+            // captureSession配置成功后，启动MediaRecorder
             mediaRecorder?.start()
             
             Log.d(TAG, "开始录制: $outputPath, 尺寸: ${videoSize.width}x${videoSize.height}")
+            recordingSessionResult = null
+            sessionCloseResult = null
             return true
         } catch (e: Exception) {
             Log.e(TAG, "开始录制失败", e)
             isRecording = false
             mediaRecorder?.release()
             mediaRecorder = null
+            persistentSurface?.release()
+            persistentSurface = null
+            currentVideoPath = null
+            recordingSessionResult?.complete(false)
+            recordingSessionResult = null
+            sessionCloseResult = null
             return false
         }
     }
     
     fun stopRecording(): String? {
+        // 先保存路径，避免在异常情况下丢失
+        val path = currentVideoPath
+        val recorder = mediaRecorder
+        
         try {
             if (!isRecording) {
                 Log.w(TAG, "未在录制中")
                 return null
             }
             
-            mediaRecorder?.apply {
-                stop()
-                release()
+            if (path == null) {
+                Log.e(TAG, "停止录制失败: currentVideoPath为null")
+                isRecording = false
+                recorder?.release()
+                mediaRecorder = null
+                return null
             }
-            mediaRecorder = null
             
-            val path = currentVideoPath
+            if (recorder == null) {
+                Log.e(TAG, "停止录制失败: mediaRecorder为null")
+                isRecording = false
+                currentVideoPath = null
+                return null
+            }
+            
+            // 确保录制时间至少1秒
+            val recordingDuration = System.currentTimeMillis() - recordingStartTime
+            if (recordingDuration < 1000) {
+                Log.w(TAG, "录制时间过短: ${recordingDuration}ms，等待至少1秒")
+                // 等待到至少1秒
+                val waitTime = 1000 - recordingDuration
+                Thread.sleep(waitTime)
+            }
+            
+            // 移除监听器以避免异常
+            try {
+                recorder.setOnErrorListener(null)
+                recorder.setOnInfoListener(null)
+            } catch (e: Exception) {
+                Log.w(TAG, "移除监听器失败（可能已释放）: $e")
+            }
+            
+            // 先停止MediaRecorder，再关闭captureSession
+            try {
+                recorder.stop()
+                Log.d(TAG, "MediaRecorder.stop()成功")
+            } catch (e: IllegalStateException) {
+                Log.e(TAG, "MediaRecorder.stop()失败: IllegalStateException - ${e.message}", e)
+                throw e
+            } catch (e: RuntimeException) {
+                Log.e(TAG, "MediaRecorder.stop()失败: RuntimeException - ${e.message}", e)
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "MediaRecorder.stop()失败: ${e.javaClass.simpleName} - ${e.message}", e)
+                throw e
+            }
+            
+            // 释放MediaRecorder资源
+            try {
+                recorder.release()
+                Log.d(TAG, "MediaRecorder.release()成功")
+            } catch (e: Exception) {
+                Log.e(TAG, "MediaRecorder.release()失败: $e", e)
+            }
+            
+            mediaRecorder = null
             currentVideoPath = null
             isRecording = false
+            
+            // 释放持久化Surface
+            persistentSurface?.release()
+            persistentSurface = null
             
             // 重新创建捕获会话（移除MediaRecorder的Surface）
             captureSession?.close()
             createCaptureSession()
             
-            Log.d(TAG, "停止录制: $path")
+            Log.d(TAG, "停止录制成功: $path")
             return path
         } catch (e: Exception) {
-            Log.e(TAG, "停止录制失败", e)
+            Log.e(TAG, "停止录制失败: ${e.javaClass.simpleName} - ${e.message}", e)
             isRecording = false
-            mediaRecorder?.release()
+            
+            // 确保释放MediaRecorder资源
+            try {
+                recorder?.release()
+            } catch (releaseException: Exception) {
+                Log.e(TAG, "释放MediaRecorder资源失败: $releaseException", releaseException)
+            }
             mediaRecorder = null
+            
+            // 释放持久化Surface
+            persistentSurface?.release()
+            persistentSurface = null
+            
+            // 如果文件已创建，返回路径
+            if (path != null) {
+                val file = File(path)
+                if (file.exists() && file.length() > 0) {
+                    Log.w(TAG, "停止录制时发生异常，但文件已存在，返回路径: $path")
+                    currentVideoPath = null
+                    return path
+                } else {
+                    Log.e(TAG, "停止录制时发生异常，且文件不存在或为空: $path")
+                }
+            }
             return null
         }
     }
@@ -446,7 +730,7 @@ class Camera2Manager(private val context: Context) {
                 }
             }, backgroundHandler)
             
-            // 等待JPEG图像处理完成（最多等待5秒）
+            // 等待JPEG图像处理完成
             Log.d(TAG, "等待JPEG图像处理完成...")
             val result = try {
                 withTimeout(5000L) {

@@ -47,11 +47,21 @@ class ApiService {
     _httpClient.idleTimeout = const Duration(seconds: 5); // 设置空闲超时
   }
 
+  // 断开WebSocket连接（不断开HTTP客户端）
+  void disconnectWebSocket() {
+    _webSocketSubscription?.cancel();
+    _webSocketSubscription = null;
+    _webSocketChannel?.sink.close();
+    _webSocketChannel = null;
+    _notificationController?.close();
+    _notificationController = null;
+    _useWebSocket = false;
+    _pendingRequests.clear();
+  }
+  
   // 释放资源
   void dispose() {
-    _webSocketSubscription?.cancel();
-    _webSocketChannel?.sink.close();
-    _notificationController?.close();
+    disconnectWebSocket();
     _httpClient.close(force: true);
   }
   

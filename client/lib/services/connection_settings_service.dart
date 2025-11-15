@@ -4,6 +4,7 @@ class ConnectionSettingsService {
   static const String _hostKey = 'connection_host';
   static const String _portKey = 'connection_port';
   static const String _autoConnectKey = 'auto_connect_enabled';
+  static const String _skipAutoConnectOnceKey = 'skip_auto_connect_once';
 
   // 默认值
   static const String defaultHost = '192.168.50.205';
@@ -44,6 +45,18 @@ class ConnectionSettingsService {
     await prefs.remove(_hostKey);
     await prefs.remove(_portKey);
     await prefs.remove(_autoConnectKey);
+  }
+
+  // 设置跳过本次自动连接（用于主动断开连接后）
+  Future<void> setSkipAutoConnectOnce(bool skip) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_skipAutoConnectOnceKey, skip);
+  }
+
+  // 检查是否跳过本次自动连接
+  Future<bool> shouldSkipAutoConnectOnce() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_skipAutoConnectOnceKey) ?? false;
   }
 }
 

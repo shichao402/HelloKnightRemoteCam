@@ -21,6 +21,7 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
   
   bool _isConnecting = false;
   bool _isAutoConnecting = false;
+  bool _autoConnectEnabled = true;
 
   @override
   void initState() {
@@ -35,16 +36,28 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
       setState(() {
         _hostController.text = settings['host'] as String;
         _portController.text = (settings['port'] as int).toString();
+        _autoConnectEnabled = settings['autoConnect'] as bool;
       });
 
-      // 默认自动连接
-      _logger.log('尝试自动连接', tag: 'CONNECTION');
-      setState(() {
-        _isAutoConnecting = true;
-      });
-      // 延迟一下确保UI已更新
-      await Future.delayed(const Duration(milliseconds: 100));
-      await _connect(saveSettings: false);
+      // 检查是否跳过本次自动连接（主动断开连接后）
+      final shouldSkip = await _connectionSettings.shouldSkipAutoConnectOnce();
+      if (shouldSkip) {
+        // 清除跳过标志，下次启动时恢复自动连接
+        await _connectionSettings.setSkipAutoConnectOnce(false);
+        _logger.log('跳过本次自动连接（用户主动断开）', tag: 'CONNECTION');
+        return;
+      }
+
+      // 如果启用了自动连接，则自动连接
+      if (_autoConnectEnabled) {
+        _logger.log('尝试自动连接', tag: 'CONNECTION');
+        setState(() {
+          _isAutoConnecting = true;
+        });
+        // 延迟一下确保UI已更新
+        await Future.delayed(const Duration(milliseconds: 100));
+        await _connect(saveSettings: false);
+      }
     } catch (e, stackTrace) {
       _logger.logError('加载连接设置失败', error: e, stackTrace: stackTrace);
     }
@@ -100,12 +113,15 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
       if (pingSuccess) {
         _logger.log('连接成功', tag: 'CONNECTION');
         
+        // 清除跳过自动连接标志（连接成功后恢复自动连接）
+        await _connectionSettings.setSkipAutoConnectOnce(false);
+        
         // 保存连接设置
         if (saveSettings) {
           await _connectionSettings.saveConnectionSettings(
             host: _hostController.text,
             port: int.parse(_portController.text),
-            autoConnect: true,
+            autoConnect: _autoConnectEnabled,
           );
         }
 
@@ -241,6 +257,26 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
                     }
                     return null;
                   },
+                ),
+                const SizedBox(height: 16),
+                
+                // 自动连接选项
+                CheckboxListTile(
+                  value: _autoConnectEnabled,
+                  onChanged: (value) {
+                    setState(() {
+                      _autoConnectEnabled = value ?? true;
+                    });
+                    // 保存自动连接设置
+                    _connectionSettings.saveConnectionSettings(
+                      host: _hostController.text,
+                      port: int.tryParse(_portController.text) ?? 8080,
+                      autoConnect: _autoConnectEnabled,
+                    );
+                  },
+                  title: const Text('自动连接服务器'),
+                  subtitle: const Text('启动时自动连接到上次连接的服务器'),
+                  controlAffinity: ListTileControlAffinity.leading,
                 ),
                 const SizedBox(height: 16),
                 

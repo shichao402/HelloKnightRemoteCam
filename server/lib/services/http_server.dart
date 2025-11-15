@@ -2,6 +2,8 @@ import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
@@ -986,11 +988,39 @@ class HttpServerService {
     final List<Map<String, dynamic>> filesData = [];
     for (final fileName in fileNames) {
       try {
+        // 等待一小段时间，确保文件索引已经添加（数据库操作可能需要时间）
+        await Future.delayed(const Duration(milliseconds: 100));
+        
         final fileInfo = await cameraService.getFileByName(fileName);
         if (fileInfo != null) {
           filesData.add(fileInfo.toJson());
+          logger.log('成功获取文件信息: $fileName', tag: 'WEBSOCKET');
         } else {
-          logger.log('无法获取文件信息: $fileName', tag: 'WEBSOCKET');
+          logger.log('无法获取文件信息: $fileName，尝试从文件系统获取', tag: 'WEBSOCKET');
+          // 如果索引中没有，尝试从文件系统获取基本信息
+          try {
+            final externalDir = await getExternalStorageDirectory();
+            if (externalDir != null) {
+              final storageRoot = externalDir.path.split('/Android')[0];
+              final filePath = fileType == 'image'
+                  ? path.join(storageRoot, 'Pictures', 'RemoteCam', fileName)
+                  : path.join(storageRoot, 'Movies', 'RemoteCam', fileName);
+              final file = File(filePath);
+              if (await file.exists()) {
+                final fileSize = await file.length();
+                final stat = await file.stat();
+                filesData.add({
+                  'name': fileName,
+                  'path': filePath,
+                  'size': fileSize,
+                  'modifiedTime': stat.modified.millisecondsSinceEpoch,
+                });
+                logger.log('从文件系统获取文件信息: $fileName', tag: 'WEBSOCKET');
+              }
+            }
+          } catch (e) {
+            logger.logError('从文件系统获取文件信息失败: $fileName', error: e);
+          }
         }
       } catch (e) {
         logger.logError('获取文件信息失败: $fileName', error: e);
@@ -1012,11 +1042,16 @@ class HttpServerService {
       },
     });
     
+    logger.log('准备发送WebSocket消息，消息长度: ${message.length} 字节', tag: 'WEBSOCKET');
+    
     // 向所有连接的客户端广播
     final channelsToRemove = <WebSocketChannel>[];
+    int successCount = 0;
     for (final channel in _webSocketChannels) {
       try {
         channel.sink.add(message);
+        successCount++;
+        logger.log('成功发送新文件通知到客户端', tag: 'WEBSOCKET');
       } catch (e) {
         logger.log('广播新文件通知失败: $e', tag: 'WEBSOCKET');
         channelsToRemove.add(channel);
@@ -1028,7 +1063,7 @@ class HttpServerService {
       _webSocketChannels.remove(channel);
     }
     
-    logger.log('已广播新文件通知: $fileType, 文件数: ${filesData.length}, 客户端数: ${_webSocketChannels.length}', tag: 'WEBSOCKET');
+    logger.log('已广播新文件通知: $fileType, 文件数: ${filesData.length}, 成功发送: $successCount/${_webSocketChannels.length}', tag: 'WEBSOCKET');
   }
 
   // 停止服务器
