@@ -115,7 +115,7 @@ class ClientLoggerService {
         throw Exception('无法获取用户主目录');
       }
       // 使用应用名称作为日志目录名
-      logsDirPath = path.join(homeDir, 'Library', 'Logs', 'remote_cam_client');
+      logsDirPath = path.join(homeDir, 'Library', 'Logs', 'HelloKnightRCC');
     }
     
     _logsDir = Directory(logsDirPath);
@@ -268,7 +268,7 @@ class ClientLoggerService {
         } else {
           // 非沙盒应用
           final String homeDir = Platform.environment['HOME'] ?? '';
-          logsDirPath = path.join(homeDir, 'Library', 'Logs', 'remote_cam_client');
+          logsDirPath = path.join(homeDir, 'Library', 'Logs', 'HelloKnightRCC');
         }
         
         _logsDir = Directory(logsDirPath);
@@ -366,7 +366,7 @@ class ClientLoggerService {
         } else {
           // 非沙盒应用
           final String homeDir = Platform.environment['HOME'] ?? '';
-          logsDirPath = path.join(homeDir, 'Library', 'Logs', 'remote_cam_client');
+          logsDirPath = path.join(homeDir, 'Library', 'Logs', 'HelloKnightRCC');
         }
         
         _logsDir = Directory(logsDirPath);

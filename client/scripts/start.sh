@@ -26,7 +26,7 @@ if [ "$BUILD_TYPE" = "macos" ]; then
     echo "启动应用: $APP_PATH"
     open "$APP_PATH"
 else
-    APP_PATH="build/windows/x64/runner/$BUILD_MODE_CAPITALIZED/remote_cam_client.exe"
+    APP_PATH="build/windows/x64/runner/$BUILD_MODE_CAPITALIZED/HelloKnightRCC.exe"
     if [ ! -f "$APP_PATH" ]; then
         echo "错误: 应用未找到: $APP_PATH"
         echo "请先运行构建脚本"

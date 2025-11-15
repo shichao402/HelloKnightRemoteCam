@@ -13,23 +13,18 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -y|--yes)
             AUTO_START=true
-            shift
             ;;
         --release)
             BUILD_MODE="release"
-            shift
             ;;
         --debug)
             BUILD_MODE="debug"
-            shift
             ;;
         --macos)
             BUILD_TYPE="macos"
-            shift
             ;;
         --windows)
             BUILD_TYPE="windows"
-            shift
             ;;
         *)
             echo "未知参数: $1"

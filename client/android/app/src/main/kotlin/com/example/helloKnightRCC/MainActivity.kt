@@ -1,4 +1,4 @@
-package com.example.remote_cam_client
+package com.example.helloKnightRCC
 
 import io.flutter.embedding.android.FlutterActivity
 

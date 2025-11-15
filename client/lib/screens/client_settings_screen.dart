@@ -438,7 +438,7 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                   padding: EdgeInsets.symmetric(horizontal: 16),
                   child: Text(
                     '• 启用调试模式后，所有操作和API调用都会记录到日志文件\n'
-                    '• 日志文件保存在: ~/Library/Logs/remote_cam_client/\n'
+                    '• 日志文件保存在: ~/Library/Logs/HelloKnightRCC/\n'
                     '• 系统会自动清理旧日志，保留最近10个文件\n'
                     '• 单个日志文件最大10MB，总大小最大50MB',
                     style: TextStyle(

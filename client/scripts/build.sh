@@ -48,8 +48,12 @@ elif [ -f "$HOME/development/flutter/bin/flutter" ]; then
     FLUTTER="$HOME/development/flutter/bin/flutter"
 elif [ -f "$HOME/flutter/bin/flutter" ]; then
     FLUTTER="$HOME/flutter/bin/flutter"
+elif [ -f "/mnt/c/Users/$USER/development/flutter/bin/flutter.bat" ]; then
+    FLUTTER="/mnt/c/Users/$USER/development/flutter/bin/flutter.bat"
 elif [ -f "/mnt/c/Users/$USER/development/flutter/bin/flutter" ]; then
     FLUTTER="/mnt/c/Users/$USER/development/flutter/bin/flutter"
+elif [ -f "/mnt/c/Users/$USER/flutter/bin/flutter.bat" ]; then
+    FLUTTER="/mnt/c/Users/$USER/flutter/bin/flutter.bat"
 elif [ -f "/mnt/c/Users/$USER/flutter/bin/flutter" ]; then
     FLUTTER="/mnt/c/Users/$USER/flutter/bin/flutter"
 else
@@ -62,7 +66,12 @@ echo "使用 Flutter: $FLUTTER"
 
 # 获取依赖
 echo "获取依赖..."
-$FLUTTER pub get
+if [[ "$FLUTTER" == *".bat" ]] || [[ "$FLUTTER" == /mnt/c/* ]]; then
+    # Windows 路径，需要通过 cmd 执行
+    cmd.exe /c "$(echo $FLUTTER | sed 's|/mnt/c/|C:/|' | sed 's|/|\\|g')" pub get
+else
+    $FLUTTER pub get
+fi
 
 # 清理旧的构建产物（仅删除最终文件，保留中间文件以支持增量编译）
 if [ "$BUILD_TYPE" = "macos" ]; then
@@ -78,13 +87,24 @@ fi
 
 # 构建
 echo "正在构建..."
-if [ "$BUILD_TYPE" = "macos" ]; then
-    $FLUTTER build macos --$BUILD_MODE
-    # Flutter 构建输出路径使用首字母大写的模式名（Debug/Release）
-    BUILD_PATH="build/macos/Build/Products/$(echo ${BUILD_MODE:0:1} | tr '[:lower:]' '[:upper:]')${BUILD_MODE:1}"
+if [[ "$FLUTTER" == *".bat" ]] || [[ "$FLUTTER" == /mnt/c/* ]]; then
+    # Windows 路径，需要通过 cmd 执行
+    FLUTTER_WIN=$(echo $FLUTTER | sed 's|/mnt/c/|C:/|' | sed 's|/|\\|g')
+    if [ "$BUILD_TYPE" = "macos" ]; then
+        cmd.exe /c "$FLUTTER_WIN" build macos --$BUILD_MODE
+        BUILD_PATH="build/macos/Build/Products/$(echo ${BUILD_MODE:0:1} | tr '[:lower:]' '[:upper:]')${BUILD_MODE:1}"
+    else
+        cmd.exe /c "$FLUTTER_WIN" build windows --$BUILD_MODE
+        BUILD_PATH="build/windows/x64/runner/$(echo ${BUILD_MODE:0:1} | tr '[:lower:]' '[:upper:]')${BUILD_MODE:1}"
+    fi
 else
-    $FLUTTER build windows --$BUILD_MODE
-    BUILD_PATH="build/windows/x64/runner/$(echo ${BUILD_MODE:0:1} | tr '[:lower:]' '[:upper:]')${BUILD_MODE:1}"
+    if [ "$BUILD_TYPE" = "macos" ]; then
+        $FLUTTER build macos --$BUILD_MODE
+        BUILD_PATH="build/macos/Build/Products/$(echo ${BUILD_MODE:0:1} | tr '[:lower:]' '[:upper:]')${BUILD_MODE:1}"
+    else
+        $FLUTTER build windows --$BUILD_MODE
+        BUILD_PATH="build/windows/x64/runner/$(echo ${BUILD_MODE:0:1} | tr '[:lower:]' '[:upper:]')${BUILD_MODE:1}"
+    fi
 fi
 
 if [ "$BUILD_TYPE" = "macos" ]; then

@@ -68,8 +68,8 @@ git push origin v1.0.0
 
 构建产物会自动包含版本号：
 
-- `remote_cam_client_macos_1.0.0+1.zip`
-- `remote_cam_client_windows_1.0.0+1.zip`
+- `HelloKnightRCC_macos_1.0.0+1.zip`
+- `HelloKnightRCC_windows_1.0.0+1.zip`
 - `remote_cam_server_android_1.0.0+1.apk`
 
 ## 版本号更新建议

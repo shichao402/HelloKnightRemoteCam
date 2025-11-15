@@ -44,14 +44,14 @@ jobs:
       - name: Archive macOS app
         run: |
           cd client/build/macos/Build/Products/Release
-          zip -r remote_cam_client_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip remote_cam_client.app
-          mv remote_cam_client_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip ../../../../../
+          zip -r HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip HelloKnightRCC.app
+          mv HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip ../../../../../
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: remote_cam_client_macos
-          path: client/remote_cam_client_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip
+          name: HelloKnightRCC_macos
+          path: client/HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip
           retention-days: 30
 
   build-client-windows:
@@ -95,14 +95,14 @@ jobs:
         run: |
           cd client/build/windows/x64/runner/Release
           $version = "${{ steps.get_version.outputs.FULL_VERSION }}"
-          Compress-Archive -Path * -DestinationPath remote_cam_client_windows_${version}.zip -Force
-          Move-Item -Path remote_cam_client_windows_${version}.zip -Destination ../../../../../
+          Compress-Archive -Path * -DestinationPath HelloKnightRCC_windows_${version}.zip -Force
+          Move-Item -Path HelloKnightRCC_windows_${version}.zip -Destination ../../../../../
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: remote_cam_client_windows
-          path: client/remote_cam_client_windows_${{ steps.get_version.outputs.FULL_VERSION }}.zip
+          name: HelloKnightRCC_windows
+          path: client/HelloKnightRCC_windows_${{ steps.get_version.outputs.FULL_VERSION }}.zip
           retention-days: 30
 
   build-server-android:
@@ -195,13 +195,13 @@ jobs:
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
-          name: remote_cam_client_macos
+          name: HelloKnightRCC_macos
           path: ./artifacts/macos
 
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
-          name: remote_cam_client_windows
+          name: HelloKnightRCC_windows
           path: ./artifacts/windows
 
       - name: Download Android artifact
@@ -219,8 +219,8 @@ jobs:
             ## Release ${{ steps.get_tag_version.outputs.VERSION }}
 
             ### Client
-            - **macOS**: remote_cam_client_macos_${{ steps.get_client_version.outputs.FULL_VERSION }}.zip
-            - **Windows**: remote_cam_client_windows_${{ steps.get_client_version.outputs.FULL_VERSION }}.zip
+            - **macOS**: HelloKnightRCC_macos_${{ steps.get_client_version.outputs.FULL_VERSION }}.zip
+            - **Windows**: HelloKnightRCC_windows_${{ steps.get_client_version.outputs.FULL_VERSION }}.zip
 
             ### Server
             - **Android**: remote_cam_server_android_${{ steps.get_server_version.outputs.FULL_VERSION }}.apk

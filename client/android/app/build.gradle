@@ -23,7 +23,7 @@ if (flutterVersionName == null) {
 }
 
 android {
-    namespace "com.example.remote_cam_client"
+    namespace "com.example.helloKnightRCC"
     compileSdk 34
 
     compileOptions {
@@ -40,7 +40,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "com.example.remote_cam_client"
+        applicationId "com.example.helloKnightRCC"
         minSdk 24
         targetSdk 34
         versionCode flutterVersionCode.toInteger()

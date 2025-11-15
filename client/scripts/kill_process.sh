@@ -4,7 +4,7 @@
 
 set -e
 
-APP_NAME="remote_cam_client"
+APP_NAME="HelloKnightRCC"
 
 echo "检查并终止已有进程: $APP_NAME"
 

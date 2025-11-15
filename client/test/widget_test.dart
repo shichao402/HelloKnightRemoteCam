@@ -6,8 +6,8 @@
 // tree, find text, verify that the values of widget properties are correct.
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:remote_cam_client/main.dart';
-import 'package:remote_cam_client/screens/device_connection_screen.dart';
+import 'package:hello_knight_rcc/main.dart';
+import 'package:hello_knight_rcc/screens/device_connection_screen.dart';
 
 void main() {
   testWidgets('App starts correctly', (WidgetTester tester) async {

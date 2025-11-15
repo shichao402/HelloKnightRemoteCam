@@ -83,7 +83,7 @@ echo ""
 echo "2. 收集Mac客户端日志..."
 echo "----------------------------------------"
 
-CLIENT_LOG_DIR="$HOME/Library/Logs/remote_cam_client"
+CLIENT_LOG_DIR="$HOME/Library/Logs/HelloKnightRCC"
 
 if [ -d "$CLIENT_LOG_DIR" ]; then
     echo "✓ 找到客户端日志目录: $CLIENT_LOG_DIR"

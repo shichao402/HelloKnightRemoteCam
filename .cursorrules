@@ -6,7 +6,7 @@
 所有组件必须将日志写入独立的日志文件，不依赖系统日志。
 
 **手机端：** `/data/data/com.example.remote_cam_server/app_flutter/logs/debug_*.log`
-**客户端：** `~/Library/Application Support/com.example.remote_cam_client/logs/client_debug_*.log`
+**客户端：** `~/Library/Application Support/com.example.helloKnightRCC/logs/client_debug_*.log`
 
 ### 2. 自动化日志收集（强制）
 开发调试时，AI必须主动收集日志，不要求用户手动操作。
