@@ -292,9 +292,19 @@ class Camera2Manager(private val context: Context) {
             val videoSize = videoSizes?.firstOrNull() ?: android.util.Size(1920, 1080)
             
             mediaRecorder = MediaRecorder().apply {
+                // 设置音频源（必须在视频源之前）
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                // 设置视频源
                 setVideoSource(MediaRecorder.VideoSource.SURFACE)
+                // 设置输出格式
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                // 设置输出文件
                 setOutputFile(outputPath)
+                // 设置音频编码器
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setAudioEncodingBitRate(128000) // 128 kbps
+                setAudioSamplingRate(44100) // 44.1 kHz
+                // 设置视频编码器
                 setVideoEncoder(MediaRecorder.VideoEncoder.H264)
                 setVideoSize(videoSize.width, videoSize.height)
                 setVideoFrameRate(30)
