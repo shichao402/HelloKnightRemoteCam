@@ -48,6 +48,10 @@ elif [ -f "$HOME/development/flutter/bin/flutter" ]; then
     FLUTTER="$HOME/development/flutter/bin/flutter"
 elif [ -f "$HOME/flutter/bin/flutter" ]; then
     FLUTTER="$HOME/flutter/bin/flutter"
+elif [ -f "/mnt/c/Users/$USER/development/flutter/bin/flutter" ]; then
+    FLUTTER="/mnt/c/Users/$USER/development/flutter/bin/flutter"
+elif [ -f "/mnt/c/Users/$USER/flutter/bin/flutter" ]; then
+    FLUTTER="/mnt/c/Users/$USER/flutter/bin/flutter"
 else
     echo "错误: 未找到 Flutter"
     echo "请确保 Flutter 已安装"
