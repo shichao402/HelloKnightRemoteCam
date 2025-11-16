@@ -334,6 +334,64 @@ class DownloadManager {
     return allTasks;
   }
 
+  // 获取已完成的任务（从数据库）
+  Future<List<DownloadTask>> getCompletedTasks() async {
+    if (_database == null) return [];
+    
+    try {
+      final List<Map<String, dynamic>> maps = await _database!.query(
+        'downloads',
+        where: 'status = ?',
+        whereArgs: [DownloadStatus.completed.toString()],
+        orderBy: 'endTime DESC',
+      );
+      
+      return maps.map((map) => DownloadTask.fromJson(map)).toList();
+    } catch (e) {
+      print('获取已完成任务失败: $e');
+      return [];
+    }
+  }
+
+  // 删除指定天数之前的已完成任务
+  Future<int> deleteCompletedTasksOlderThan(int days) async {
+    if (_database == null) return 0;
+    
+    try {
+      final cutoffDate = DateTime.now().subtract(Duration(days: days));
+      final cutoffDateStr = cutoffDate.toIso8601String();
+      
+      final deletedCount = await _database!.delete(
+        'downloads',
+        where: 'status = ? AND endTime < ?',
+        whereArgs: [DownloadStatus.completed.toString(), cutoffDateStr],
+      );
+      
+      return deletedCount;
+    } catch (e) {
+      print('删除旧任务失败: $e');
+      return 0;
+    }
+  }
+
+  // 删除指定的已完成任务
+  Future<bool> deleteCompletedTask(String taskId) async {
+    if (_database == null) return false;
+    
+    try {
+      final deletedCount = await _database!.delete(
+        'downloads',
+        where: 'id = ? AND status = ?',
+        whereArgs: [taskId, DownloadStatus.completed.toString()],
+      );
+      
+      return deletedCount > 0;
+    } catch (e) {
+      print('删除任务失败: $e');
+      return false;
+    }
+  }
+
   // 查找任务
   DownloadTask? _findTask(String taskId) {
     try {

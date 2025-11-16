@@ -30,9 +30,7 @@ class FileManagerScreen extends StatefulWidget {
   State<FileManagerScreen> createState() => _FileManagerScreenState();
 }
 
-class _FileManagerScreenState extends State<FileManagerScreen>
-    with SingleTickerProviderStateMixin {
-  late TabController _tabController;
+class _FileManagerScreenState extends State<FileManagerScreen> {
   late DownloadManager _downloadManager;
   
   List<FileInfo> _pictures = [];
@@ -72,7 +70,6 @@ class _FileManagerScreenState extends State<FileManagerScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this); // 只有"全部文件"和"下载"两个页签
     _downloadManager = DownloadManager(
       baseUrl: widget.apiService.baseUrl,
     );
@@ -96,7 +93,6 @@ class _FileManagerScreenState extends State<FileManagerScreen>
     _gridScrollController.removeListener(_onGridScroll);
     _scrollController.dispose();
     _gridScrollController.dispose();
-    _tabController.dispose();
     _downloadManager.dispose();
     _webSocketSubscription?.cancel();
     super.dispose();
@@ -647,18 +643,16 @@ class _FileManagerScreenState extends State<FileManagerScreen>
 
   /// 全选
   void _selectAll() {
-    final currentFiles = _tabController.index == 0 
-        ? _pictures 
-        : (_tabController.index == 1 ? _videos : []);
+    final allFiles = [..._pictures, ..._videos];
     
     setState(() {
-      if (_selectedFiles.length == currentFiles.length && currentFiles.isNotEmpty) {
+      if (_selectedFiles.length == allFiles.length && allFiles.isNotEmpty) {
         // 如果已全选，则取消全选
         _selectedFiles.clear();
       } else {
-        // 否则全选当前标签页的所有文件
+        // 否则全选所有文件
         _selectedFiles.clear();
-        for (var file in currentFiles) {
+        for (var file in allFiles) {
           _selectedFiles.add(file.name);
         }
       }
@@ -711,7 +705,6 @@ class _FileManagerScreenState extends State<FileManagerScreen>
     });
     
     _showSuccess('批量下载完成：成功 $successCount 个，跳过 $skipCount 个');
-    _tabController.animateTo(2); // 切换到下载Tab
   }
 
   /// 批量删除本地文件
@@ -1015,9 +1008,6 @@ class _FileManagerScreenState extends State<FileManagerScreen>
       
       final downloadDir = await _downloadSettings.getDownloadPath();
       _showSuccess('已添加到下载队列\n保存位置: $downloadDir');
-      
-      // 切换到下载Tab
-      _tabController.animateTo(2);
     } catch (e) {
       _showError('添加下载失败: $e');
     }
@@ -1264,19 +1254,6 @@ class _FileManagerScreenState extends State<FileManagerScreen>
             ),
           ],
         ],
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: [
-            Tab(
-              icon: const Icon(Icons.folder),
-              text: '全部文件 (${_pictures.length + _videos.length})',
-            ),
-            Tab(
-              icon: const Icon(Icons.download),
-              text: '下载 (${_downloadTasks.length})',
-            ),
-          ],
-        ),
       ) : null,
       body: LayoutBuilder(
         builder: (context, constraints) {
@@ -1287,33 +1264,9 @@ class _FileManagerScreenState extends State<FileManagerScreen>
                   width: constraints.maxWidth,
                   child: buildToolbar(),
                 ),
-                SizedBox(
-                  width: constraints.maxWidth,
-                  child: TabBar(
-                    controller: _tabController,
-                    isScrollable: false,
-                    tabAlignment: TabAlignment.fill,
-                    tabs: [
-                      Tab(
-                        icon: const Icon(Icons.folder, size: 18),
-                        text: '全部文件 (${_pictures.length + _videos.length})',
-                      ),
-                      Tab(
-                        icon: const Icon(Icons.download, size: 18),
-                        text: '下载 (${_downloadTasks.length})',
-                      ),
-                    ],
-                  ),
-                ),
               ],
               Expanded(
-                child: TabBarView(
-                  controller: _tabController,
-                  children: [
-                    _buildAllFilesList(), // 合并的照片和视频列表
-                    _buildDownloadList(),
-                  ],
-                ),
+                child: _buildAllFilesList(), // 合并的照片和视频列表
               ),
             ],
           );

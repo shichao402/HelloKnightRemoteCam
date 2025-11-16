@@ -14,6 +14,7 @@ import 'settings_screen.dart';
 import 'advanced_camera_settings_screen.dart';
 import 'settings_selection_screen.dart';
 import 'file_manager_screen.dart';
+import 'download_manager_screen.dart';
 import 'client_settings_screen.dart';
 import 'device_connection_screen.dart';
 import 'camera_capabilities_screen.dart';
@@ -1182,9 +1183,9 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
               tooltip: '设置',
             ),
             IconButton(
-              icon: const Icon(Icons.folder),
-              onPressed: () => _navigateToFileManager(null),
-              tooltip: '文件管理',
+              icon: const Icon(Icons.download),
+              onPressed: () => _navigateToDownloadManager(),
+              tooltip: '下载管理',
             ),
           ],
         ),
@@ -1426,6 +1427,18 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         builder: (context) => FileManagerScreen(
           apiService: widget.apiService,
           highlightFileName: fileName,
+        ),
+      ),
+    );
+  }
+
+  /// 导航到下载管理
+  void _navigateToDownloadManager() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => DownloadManagerScreen(
+          apiService: widget.apiService,
         ),
       ),
     );
