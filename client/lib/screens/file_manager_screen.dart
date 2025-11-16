@@ -53,8 +53,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   bool _hasMore = true;
   int? _lastUpdateTime; // 最后更新时间戳（用于增量获取）
 
-  // 显示模式：list 或 grid
-  String _viewMode = 'list'; // 'list' 或 'grid'
+  // 显示模式：固定为 grid
   double _gridItemSize = 200.0; // 网格项大小（宽度）
   final double _minGridSize = 150.0;
   final double _maxGridSize = 400.0;
@@ -229,17 +228,11 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   Future<void> _loadViewPreferences() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final savedViewMode = prefs.getString('file_manager_view_mode');
       final savedGridSize = prefs.getDouble('file_manager_grid_size');
       final savedGroupMode = prefs.getString('file_manager_group_mode');
 
       if (mounted) {
         setState(() {
-          if (savedViewMode != null &&
-              (savedViewMode == 'list' || savedViewMode == 'grid')) {
-            _viewMode = savedViewMode;
-          }
-
           if (savedGridSize != null &&
               savedGridSize >= _minGridSize &&
               savedGridSize <= _maxGridSize) {
@@ -265,11 +258,9 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   Future<void> _saveViewPreferences() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('file_manager_view_mode', _viewMode);
       await prefs.setDouble('file_manager_grid_size', _gridItemSize);
       await prefs.setString('file_manager_group_mode', _groupMode);
-      _logger.log(
-          '已保存视图偏好: mode=$_viewMode, size=$_gridItemSize, group=$_groupMode',
+      _logger.log('已保存视图偏好: size=$_gridItemSize, group=$_groupMode',
           tag: 'VIEW_PREFERENCES');
     } catch (e) {
       _logger.logError('保存视图偏好设置失败', error: e);
@@ -296,7 +287,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     final index = allFiles.indexWhere((f) => f.name == fileName);
     if (index >= 0 && _scrollController.hasClients) {
       // 计算滚动位置（让文件显示在中间）
-      final itemHeight = _viewMode == 'grid' ? _gridItemSize * 1.5 : 120.0;
+      final itemHeight = _gridItemSize * 1.5;
       final targetOffset = (index * itemHeight) -
           (MediaQuery.of(context).size.height / 2) +
           (itemHeight / 2);
@@ -1644,25 +1635,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                 constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
               ),
             ] else ...[
-              // 视图模式切换
-              IconButton(
-                icon: Icon(
-                  _viewMode == 'list' ? Icons.grid_view : Icons.list,
-                  color: Colors.white,
-                  size: 20,
-                ),
-                onPressed: () async {
-                  setState(() {
-                    _viewMode = _viewMode == 'list' ? 'grid' : 'list';
-                  });
-                  await _saveViewPreferences();
-                },
-                tooltip: _viewMode == 'list' ? '切换到网格视图' : '切换到列表视图',
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-              ),
-              // 网格大小调整（仅在网格模式下显示）
-              if (_viewMode == 'grid') ...[
+              // 网格大小调整
+              ...[
                 IconButton(
                   icon:
                       const Icon(Icons.zoom_out, color: Colors.white, size: 20),
@@ -1818,20 +1792,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                     tooltip: '取消选择',
                   ),
                 ] else ...[
-                  // 视图模式切换
-                  IconButton(
-                    icon: Icon(
-                        _viewMode == 'list' ? Icons.grid_view : Icons.list),
-                    onPressed: () async {
-                      setState(() {
-                        _viewMode = _viewMode == 'list' ? 'grid' : 'list';
-                      });
-                      await _saveViewPreferences();
-                    },
-                    tooltip: _viewMode == 'list' ? '切换到网格视图' : '切换到列表视图',
-                  ),
-                  // 网格大小调整（仅在网格模式下显示）
-                  if (_viewMode == 'grid') ...[
+                  // 网格大小调整
+                  ...[
                     IconButton(
                       icon: const Icon(Icons.zoom_out),
                       onPressed: _gridItemSize > _minGridSize
@@ -2086,139 +2048,78 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       });
     }
 
-    if (_viewMode == 'grid') {
-      return RefreshIndicator(
-        onRefresh: _refreshFileList,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // 使用实际可用宽度计算列数，避免溢出
-            // 考虑 padding (左右各8px) 和 spacing (列间距8px)
-            const padding = 16.0; // 左右各8px
-            const spacing = 8.0; // 列间距
-            final availableWidth = constraints.maxWidth - padding;
+    return RefreshIndicator(
+      onRefresh: _refreshFileList,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 使用实际可用宽度计算列数，避免溢出
+          // 考虑 padding (左右各8px) 和 spacing (列间距8px)
+          const padding = 16.0; // 左右各8px
+          const spacing = 8.0; // 列间距
+          final availableWidth = constraints.maxWidth - padding;
 
-            // 计算列数：availableWidth = crossAxisCount * itemWidth + (crossAxisCount - 1) * spacing
-            // 即：availableWidth = crossAxisCount * (itemWidth + spacing) - spacing
-            // crossAxisCount = (availableWidth + spacing) / (itemWidth + spacing)
-            // 确保至少减去一个 spacing 来避免溢出
-            final crossAxisCount =
-                ((availableWidth - spacing) / (_gridItemSize + spacing))
-                    .floor()
-                    .clamp(1, 10);
+          // 计算列数：availableWidth = crossAxisCount * itemWidth + (crossAxisCount - 1) * spacing
+          // 即：availableWidth = crossAxisCount * (itemWidth + spacing) - spacing
+          // crossAxisCount = (availableWidth + spacing) / (itemWidth + spacing)
+          // 确保至少减去一个 spacing 来避免溢出
+          final crossAxisCount =
+              ((availableWidth - spacing) / (_gridItemSize + spacing))
+                  .floor()
+                  .clamp(1, 10);
 
-            // 使用CustomScrollView支持分组标题跨列显示
-            return CustomScrollView(
-              controller: _gridScrollController,
-              slivers: [
-                // 构建分组和文件
-                ...groupKeys.map((key) {
-                  final files = groupedFiles[key]!;
-                  return [
-                    // 分组标题（如果有分组模式）
-                    if (_groupMode != 'none' && key.isNotEmpty)
-                      SliverToBoxAdapter(
-                        child: _buildGroupHeader(
-                            _formatGroupTitle(key), crossAxisCount),
-                      ),
-                    // 文件网格
-                    SliverPadding(
-                      padding: const EdgeInsets.all(8),
-                      sliver: SliverGrid(
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: crossAxisCount,
-                          crossAxisSpacing: spacing,
-                          mainAxisSpacing: 8,
-                          childAspectRatio: 1.2,
-                        ),
-                        delegate: SliverChildBuilderDelegate(
-                          (context, index) {
-                            if (index < files.length) {
-                              return _buildGridItem(files[index]);
-                            }
-                            return const SizedBox.shrink();
-                          },
-                          childCount: files.length,
-                          addAutomaticKeepAlives: true, // 保持列表项状态，避免不必要的重建
-                          addRepaintBoundaries: true, // 添加重绘边界，优化性能
-                        ),
-                      ),
+          // 使用CustomScrollView支持分组标题跨列显示
+          return CustomScrollView(
+            controller: _gridScrollController,
+            slivers: [
+              // 构建分组和文件
+              ...groupKeys.map((key) {
+                final files = groupedFiles[key]!;
+                return [
+                  // 分组标题（如果有分组模式）
+                  if (_groupMode != 'none' && key.isNotEmpty)
+                    SliverToBoxAdapter(
+                      child: _buildGroupHeader(
+                          _formatGroupTitle(key), crossAxisCount),
                     ),
-                  ];
-                }).expand((x) => x),
-                // 加载更多指示器
-                if (_hasMore)
-                  SliverToBoxAdapter(
-                    child: Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: _isLoadingMore
-                            ? const CircularProgressIndicator()
-                            : const SizedBox.shrink(),
+                  // 文件网格
+                  SliverPadding(
+                    padding: const EdgeInsets.all(8),
+                    sliver: SliverGrid(
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: crossAxisCount,
+                        crossAxisSpacing: spacing,
+                        mainAxisSpacing: 8,
+                        childAspectRatio: 1.2,
+                      ),
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          if (index < files.length) {
+                            return _buildGridItem(files[index]);
+                          }
+                          return const SizedBox.shrink();
+                        },
+                        childCount: files.length,
+                        addAutomaticKeepAlives: true, // 保持列表项状态，避免不必要的重建
+                        addRepaintBoundaries: true, // 添加重绘边界，优化性能
                       ),
                     ),
                   ),
-              ],
-            );
-          },
-        ),
-      );
-    }
-
-    // 列表视图
-    // 计算总项目数（包括分组标题）
-    int totalItemCount = 0;
-    for (var key in groupKeys) {
-      if (_groupMode != 'none' && key.isNotEmpty) {
-        totalItemCount++; // 分组标题
-      }
-      totalItemCount += groupedFiles[key]!.length; // 文件项
-    }
-    if (_hasMore) {
-      totalItemCount++; // 加载更多指示器
-    }
-
-    return RefreshIndicator(
-      onRefresh: _refreshFileList,
-      child: ListView.builder(
-        controller: _scrollController,
-        addAutomaticKeepAlives: true, // 保持列表项状态，避免不必要的重建
-        addRepaintBoundaries: true, // 添加重绘边界，优化性能
-        itemCount: totalItemCount,
-        itemBuilder: (context, index) {
-          // 遍历分组和文件，构建项目
-          int currentIndex = 0;
-          for (var key in groupKeys) {
-            // 分组标题
-            if (_groupMode != 'none' && key.isNotEmpty) {
-              if (currentIndex == index) {
-                return _buildGroupHeader(_formatGroupTitle(key), 1);
-              }
-              currentIndex++;
-            }
-
-            // 文件项
-            for (var file in groupedFiles[key]!) {
-              if (currentIndex == index) {
-                final isHighlighted = widget.highlightFileName == file.name;
-                return _buildListItem(file, isHighlighted: isHighlighted);
-              }
-              currentIndex++;
-            }
-          }
-
-          // 加载更多指示器
-          if (currentIndex == index && _hasMore) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: _isLoadingMore
-                    ? const CircularProgressIndicator()
-                    : const SizedBox.shrink(),
-              ),
-            );
-          }
-
-          return const SizedBox.shrink();
+                ];
+              }).expand((x) => x),
+              // 加载更多指示器
+              if (_hasMore)
+                SliverToBoxAdapter(
+                  child: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: _isLoadingMore
+                          ? const CircularProgressIndicator()
+                          : const SizedBox.shrink(),
+                    ),
+                  ),
+                ),
+            ],
+          );
         },
       ),
     );
@@ -2231,7 +2132,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     }
 
     // 网格视图：标题占满整行
-    if (_viewMode == 'grid' && crossAxisCount > 1) {
+    if (crossAxisCount > 1) {
       return Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -2251,7 +2152,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       );
     }
 
-    // 列表视图：标准标题样式
+    // 单列时：标准标题样式
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -2289,238 +2190,60 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       );
     }
 
-    if (_viewMode == 'grid') {
-      return RefreshIndicator(
-        onRefresh: _refreshFileList,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // 使用实际可用宽度计算列数，避免溢出
-            // 考虑 padding (左右各8px) 和 spacing (列间距8px)
-            const padding = 16.0; // 左右各8px
-            const spacing = 8.0; // 列间距
-            final availableWidth = constraints.maxWidth - padding;
-
-            // 计算列数：availableWidth = crossAxisCount * itemWidth + (crossAxisCount - 1) * spacing
-            // 即：availableWidth = crossAxisCount * (itemWidth + spacing) - spacing
-            // crossAxisCount = (availableWidth + spacing) / (itemWidth + spacing)
-            // 确保至少减去一个 spacing 来避免溢出
-            final crossAxisCount =
-                ((availableWidth - spacing) / (_gridItemSize + spacing))
-                    .floor()
-                    .clamp(1, 10);
-
-            return GridView.builder(
-              controller: _gridScrollController,
-              padding: const EdgeInsets.all(8),
-              addAutomaticKeepAlives: true, // 保持列表项状态，避免不必要的重建
-              addRepaintBoundaries: true, // 添加重绘边界，优化性能
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: crossAxisCount,
-                crossAxisSpacing: spacing,
-                mainAxisSpacing: 8,
-                childAspectRatio: 1.2,
-              ),
-              itemCount: files.length + (_hasMore ? 1 : 0), // 如果有更多，添加一个加载指示器
-              itemBuilder: (context, index) {
-                if (index == files.length) {
-                  // 加载更多指示器
-                  return Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: _isLoadingMore
-                          ? const CircularProgressIndicator()
-                          : const SizedBox.shrink(),
-                    ),
-                  );
-                }
-                final file = files[index];
-                return _buildGridItem(file);
-              },
-            );
-          },
-        ),
-      );
-    }
-
-    // 列表视图
     return RefreshIndicator(
       onRefresh: _refreshFileList,
-      child: ListView.builder(
-        controller: _scrollController,
-        addAutomaticKeepAlives: true, // 保持列表项状态，避免不必要的重建
-        addRepaintBoundaries: true, // 添加重绘边界，优化性能
-        itemCount: files.length,
-        itemBuilder: (context, index) {
-          final file = files[index];
-          final isHighlighted = widget.highlightFileName == file.name;
-          return _buildListItem(file, isHighlighted: isHighlighted);
-        },
-      ),
-    );
-  }
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 使用实际可用宽度计算列数，避免溢出
+          // 考虑 padding (左右各8px) 和 spacing (列间距8px)
+          const padding = 16.0; // 左右各8px
+          const spacing = 8.0; // 列间距
+          final availableWidth = constraints.maxWidth - padding;
 
-  /// 构建列表项
-  Widget _buildListItem(FileInfo file, {bool isHighlighted = false}) {
-    final isDownloaded = _downloadedStatusCache[file.name] == true;
-    final isSelected = _selectedFiles.contains(file.name);
+          // 计算列数：availableWidth = crossAxisCount * itemWidth + (crossAxisCount - 1) * spacing
+          // 即：availableWidth = crossAxisCount * (itemWidth + spacing) - spacing
+          // crossAxisCount = (availableWidth + spacing) / (itemWidth + spacing)
+          // 确保至少减去一个 spacing 来避免溢出
+          final crossAxisCount =
+              ((availableWidth - spacing) / (_gridItemSize + spacing))
+                  .floor()
+                  .clamp(1, 10);
 
-    // 使用稳定的 key 来避免不必要的重建
-    return Card(
-      key: ValueKey('list_item_${file.name}'),
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      color: isHighlighted
-          ? Colors.yellow.shade100
-          : (isSelected ? Colors.blue.shade50 : null),
-      elevation: isHighlighted ? 4 : null,
-      child: GestureDetector(
-        onDoubleTap: !_isSelectionMode
-            ? () {
-                _logger.log('双击打开文件: ${file.name}', tag: 'FILE_MANAGER');
-                _openFile(file);
-              }
-            : null,
-        child: Column(
-          children: [
-            ListTile(
-              leading: _isSelectionMode
-                  ? Checkbox(
-                      value: isSelected,
-                      onChanged: (value) {
-                        setState(() {
-                          if (value == true) {
-                            _selectedFiles.add(file.name);
-                          } else {
-                            _selectedFiles.remove(file.name);
-                          }
-                        });
-                      },
-                    )
-                  : CircleAvatar(
-                      backgroundColor: file.isVideo
-                          ? Colors.red.shade100
-                          : Colors.blue.shade100,
-                      child: Icon(
-                        file.isVideo ? Icons.videocam : Icons.image,
-                        color: file.isVideo ? Colors.red : Colors.blue,
-                      ),
-                    ),
-              title: Row(
-                children: [
-                  Expanded(
-                    child: Text(file.name),
-                  ),
-                  const SizedBox(width: 8),
-                  // 星标按钮
-                  if (!_isSelectionMode)
-                    GestureDetector(
-                      onTap: () => _toggleStarred(file),
-                      child: Icon(
-                        file.isStarred ? Icons.star : Icons.star_border,
-                        color: file.isStarred ? Colors.amber : Colors.grey,
-                        size: 20,
-                      ),
-                    ),
-                  if (!_isSelectionMode) const SizedBox(width: 8),
-                  Text(
-                    _formatDateTime(file.createdTime),
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Colors.grey,
-                      fontWeight: FontWeight.normal,
-                    ),
-                  ),
-                ],
-              ),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 文件类型标识
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: file.isVideo ? Colors.red : Colors.blue,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              file.isVideo ? Icons.videocam : Icons.image,
-                              size: 12,
-                              color: Colors.white,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              file.isVideo ? '视频' : '照片',
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(file.formattedSize),
-                  Text(
-                    '创建: ${_formatDateTime(file.createdTime)}',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  Text(
-                    '修改: ${_formatDateTime(file.modifiedTime)}',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  const SizedBox(height: 4),
-                  // 显示服务端路径
-                  Row(
-                    children: [
-                      const Icon(Icons.storage, size: 12, color: Colors.grey),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          file.path,
-                          style:
-                              const TextStyle(fontSize: 11, color: Colors.grey),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                  // 显示下载状态
-                  if (isDownloaded)
-                    Row(
-                      children: [
-                        const Icon(Icons.check_circle,
-                            size: 12, color: Colors.green),
-                        const SizedBox(width: 4),
-                        Text(
-                          '已下载',
-                          style: const TextStyle(
-                              fontSize: 11, color: Colors.green),
-                        ),
-                      ],
-                    ),
-                ],
-              ),
+          return GridView.builder(
+            controller: _gridScrollController,
+            padding: const EdgeInsets.all(8),
+            addAutomaticKeepAlives: true, // 保持列表项状态，避免不必要的重建
+            addRepaintBoundaries: true, // 添加重绘边界，优化性能
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: crossAxisCount,
+              crossAxisSpacing: spacing,
+              mainAxisSpacing: 8,
+              childAspectRatio: 1.2,
             ),
-            // 操作按钮区域（直接显示，不折叠）
-            if (!_isSelectionMode) _buildFileActionButtons(file),
-          ],
-        ),
+            itemCount: files.length + (_hasMore ? 1 : 0), // 如果有更多，添加一个加载指示器
+            itemBuilder: (context, index) {
+              if (index == files.length) {
+                // 加载更多指示器
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: _isLoadingMore
+                        ? const CircularProgressIndicator()
+                        : const SizedBox.shrink(),
+                  ),
+                );
+              }
+              final file = files[index];
+              return _buildGridItem(file);
+            },
+          );
+        },
       ),
     );
   }
 
   /// 构建网格项
   Widget _buildGridItem(FileInfo file, {bool isHighlighted = false}) {
-    final isDownloaded = _downloadedStatusCache[file.name] == true;
     final isSelected = _selectedFiles.contains(file.name);
 
     // 使用稳定的 key 来避免不必要的重建
@@ -2626,14 +2349,26 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                         },
                       ),
                     ),
-                  // 已下载图标（多选模式下不显示，避免与复选框重叠）
-                  // 如果已下载，显示在右上角
-                  if (isDownloaded && !_isSelectionMode)
-                    const Positioned(
+                  // 星标按钮 - 右上角（多选模式下不显示，避免与复选框重叠）
+                  if (!_isSelectionMode)
+                    Positioned(
                       top: 4,
                       right: 4,
-                      child: Icon(Icons.check_circle,
-                          color: Colors.green, size: 20),
+                      child: GestureDetector(
+                        onTap: () => _toggleStarred(file),
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.5),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            file.isStarred ? Icons.star : Icons.star_border,
+                            color: file.isStarred ? Colors.amber : Colors.white,
+                            size: 32,
+                          ),
+                        ),
+                      ),
                     ),
                 ],
               ),
@@ -2942,21 +2677,6 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             iconSize: 16,
           ),
           IconButton(
-            icon:
-                Icon(file.isStarred ? Icons.star : Icons.star_border, size: 16),
-            color: file.isStarred ? Colors.amber : Colors.grey,
-            onPressed: () => _toggleStarred(file),
-            tooltip: file.isStarred ? '取消星标' : '标记星标',
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(
-              minWidth: 24,
-              minHeight: 24,
-              maxWidth: 24,
-              maxHeight: 24,
-            ),
-            iconSize: 16,
-          ),
-          IconButton(
             icon: const Icon(Icons.delete_forever, size: 16),
             color: Colors.red,
             onPressed: (isDownloaded && !file.isStarred)
@@ -2976,84 +2696,77 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       );
     }
 
-    // 完整模式（列表视图）
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          Expanded(
-            child: isDownloading
-                ? Container(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            value: downloadTask.progress,
-                            strokeWidth: 2.5,
-                            backgroundColor: Colors.grey.shade300,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          '${downloadTask.progressPercent}%',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ],
-                    ),
-                  )
-                : OutlinedButton.icon(
-                    icon: const Icon(Icons.download, size: 16),
-                    label: const Text('下载', style: TextStyle(fontSize: 12)),
-                    onPressed: isDownloaded ? null : () => _downloadFile(file),
-                  ),
-          ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.folder_open, size: 16),
-              label: const Text('打开', style: TextStyle(fontSize: 12)),
-              onPressed: isDownloaded ? () => _openInFileManager(file) : null,
-            ),
-          ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.copy, size: 16),
-              label: const Text('复制', style: TextStyle(fontSize: 12)),
-              onPressed: isDownloaded ? () => _copyFile(file) : null,
-            ),
-          ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: OutlinedButton.icon(
-              icon: Icon(file.isStarred ? Icons.star : Icons.star_border,
-                  size: 16),
-              label: Text(file.isStarred ? '取消星标' : '星标',
-                  style: const TextStyle(fontSize: 12)),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: file.isStarred ? Colors.amber : Colors.grey,
+    // 默认返回紧凑模式（现在只有网格视图）
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 如果正在下载，显示圆形进度条；否则显示下载按钮
+        isDownloading
+            ? SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  value: downloadTask.progress,
+                  strokeWidth: 2.5,
+                  backgroundColor: Colors.grey.shade300,
+                ),
+              )
+            : IconButton(
+                icon: const Icon(Icons.download, size: 16),
+                onPressed: isDownloaded ? null : () => _downloadFile(file),
+                tooltip: '下载',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(
+                  minWidth: 24,
+                  minHeight: 24,
+                  maxWidth: 24,
+                  maxHeight: 24,
+                ),
+                iconSize: 16,
               ),
-              onPressed: () => _toggleStarred(file),
-            ),
+        IconButton(
+          icon: const Icon(Icons.folder_open, size: 16),
+          onPressed: isDownloaded ? () => _openInFileManager(file) : null,
+          tooltip: '在资源管理器中打开',
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(
+            minWidth: 24,
+            minHeight: 24,
+            maxWidth: 24,
+            maxHeight: 24,
           ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.delete_forever, size: 16),
-              label: const Text('删除', style: TextStyle(fontSize: 12)),
-              style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-              onPressed: (isDownloaded && !file.isStarred)
-                  ? () => _deleteLocalFile(file)
-                  : null,
-            ),
+          iconSize: 16,
+        ),
+        IconButton(
+          icon: const Icon(Icons.copy, size: 16),
+          onPressed: isDownloaded ? () => _copyFile(file) : null,
+          tooltip: '复制文件',
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(
+            minWidth: 24,
+            minHeight: 24,
+            maxWidth: 24,
+            maxHeight: 24,
           ),
-        ],
-      ),
+          iconSize: 16,
+        ),
+        IconButton(
+          icon: const Icon(Icons.delete_forever, size: 16),
+          color: Colors.red,
+          onPressed: (isDownloaded && !file.isStarred)
+              ? () => _deleteLocalFile(file)
+              : null,
+          tooltip: file.isStarred ? '无法删除已标记星标的文件' : '删除本地文件',
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(
+            minWidth: 24,
+            minHeight: 24,
+            maxWidth: 24,
+            maxHeight: 24,
+          ),
+          iconSize: 16,
+        ),
+      ],
     );
   }
 
