@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'logger_service.dart';
@@ -100,41 +101,65 @@ class VersionCompatibilityService {
     return _minClientVersion ?? '1.0.0';
   }
 
-  /// 从VERSION文件读取最小客户端版本要求
+  /// 从资源文件读取最小客户端版本要求
+  /// 优先从打包的assets/VERSION文件读取，如果失败则使用默认值
   Future<String?> _readMinClientVersion() async {
     try {
-      // 尝试从应用文档目录向上查找项目根目录的VERSION文件
-      final appDocDir = await getApplicationDocumentsDirectory();
-      Directory? currentDir = Directory(appDocDir.path);
-      
-      // 最多向上查找10层目录
-      for (int i = 0; i < 10; i++) {
-        if (currentDir == null) break;
-        
-        final versionFile = File(path.join(currentDir.path, 'VERSION'));
-        if (await versionFile.exists()) {
-          final content = await versionFile.readAsString();
-          final lines = content.split('\n');
-          for (final line in lines) {
-            if (line.trim().startsWith('MIN_CLIENT_VERSION=')) {
-              final version = line.split('=').last.trim();
-              if (version.isNotEmpty && !version.startsWith('#')) {
-                return version;
-              }
+      // 优先从打包的assets/VERSION文件读取
+      try {
+        final content = await rootBundle.loadString('assets/VERSION');
+        final lines = content.split('\n');
+        for (final line in lines) {
+          if (line.trim().startsWith('MIN_CLIENT_VERSION=')) {
+            final version = line.split('=').last.trim();
+            if (version.isNotEmpty && !version.startsWith('#')) {
+              _logger.log('从assets/VERSION文件读取最小客户端版本: $version', tag: 'VERSION_COMPAT');
+              return version;
             }
           }
         }
+        _logger.log('assets/VERSION文件中未找到MIN_CLIENT_VERSION配置', tag: 'VERSION_COMPAT');
+      } catch (e) {
+        _logger.log('无法从assets读取VERSION文件: $e', tag: 'VERSION_COMPAT');
+      }
+      
+      // 备用方案：尝试从应用文档目录向上查找项目根目录的VERSION文件（开发环境）
+      try {
+        final appDocDir = await getApplicationDocumentsDirectory();
+        Directory? currentDir = Directory(appDocDir.path);
         
-        // 检查父目录
-        final parent = currentDir.parent;
-        if (currentDir.path == parent.path) {
-          break;
+        // 最多向上查找10层目录
+        for (int i = 0; i < 10; i++) {
+          if (currentDir == null) break;
+          
+          final versionFile = File(path.join(currentDir.path, 'VERSION'));
+          if (await versionFile.exists()) {
+            final content = await versionFile.readAsString();
+            final lines = content.split('\n');
+            for (final line in lines) {
+              if (line.trim().startsWith('MIN_CLIENT_VERSION=')) {
+                final version = line.split('=').last.trim();
+                if (version.isNotEmpty && !version.startsWith('#')) {
+                  _logger.log('从文件系统VERSION文件读取最小客户端版本: $version', tag: 'VERSION_COMPAT');
+                  return version;
+                }
+              }
+            }
+          }
+          
+          // 检查父目录
+          final parent = currentDir.parent;
+          if (currentDir.path == parent.path) {
+            break;
+          }
+          currentDir = parent;
         }
-        currentDir = parent;
+      } catch (e) {
+        _logger.log('无法从文件系统读取VERSION文件: $e', tag: 'VERSION_COMPAT');
       }
 
       // 如果找不到，返回默认值（允许所有版本）
-      _logger.log('未找到VERSION文件，使用默认最小客户端版本: 1.0.0', tag: 'VERSION_COMPAT');
+      _logger.log('未找到版本配置，使用默认最小客户端版本: 1.0.0', tag: 'VERSION_COMPAT');
       return '1.0.0';
     } catch (e, stackTrace) {
       _logger.logError('读取最小客户端版本失败', error: e, stackTrace: stackTrace);

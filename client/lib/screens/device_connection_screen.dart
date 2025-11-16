@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import '../services/api_service.dart';
 import '../services/api_service_manager.dart';
 import '../services/connection_settings_service.dart';
 import '../services/device_config_service.dart';
 import '../services/logger_service.dart';
 import '../models/camera_settings.dart';
+import '../models/connection_error.dart';
 import 'camera_control_screen.dart';
 
 class DeviceConnectionScreen extends StatefulWidget {
@@ -114,11 +116,12 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
           tag: 'CONNECTION');
 
       // 测试连接
-      final pingSuccess = await apiService.ping();
+      final pingError = await apiService.ping();
 
       if (!mounted) return;
 
-      if (pingSuccess) {
+      if (pingError == null) {
+        // 连接成功
         _logger.log('连接成功', tag: 'CONNECTION');
 
         // 清除跳过自动连接标志（连接成功后恢复自动连接）
@@ -136,6 +139,91 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
         // 连接WebSocket并获取设备信息
         await apiService.connectWebSocket();
 
+        // 监听连接失败通知
+        StreamSubscription? connectionFailedSubscription;
+        connectionFailedSubscription = apiService.webSocketNotifications?.listen((notification) {
+          final event = notification['event'] as String?;
+          if (event == 'connection_failed') {
+            final data = notification['data'] as Map<String, dynamic>?;
+            
+            // 尝试从错误对象中获取ConnectionError
+            ConnectionError? connectionError;
+            if (data?['error'] != null && data!['error'] is Map) {
+              try {
+                final errorData = data['error'] as Map<String, dynamic>;
+                connectionError = ConnectionError(
+                  code: ConnectionErrorCode.values.firstWhere(
+                    (e) => e.name == errorData['code'],
+                    orElse: () => ConnectionErrorCode.unknown,
+                  ),
+                  message: errorData['message'] as String? ?? '连接失败',
+                  details: errorData['details'] as String?,
+                  minRequiredVersion: errorData['minRequiredVersion'] as String?,
+                  clientVersion: errorData['clientVersion'] as String?,
+                  serverVersion: errorData['serverVersion'] as String?,
+                );
+              } catch (e) {
+                _logger.logError('解析ConnectionError失败', error: e);
+              }
+            }
+            
+            // 如果没有解析到ConnectionError，使用旧格式
+            if (connectionError == null) {
+              final message = data?['message'] as String? ?? '连接失败';
+              final minRequiredVersion = data?['minRequiredVersion'] as String?;
+              connectionError = ConnectionError(
+                code: (data?['isAuthFailure'] as bool? ?? false)
+                    ? ConnectionErrorCode.versionIncompatible
+                    : ConnectionErrorCode.networkError,
+                message: message,
+                minRequiredVersion: minRequiredVersion,
+              );
+            }
+            
+            _logger.log('连接失败: ${connectionError.code.name} - ${connectionError.message}', tag: 'CONNECTION');
+            
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(connectionError.getUserFriendlyMessage()),
+                  backgroundColor: Colors.red,
+                  duration: const Duration(seconds: 8),
+                ),
+              );
+            }
+            
+            setState(() {
+              _isConnecting = false;
+              _isAutoConnecting = false;
+            });
+            
+            connectionFailedSubscription?.cancel();
+          }
+        });
+
+        // 检查WebSocket是否真的连接成功（等待一小段时间）
+        await Future.delayed(const Duration(milliseconds: 500));
+        
+        // 如果WebSocket未连接，说明连接失败
+        if (!apiService.isWebSocketConnected) {
+          _logger.log('WebSocket连接失败', tag: 'CONNECTION');
+          connectionFailedSubscription?.cancel();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('连接失败：服务器拒绝了连接，可能是版本不兼容'),
+                backgroundColor: Colors.red,
+                duration: Duration(seconds: 5),
+              ),
+            );
+          }
+          setState(() {
+            _isConnecting = false;
+            _isAutoConnecting = false;
+          });
+          return;
+        }
+
         // 获取设备信息
         String? deviceModel;
         try {
@@ -149,7 +237,25 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
 
             // 注册设备（设置独占连接）
             if (deviceModel != null && deviceModel.isNotEmpty) {
-              await apiService.registerDevice(deviceModel);
+              final registerResult = await apiService.registerDevice(deviceModel);
+              // 检查注册是否成功，如果失败（可能是版本不兼容），停止连接流程
+              if (registerResult['success'] != true) {
+                final error = registerResult['error'] as String?;
+                _logger.log('设备注册失败: $error', tag: 'CONNECTION');
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('连接失败: ${error ?? "未知错误"}'),
+                      backgroundColor: Colors.red,
+                      duration: const Duration(seconds: 5),
+                    ),
+                  );
+                }
+                setState(() {
+                  _isConnecting = false;
+                });
+                return;
+              }
             }
           }
         } catch (e, stackTrace) {
@@ -182,19 +288,24 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
           ),
         );
       } else {
-        final errorMsg =
-            '连接失败：无法访问服务器 (${_hostController.text}:${_portController.text})';
-        _logger.log(errorMsg, tag: 'CONNECTION');
-        // 自动连接失败时也显示错误信息
+        // 连接失败，显示详细的错误信息
+        final errorMsg = pingError.getUserFriendlyMessage();
+        _logger.log('连接失败: ${pingError.code.name} - ${pingError.message}', tag: 'CONNECTION');
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(errorMsg),
               backgroundColor: Colors.red,
-              duration: const Duration(seconds: 5),
+              duration: const Duration(seconds: 8),
             ),
           );
         }
+        
+        setState(() {
+          _isConnecting = false;
+          _isAutoConnecting = false;
+        });
       }
     } catch (e, stackTrace) {
       final errorMsg = '连接错误: $e';

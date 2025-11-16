@@ -19,6 +19,7 @@ import 'foreground_service.dart';
 import 'media_scanner_service.dart';
 import 'orientation_service.dart';
 import 'version_compatibility_service.dart';
+import 'auth_service.dart';
 import '../models/camera_settings.dart';
 import '../models/camera_capabilities.dart';
 import '../models/camera_status.dart';
@@ -80,6 +81,7 @@ class HttpServerService {
   final DeviceInfoService _deviceInfoService = DeviceInfoService();
   final OrientationService _orientationService = OrientationService();
   final VersionCompatibilityService _versionCompatibilityService = VersionCompatibilityService();
+  final AuthService _authService = AuthService();
   
   HttpServer? _server;
   String? _ipAddress;
@@ -421,6 +423,39 @@ class HttpServerService {
       );
     }
 
+    // 统一认证中间件（版本检查 + 用户认证）
+    Middleware authMiddleware() {
+      return (Handler handler) {
+        return (Request request) async {
+          // WebSocket、预览流和认证预检查端点已在路由处理中进行认证，跳过中间件
+          if (request.url.path == '/ws' || 
+              request.url.path == '/preview/stream' ||
+              request.url.path == '/auth/precheck') {
+            return handler(request);
+          }
+
+          // 执行统一认证（版本检查 + 用户认证）
+          final authResult = await _authService.authenticate(request);
+          
+          if (!authResult.success) {
+            logger.log('认证失败: ${authResult.reason} (路径: ${request.url.path})', tag: 'AUTH');
+            return await _authService.createAuthFailureResponse(authResult);
+          }
+
+          // 将认证上下文存储到请求上下文中，供后续处理使用
+          final context = authResult.context!;
+          final updatedRequest = request.change(
+            context: {
+              ...request.context,
+              'auth.context': context,
+            },
+          );
+
+          return handler(updatedRequest);
+        };
+      };
+    }
+
     // 请求日志中间件
     Middleware requestLoggingMiddleware() {
       return (Handler handler) {
@@ -476,32 +511,50 @@ class HttpServerService {
     // API端点
     final apiRouter = Router();
 
+    // 认证预检查端点：在连接WebSocket之前进行认证检查（版本检查、用户认证等）
+    apiRouter.get('/auth/precheck', (Request request) async {
+      logger.log('收到认证预检查请求', tag: 'AUTH');
+      
+      // 执行统一认证（版本检查 + 用户认证）
+      final authResult = await _authService.authenticate(request);
+      
+      if (!authResult.success) {
+        logger.log('认证预检查失败: ${authResult.reason}', tag: 'AUTH');
+        return await _authService.createAuthFailureResponse(authResult);
+      }
+      
+      // 认证通过，返回成功响应（包含服务器版本等信息）
+      final serverVersion = await _versionCompatibilityService.getServerVersion();
+      return Response.ok(
+        json.encode({
+          'success': true,
+          'message': '认证通过',
+          'serverVersion': serverVersion,
+        }),
+        headers: {'Content-Type': 'application/json'},
+      );
+    });
+
     // 注意：控制类端点（capture, recording/start, recording/stop）已迁移到WebSocket
     // 不再提供HTTP端点
 
     // WebSocket端点：用于双向通讯（独占连接）
-    // 使用包装Handler来捕获Request并获取客户端IP地址
-    apiRouter.get('/ws', (Request request) {
-      // 从Request中获取客户端IP地址（与中间件逻辑一致）
-      String clientIp = 'unknown';
-      if (request.headers.containsKey('x-forwarded-for')) {
-        final forwarded = request.headers['x-forwarded-for']!;
-        clientIp = forwarded.split(',').first.trim();
-      }
-      if (clientIp == 'unknown') {
-        final connectionInfo = request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
-        if (connectionInfo != null) {
-          clientIp = connectionInfo.remoteAddress.address;
-        }
-      }
-      if (clientIp == 'unknown' && request.headers.containsKey('x-real-ip')) {
-        clientIp = request.headers['x-real-ip']!;
-      }
+    // 使用统一认证服务进行认证
+    apiRouter.get('/ws', (Request request) async {
+      // 执行统一认证（版本检查 + 用户认证）
+      final authResult = await _authService.authenticate(request);
       
-      // 使用闭包捕获IP地址，传递给WebSocket handler回调
-      final clientIpForChannel = clientIp != 'unknown' ? clientIp : null;
+      if (!authResult.success) {
+        logger.log('WebSocket认证失败: ${authResult.reason}', tag: 'AUTH');
+        return await _authService.createAuthFailureResponse(authResult);
+      }
+
+      // 获取认证上下文
+      final context = authResult.context!;
+      final clientIpForChannel = context.clientIp;
+      final clientVersionForChannel = context.clientVersion;
       
-      // 调用webSocketHandler，并在回调中使用捕获的IP地址
+      // 调用webSocketHandler，并在回调中使用捕获的IP地址和版本号
       return webSocketHandler((WebSocketChannel channel, String? protocol) async {
         
         // 检查是否已有独占客户端连接
@@ -528,7 +581,7 @@ class HttpServerService {
         // 存储WebSocket channel到IP地址的映射
         if (clientIpForChannel != null) {
           _webSocketChannelToIp[channel] = clientIpForChannel;
-          logger.log('WebSocket连接客户端IP: $clientIpForChannel', tag: 'WEBSOCKET');
+          logger.log('WebSocket连接客户端IP: $clientIpForChannel (版本: ${clientVersionForChannel ?? "未知"})', tag: 'WEBSOCKET');
         }
         
         // 如果是第一个连接，设置为独占连接
@@ -788,23 +841,20 @@ class HttpServerService {
     apiRouter.get('/preview/stream', (Request request) async {
       logger.log('收到预览流请求', tag: 'PREVIEW');
       
-      // 获取客户端IP地址（与中间件逻辑一致）
-      String clientIp = 'unknown';
-      if (request.headers.containsKey('x-forwarded-for')) {
-        final forwarded = request.headers['x-forwarded-for']!;
-        clientIp = forwarded.split(',').first.trim();
-      }
-      if (clientIp == 'unknown') {
-        final connectionInfo = request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
-        if (connectionInfo != null) {
-          clientIp = connectionInfo.remoteAddress.address;
-        }
-      }
-      if (clientIp == 'unknown' && request.headers.containsKey('x-real-ip')) {
-        clientIp = request.headers['x-real-ip']!;
-      }
+      // 执行统一认证（版本检查 + 用户认证）
+      final authResult = await _authService.authenticate(request);
       
-      logger.log('预览流客户端IP: $clientIp', tag: 'PREVIEW');
+      if (!authResult.success) {
+        logger.log('预览流认证失败: ${authResult.reason}', tag: 'AUTH');
+        return await _authService.createAuthFailureResponse(authResult);
+      }
+
+      // 获取认证上下文
+      final context = authResult.context!;
+      final clientIp = context.clientIp ?? 'unknown';
+      final clientVersion = context.clientVersion;
+      
+      logger.log('预览流客户端IP: $clientIp (版本: ${clientVersion ?? "未知"})', tag: 'PREVIEW');
       
       // 更新连接设备信息（预览流连接也视为活跃连接）
       _updateConnectedDevice(clientIp);
@@ -862,6 +912,7 @@ class HttpServerService {
         .addMiddleware(corsMiddleware())
         .addMiddleware(logRequests())
         .addMiddleware(requestLoggingMiddleware())
+        .addMiddleware(authMiddleware())  // 统一认证中间件（版本检查 + 用户认证）
         .addHandler(allRoutes);
 
     // 获取本机IP地址
@@ -1422,28 +1473,8 @@ class HttpServerService {
         return {'success': false, 'error': '缺少deviceModel参数'};
       }
       
-      // 检查客户端版本兼容性
-      if (clientVersion != null && clientVersion.isNotEmpty) {
-        final (isCompatible, reason) = await _versionCompatibilityService.checkClientVersion(clientVersion);
-        if (!isCompatible) {
-          logger.log('拒绝客户端连接：版本不兼容 - $reason', tag: 'VERSION_COMPAT');
-          // 发送版本不兼容通知并关闭连接
-          channel.sink.add(json.encode({
-            'type': 'notification',
-            'event': 'version_incompatible',
-            'data': {
-              'reason': 'version_incompatible',
-              'message': reason ?? '客户端版本不兼容',
-              'clientVersion': clientVersion,
-              'minRequiredVersion': await _versionCompatibilityService.getMinClientVersion(),
-            },
-          }));
-          Future.delayed(const Duration(milliseconds: 500), () {
-            channel.sink.close();
-          });
-          return {'success': false, 'error': reason ?? '客户端版本不兼容'};
-        }
-      }
+      // 注意：版本检查已在WebSocket连接建立时完成，这里不再重复检查
+      // 如果需要在registerDevice时再次验证，可以从channel的上下文中获取认证信息
       
       // 检查是否是当前独占连接的客户端
       if (_exclusiveWebSocketChannel == channel) {

@@ -1,7 +1,7 @@
 name: remote_cam_server
 description: Remote camera server application
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.2+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -29,4 +29,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  
+  # Assets
+  assets:
+    - assets/VERSION
 

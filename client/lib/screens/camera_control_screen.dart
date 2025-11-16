@@ -22,6 +22,7 @@ import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
 import '../services/connection_settings_service.dart';
+import '../models/connection_error.dart';
 import '../utils/retry_helper.dart';
 
 class CameraControlScreen extends StatefulWidget {
@@ -52,6 +53,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   RetryHelper? _reconnectHelper; // 重连助手
   RetryHelper? _webSocketReconnectHelper; // WebSocket重连助手
   final ClientLoggerService _logger = ClientLoggerService();
+  bool _isAuthFailure = false; // 标记是否是认证失败（版本不兼容等）
 
   // 左右布局比例（0.0-1.0，表示左侧占比）
   double _leftPanelRatio = 0.3; // 默认左侧30%
@@ -80,6 +82,9 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   final OrientationPreferencesService _orientationPrefs =
       OrientationPreferencesService();
 
+  // 预览流URL（异步获取，包含版本号）
+  String? _previewStreamUrl;
+
   @override
   void initState() {
     super.initState();
@@ -95,6 +100,28 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     widget.apiService.connectWebSocket();
     // 初始化方向锁定状态（默认锁定）
     _initializeOrientationLock();
+    // 异步获取预览流URL（包含版本号）
+    _loadPreviewStreamUrl();
+  }
+
+  /// 加载预览流URL（包含客户端版本号）
+  Future<void> _loadPreviewStreamUrl() async {
+    try {
+      final url = await widget.apiService.getPreviewStreamUrl();
+      if (mounted) {
+        setState(() {
+          _previewStreamUrl = url;
+        });
+      }
+    } catch (e) {
+      _logger.logError('获取预览流URL失败', error: e);
+      // 即使失败也设置一个基本URL（向后兼容）
+      if (mounted) {
+        setState(() {
+          _previewStreamUrl = '${widget.apiService.baseUrl}/preview/stream';
+        });
+      }
+    }
   }
 
   /// 初始化方向锁定状态
@@ -261,6 +288,59 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                   }
                 }
               }
+            } else if (event == 'version_incompatible' || 
+                       event == 'server_version_incompatible' ||
+                       event == 'connection_failed') {
+              // 版本不兼容或连接失败通知
+              final messageData = data as Map<String, dynamic>?;
+              final message = messageData?['message'] as String? ?? '连接失败';
+              final reason = messageData?['reason'] as String?;
+              final isAuthFailure = messageData?['isAuthFailure'] as bool? ?? false;
+              final minRequiredVersion = messageData?['minRequiredVersion'] as String?;
+              
+              _logger.log('连接失败: $message (原因: $reason, 认证失败: $isAuthFailure)', tag: 'VERSION_COMPAT');
+              
+              // 如果是认证失败，停止重连
+              if (isAuthFailure) {
+                _isAuthFailure = true;
+                _reconnectHelper?.cancel();
+                _reconnectHelper = null;
+                _webSocketReconnectHelper?.cancel();
+                _webSocketReconnectHelper = null;
+                
+                if (mounted) {
+                  setState(() {
+                    _isReconnecting = false;
+                    _isConnected = false;
+                  });
+                }
+              }
+              
+              if (mounted) {
+                // 构建详细的错误信息
+                String errorMessage = message;
+                if (minRequiredVersion != null) {
+                  errorMessage = '$message\n\n要求最小版本: $minRequiredVersion';
+                }
+                
+                // 显示错误提示并返回连接页面
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(errorMessage),
+                    backgroundColor: Colors.red,
+                    duration: const Duration(seconds: 8),
+                  ),
+                );
+                
+                // 如果是认证失败，立即返回连接页面
+                if (isAuthFailure && mounted) {
+                  Future.delayed(const Duration(milliseconds: 500), () {
+                    if (mounted) {
+                      Navigator.of(context).pop();
+                    }
+                  });
+                }
+              }
             } else if (event == 'connected') {
               _logger.log('WebSocket连接确认', tag: 'WEBSOCKET');
               // 获取预览尺寸
@@ -338,18 +418,46 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       }
 
       try {
-        final pingSuccess = await widget.apiService.ping();
+        final pingError = await widget.apiService.ping();
         if (!mounted) return;
 
         // 只在连接状态实际变化时才调用 setState
-        if (!pingSuccess && _isConnected) {
-          // 连接断开
-          setState(() {
-            _isConnected = false;
-          });
-          _logger.log('检测到连接断开', tag: 'CONNECTION');
-          _startReconnect();
-        } else if (pingSuccess && !_isConnected) {
+        if (pingError != null && _isConnected) {
+          // 连接断开或失败
+          // 检查是否是认证失败（版本不兼容等），如果是则停止重连
+          if (pingError.code == ConnectionErrorCode.versionIncompatible ||
+              pingError.code == ConnectionErrorCode.authenticationFailed) {
+            _isAuthFailure = true;
+            _reconnectHelper?.cancel();
+            _reconnectHelper = null;
+            setState(() {
+              _isConnected = false;
+              _isReconnecting = false;
+            });
+            _logger.log('检测到认证失败，停止重连: ${pingError.message}', tag: 'CONNECTION');
+            // 显示错误并返回登录界面
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(pingError.getUserFriendlyMessage()),
+                  backgroundColor: Colors.red,
+                  duration: const Duration(seconds: 8),
+                ),
+              );
+              Future.delayed(const Duration(milliseconds: 500), () {
+                if (mounted) {
+                  Navigator.of(context).pop();
+                }
+              });
+            }
+          } else {
+            setState(() {
+              _isConnected = false;
+            });
+            _logger.log('检测到连接断开: ${pingError.message}', tag: 'CONNECTION');
+            _startReconnect();
+          }
+        } else if (pingError == null && !_isConnected) {
           // 连接恢复
           setState(() {
             _isConnected = true;
@@ -377,6 +485,12 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
 
   // 开始重连
   void _startReconnect() {
+    // 如果已经标记为认证失败，不进行重连
+    if (_isAuthFailure) {
+      _logger.log('认证失败，停止重连', tag: 'CONNECTION');
+      return;
+    }
+    
     if (_isReconnecting) {
       _logger.log('已在重连中，跳过', tag: 'CONNECTION');
       return;
@@ -395,16 +509,25 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
 
     _reconnectHelper!.executeWithRetry(
       operation: () async {
+        // 如果已经标记为认证失败，停止重连
+        if (_isAuthFailure) {
+          _logger.log('检测到认证失败，停止重连', tag: 'CONNECTION');
+          return false; // 不再重试
+        }
+        
         if (!mounted) return false;
 
         try {
           _logger.log('尝试重连... (第${_reconnectHelper!.attempts}次)',
               tag: 'CONNECTION');
-          final pingSuccess = await widget.apiService.ping();
+          final pingError = await widget.apiService.ping();
 
           if (!mounted) return false;
 
-          if (pingSuccess) {
+          if (pingError == null) {
+            // 重连成功，重置认证失败标记
+            _isAuthFailure = false;
+            
             if (mounted) {
               setState(() {
                 _isConnected = true;
@@ -428,6 +551,17 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
             return false; // 需要重试
           }
         } catch (e) {
+          // 检查是否是认证失败错误
+          final errorStr = e.toString();
+          if (errorStr.contains('403') ||
+              errorStr.contains('Forbidden') ||
+              errorStr.contains('VERSION_INCOMPATIBLE') ||
+              errorStr.contains('版本不兼容')) {
+            _isAuthFailure = true;
+            _logger.log('重连时检测到认证失败，停止重连: $e', tag: 'CONNECTION');
+            return false; // 不再重试
+          }
+          
           _logger.log('重连失败: $e (第${_reconnectHelper!.attempts}次)',
               tag: 'CONNECTION');
           return false; // 需要重试
@@ -437,7 +571,11 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         _logger.log('重连成功', tag: 'CONNECTION');
       },
       onFailure: () {
-        _logger.log('重连失败，已达到最大重试次数', tag: 'CONNECTION');
+        if (_isAuthFailure) {
+          _logger.log('重连失败：认证失败，已停止重连', tag: 'CONNECTION');
+        } else {
+          _logger.log('重连失败，已达到最大重试次数', tag: 'CONNECTION');
+        }
         if (mounted) {
           setState(() {
             _isReconnecting = false;
@@ -458,14 +596,15 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     });
 
     try {
-      final pingSuccess = await widget.apiService.ping();
+      final pingError = await widget.apiService.ping();
       if (mounted) {
         setState(() {
-          _isConnected = pingSuccess;
+          _isConnected = pingError == null;
           _isReconnecting = false;
         });
 
-        if (pingSuccess) {
+        if (pingError == null) {
+          _isAuthFailure = false; // 重置认证失败标记
           _showSuccess('重连成功');
           _refreshFileList();
           // 重新初始化方向状态（确保方向信息是最新的）
@@ -473,7 +612,20 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           // 重新连接WebSocket通知流
           _connectToWebSocketNotificationsWithRetry();
         } else {
-          _showError('重连失败，请检查服务器状态');
+          // 检查是否是认证失败
+          if (pingError.code == ConnectionErrorCode.versionIncompatible ||
+              pingError.code == ConnectionErrorCode.authenticationFailed) {
+            _isAuthFailure = true;
+            _showError(pingError.getUserFriendlyMessage());
+            // 返回登录界面
+            Future.delayed(const Duration(milliseconds: 500), () {
+              if (mounted) {
+                Navigator.of(context).pop();
+              }
+            });
+          } else {
+            _showError(pingError.getUserFriendlyMessage());
+          }
         }
       }
     } catch (e) {
@@ -481,7 +633,8 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         setState(() {
           _isReconnecting = false;
         });
-        _showError('重连失败: $e');
+        final connectionError = ConnectionError.fromException(e);
+        _showError(connectionError.getUserFriendlyMessage());
       }
     }
   }
@@ -1314,14 +1467,20 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
 
                                         final aspectRatio = width / height;
 
+                                        // 如果预览流URL还未加载，显示加载指示器
+                                        if (_previewStreamUrl == null) {
+                                          return const Center(
+                                            child: CircularProgressIndicator(),
+                                          );
+                                        }
+                                        
                                         return AspectRatio(
                                           aspectRatio: aspectRatio,
                                           child: Transform.rotate(
                                             angle:
                                                 rotationAngle * math.pi / 180,
                                             child: MjpegStreamWidget(
-                                              streamUrl: widget.apiService
-                                                  .getPreviewStreamUrl(),
+                                              streamUrl: _previewStreamUrl!,
                                               previewWidth:
                                                   previewSize['width'],
                                               previewHeight:

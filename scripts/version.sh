@@ -253,6 +253,22 @@ bump_version() {
     echo -e "${GREEN}${target}版本号已递增: $new_version${NC}"
 }
 
+# 复制VERSION文件到服务器assets目录（用于打包到APK）
+copy_version_to_assets() {
+    local assets_dir="$PROJECT_ROOT/server/assets"
+    
+    # 确保assets目录存在
+    mkdir -p "$assets_dir"
+    
+    # 复制VERSION文件到assets目录
+    if [ -f "$VERSION_FILE" ]; then
+        cp "$VERSION_FILE" "$assets_dir/VERSION"
+        echo -e "${GREEN}已复制VERSION文件到 server/assets/VERSION${NC}"
+    else
+        echo -e "${YELLOW}警告: VERSION文件不存在，无法复制到assets${NC}"
+    fi
+}
+
 # 同步版本号到 pubspec.yaml
 sync_version() {
     local target=${1:-all}
@@ -297,6 +313,9 @@ sync_version() {
                 fi
                 echo -e "${GREEN}已同步服务器版本号到 server/pubspec.yaml: $full_version${NC}"
             fi
+            
+            # 复制VERSION文件到assets目录（用于打包到APK）
+            copy_version_to_assets
             ;;
         all|*)
             sync_version "client"
