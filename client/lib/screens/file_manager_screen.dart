@@ -13,6 +13,7 @@ import '../models/download_task.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../services/download_settings_service.dart';
+import '../services/logger_service.dart';
 
 class FileManagerScreen extends StatefulWidget {
   final ApiService apiService;
@@ -32,7 +33,8 @@ class FileManagerScreen extends StatefulWidget {
 
 class _FileManagerScreenState extends State<FileManagerScreen> {
   late DownloadManager _downloadManager;
-  
+  final ClientLoggerService _logger = ClientLoggerService();
+
   List<FileInfo> _pictures = [];
   List<FileInfo> _videos = [];
   List<DownloadTask> _downloadTasks = [];
@@ -41,32 +43,35 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   final DownloadSettingsService _downloadSettings = DownloadSettingsService();
   final Map<String, bool> _downloadedStatusCache = {}; // 缓存下载状态
   final Map<String, String> _thumbnailCache = {}; // 缓存缩略图路径：文件名 -> 本地缩略图路径
+  final Map<String, Future<String?>> _thumbnailFutureCache =
+      {}; // 缓存 Future：文件名 -> Future<String?>
   Directory? _thumbnailCacheDir; // 缩略图缓存目录
-  
+
   // 分页相关
   int _currentPage = 1;
   static const int _pageSize = 20; // 每页20个文件
   bool _hasMore = true;
   int? _lastUpdateTime; // 最后更新时间戳（用于增量获取）
-  
+
   // 显示模式：list 或 grid
   String _viewMode = 'list'; // 'list' 或 'grid'
   double _gridItemSize = 200.0; // 网格项大小（宽度）
   final double _minGridSize = 150.0;
   final double _maxGridSize = 400.0;
-  
+
   // 文件组织方式：none, day, week, month
   String _groupMode = 'none'; // 'none', 'day', 'week', 'month'
-  
+
   // 多选模式
   bool _isSelectionMode = false;
   final Set<String> _selectedFiles = {}; // 选中的文件名集合
-  
+
   // 滚动控制器（用于定位文件和检测滚动到底部）
   final ScrollController _scrollController = ScrollController();
-  final ScrollController _gridScrollController = ScrollController(); // 网格视图的滚动控制器
+  final ScrollController _gridScrollController =
+      ScrollController(); // 网格视图的滚动控制器
   final GlobalKey _highlightKey = GlobalKey();
-  
+
   // WebSocket通知消息订阅（用于接收server的新文件通知）
   StreamSubscription? _webSocketSubscription;
   // 自动下载监听订阅
@@ -78,11 +83,11 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     _downloadManager = DownloadManager(
       baseUrl: widget.apiService.baseUrl,
     );
-    
+
     // 监听滚动，实现滚动到底部自动加载更多
     _scrollController.addListener(_onScroll);
     _gridScrollController.addListener(_onGridScroll);
-    
+
     _initializeThumbnailCache();
     _loadViewPreferences();
     _initializeDownloadManager();
@@ -91,7 +96,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     // 连接WebSocket（用于API调用）
     widget.apiService.connectWebSocket();
   }
-  
+
   @override
   void dispose() {
     _scrollController.removeListener(_onScroll);
@@ -107,21 +112,22 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       timer.cancel();
     }
     _completionTimeouts.clear();
+    _debounceTimer?.cancel();
     super.dispose();
   }
-  
+
   /// 启动WebSocket连接（监听server的新文件通知）
   void _startFileListRefreshTimer() {
     print('[FileManager] 准备启动WebSocket通知监听');
     _connectToWebSocketNotifications();
   }
-  
+
   /// 连接到WebSocket通知流（监听服务器推送的通知）
   void _connectToWebSocketNotifications() async {
     try {
       // 确保ApiService的WebSocket已连接
       await widget.apiService.connectWebSocket();
-      
+
       // 监听通知消息
       final notificationStream = widget.apiService.webSocketNotifications;
       if (notificationStream != null) {
@@ -130,11 +136,11 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             if (!mounted) {
               return;
             }
-            
+
             try {
               final event = notification['event'] as String?;
               final data = notification['data'] as Map<String, dynamic>?;
-              
+
               // 处理新文件通知
               if (event == 'new_files' && data != null) {
                 // 收到新文件通知，直接使用通知中的文件信息
@@ -168,18 +174,20 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       }
     }
   }
-  
+
   /// 列表视图滚动监听（检测是否滚动到底部）
   void _onScroll() {
-    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
       // 距离底部200像素时加载更多
       _loadMoreFiles();
     }
   }
-  
+
   /// 网格视图滚动监听（检测是否滚动到底部）
   void _onGridScroll() {
-    if (_gridScrollController.position.pixels >= _gridScrollController.position.maxScrollExtent - 200) {
+    if (_gridScrollController.position.pixels >=
+        _gridScrollController.position.maxScrollExtent - 200) {
       // 距离底部200像素时加载更多
       _loadMoreFiles();
     }
@@ -214,7 +222,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       print('堆栈跟踪: $stackTrace');
     }
   }
-  
+
   /// 加载视图偏好设置
   Future<void> _loadViewPreferences() async {
     try {
@@ -222,18 +230,25 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       final savedViewMode = prefs.getString('file_manager_view_mode');
       final savedGridSize = prefs.getDouble('file_manager_grid_size');
       final savedGroupMode = prefs.getString('file_manager_group_mode');
-      
+
       if (mounted) {
         setState(() {
-          if (savedViewMode != null && (savedViewMode == 'list' || savedViewMode == 'grid')) {
+          if (savedViewMode != null &&
+              (savedViewMode == 'list' || savedViewMode == 'grid')) {
             _viewMode = savedViewMode;
           }
-          
-          if (savedGridSize != null && savedGridSize >= _minGridSize && savedGridSize <= _maxGridSize) {
+
+          if (savedGridSize != null &&
+              savedGridSize >= _minGridSize &&
+              savedGridSize <= _maxGridSize) {
             _gridItemSize = savedGridSize;
           }
-          
-          if (savedGroupMode != null && (savedGroupMode == 'none' || savedGroupMode == 'day' || savedGroupMode == 'week' || savedGroupMode == 'month')) {
+
+          if (savedGroupMode != null &&
+              (savedGroupMode == 'none' ||
+                  savedGroupMode == 'day' ||
+                  savedGroupMode == 'week' ||
+                  savedGroupMode == 'month')) {
             _groupMode = savedGroupMode;
           }
         });
@@ -243,7 +258,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       print('加载视图偏好设置失败: $e');
     }
   }
-  
+
   /// 保存视图偏好设置
   Future<void> _saveViewPreferences() async {
     try {
@@ -256,12 +271,13 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       print('保存视图偏好设置失败: $e');
     }
   }
-  
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     // 如果有高亮文件，延迟滚动到该文件
-    if (widget.highlightFileName != null && (_pictures.isNotEmpty || _videos.isNotEmpty)) {
+    if (widget.highlightFileName != null &&
+        (_pictures.isNotEmpty || _videos.isNotEmpty)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         Future.delayed(const Duration(milliseconds: 500), () {
           _scrollToFile(widget.highlightFileName!);
@@ -269,7 +285,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       });
     }
   }
-  
+
   /// 滚动到指定文件
   void _scrollToFile(String fileName) {
     final allFiles = [..._pictures, ..._videos];
@@ -277,7 +293,9 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     if (index >= 0 && _scrollController.hasClients) {
       // 计算滚动位置（让文件显示在中间）
       final itemHeight = _viewMode == 'grid' ? _gridItemSize * 1.5 : 120.0;
-      final targetOffset = (index * itemHeight) - (MediaQuery.of(context).size.height / 2) + (itemHeight / 2);
+      final targetOffset = (index * itemHeight) -
+          (MediaQuery.of(context).size.height / 2) +
+          (itemHeight / 2);
       _scrollController.animateTo(
         targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
         duration: const Duration(milliseconds: 500),
@@ -291,16 +309,20 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   // 下载完成超时保护映射：文件名 -> 超时定时器
   final Map<String, Timer> _completionTimeouts = {};
 
+  // 防抖定时器：用于合并多次状态更新
+  Timer? _debounceTimer;
+  bool _pendingStateUpdate = false;
+
   Future<void> _initializeDownloadManager() async {
     await _downloadManager.initialize();
-    
+
     // 监听下载任务变化（用于更新下载进度）
     _downloadManager.tasksStream.listen((tasks) {
       if (!mounted) return;
-      
+
       // 只在有实际变化时更新UI
       bool needsUpdate = false;
-      
+
       // 检查下载任务列表是否有变化
       if (_downloadTasks.length != tasks.length) {
         needsUpdate = true;
@@ -311,39 +333,40 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             (t) => t.id == task.id,
             orElse: () => task,
           );
-          if (oldTask.status != task.status || 
+          if (oldTask.status != task.status ||
               oldTask.downloadedBytes != task.downloadedBytes) {
             needsUpdate = true;
             break;
           }
         }
       }
-      
+
       if (needsUpdate) {
         setState(() {
           _downloadTasks = tasks;
         });
       }
     });
-    
+
     // 监听下载完成事件（使用回调机制）
     _completionSubscription = _downloadManager.completionStream.listen((task) {
       if (!mounted) return;
-      
+
       print('[DOWNLOAD_MANAGER] 收到下载完成回调: ${task.fileName}');
-      
+
       // 取消该文件的超时定时器（如果存在）
       _completionTimeouts[task.fileName]?.cancel();
       _completionTimeouts.remove(task.fileName);
-      
+
       // 更新下载状态缓存
       _downloadedStatusCache[task.fileName] = true;
-      
+
       // 检查文件列表中的对应文件并更新UI
       _updateFileDownloadStatus(task.fileName);
-      
+
       // 设置超时保护：如果1秒后状态仍未更新，强制检查
-      _completionTimeouts[task.fileName] = Timer(const Duration(seconds: 1), () {
+      _completionTimeouts[task.fileName] =
+          Timer(const Duration(seconds: 1), () {
         if (mounted) {
           print('[DOWNLOAD_MANAGER] 超时保护触发，强制检查文件状态: ${task.fileName}');
           _updateFileDownloadStatus(task.fileName, forceCheck: true);
@@ -351,11 +374,12 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       });
     });
   }
-  
+
   /// 更新文件的下载状态
-  Future<void> _updateFileDownloadStatus(String fileName, {bool forceCheck = false}) async {
+  Future<void> _updateFileDownloadStatus(String fileName,
+      {bool forceCheck = false}) async {
     if (!mounted) return;
-    
+
     // 查找文件列表中的对应文件
     final file = [..._pictures, ..._videos].firstWhere(
       (f) => f.name == fileName,
@@ -366,30 +390,26 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         modifiedTime: DateTime.now(),
       ),
     );
-    
+
     if (file.name == fileName && file.path.isNotEmpty) {
       // 检查文件是否存在
       await _checkDownloadStatus([file]);
-      
-      if (mounted) {
-        setState(() {
-          // 强制刷新UI以显示下载状态变化
-        });
-        print('[DOWNLOAD_MANAGER] 文件状态已更新: $fileName');
-      }
+
+      // 使用防抖机制，避免频繁刷新
+      // _checkDownloadStatus 内部已经会触发防抖更新，这里不需要再次调用 setState
+      print('[DOWNLOAD_MANAGER] 文件状态已更新: $fileName');
     } else if (forceCheck) {
       // 强制检查：即使文件不在列表中，也检查下载目录
       final downloadDir = await _downloadSettings.getDownloadPath();
       final localPath = path.join(downloadDir, fileName);
       final localFile = File(localPath);
       final exists = await localFile.exists();
-      
+
       if (exists) {
         _downloadedStatusCache[fileName] = true;
         if (mounted) {
-          setState(() {
-            // 强制刷新UI
-          });
+          // 使用防抖机制，避免频繁刷新
+          _debouncedSetState(reason: '强制检查文件存在: $fileName');
           print('[DOWNLOAD_MANAGER] 强制检查完成，文件存在: $fileName');
         }
       }
@@ -410,21 +430,24 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         page: _currentPage,
         pageSize: _pageSize,
       );
-      
+
       if (result['success'] && mounted) {
         final pictures = result['pictures'] as List<FileInfo>;
         final videos = result['videos'] as List<FileInfo>;
-        
+
         // 检查所有文件的下载状态
         await _checkDownloadStatus([...pictures, ...videos]);
-        
+
         // 更新最后更新时间（使用最新文件的修改时间）
         if (pictures.isNotEmpty || videos.isNotEmpty) {
           final allFiles = [...pictures, ...videos];
           allFiles.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
           _lastUpdateTime = allFiles.first.modifiedTime.millisecondsSinceEpoch;
         }
-        
+
+        _logger.log(
+            '执行 setState 刷新文件列表，将触发所有缩略图重建: 照片 ${pictures.length} 张, 视频 ${videos.length} 个',
+            tag: 'THUMBNAIL_REFRESH');
         setState(() {
           _pictures = pictures;
           _videos = videos;
@@ -444,22 +467,23 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       });
     }
   }
-  
+
   /// 处理新文件通知（直接使用通知中的文件信息）
   Future<void> _handleNewFilesNotification(Map<String, dynamic> data) async {
     try {
       print('[FILE_NOTIFICATION] 收到新文件通知，开始处理');
       final fileType = data['fileType'] as String?;
       final filesData = data['files'] as List<dynamic>?;
-      
-      print('[FILE_NOTIFICATION] 文件类型: $fileType, 文件数量: ${filesData?.length ?? 0}');
-      
+
+      print(
+          '[FILE_NOTIFICATION] 文件类型: $fileType, 文件数量: ${filesData?.length ?? 0}');
+
       if (filesData == null || filesData.isEmpty) {
         print('[FILE_NOTIFICATION] 没有文件信息，回退到增量刷新');
         await _incrementalRefreshFileList();
         return;
       }
-      
+
       // 解析文件信息
       final List<FileInfo> newFiles = [];
       for (var fileJson in filesData) {
@@ -471,26 +495,26 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
           print('[FILE_NOTIFICATION] 解析文件信息失败: $e');
         }
       }
-      
+
       if (newFiles.isEmpty) {
         print('[FILE_NOTIFICATION] 解析后没有有效文件，跳过更新');
         return;
       }
-      
+
       print('[FILE_NOTIFICATION] 成功解析 ${newFiles.length} 个文件，准备更新UI');
-      
+
       // 检查新文件的下载状态
       await _checkDownloadStatus(newFiles);
-      
+
       // 合并新文件到现有列表（去重，按修改时间排序）
       final existingFileNames = <String>{};
       for (var file in [..._pictures, ..._videos]) {
         existingFileNames.add(file.name);
       }
-      
+
       final updatedPictures = <FileInfo>[..._pictures];
       final updatedVideos = <FileInfo>[..._videos];
-      
+
       for (var file in newFiles) {
         if (!existingFileNames.contains(file.name)) {
           // 根据文件类型添加到对应列表
@@ -503,7 +527,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         } else {
           // 更新已存在的文件
           if (fileType == 'image' || file.isImage) {
-            final index = updatedPictures.indexWhere((f) => f.name == file.name);
+            final index =
+                updatedPictures.indexWhere((f) => f.name == file.name);
             if (index >= 0) {
               updatedPictures[index] = file;
             }
@@ -515,27 +540,35 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
           }
         }
       }
-      
+
       // 按修改时间排序
       updatedPictures.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
       updatedVideos.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
-      
+
       // 更新最后更新时间
       if (updatedPictures.isNotEmpty || updatedVideos.isNotEmpty) {
         final allFiles = [...updatedPictures, ...updatedVideos];
         allFiles.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
         _lastUpdateTime = allFiles.first.modifiedTime.millisecondsSinceEpoch;
       }
-      
-      print('[FILE_NOTIFICATION] 更新文件列表: 照片 ${updatedPictures.length} 张, 视频 ${updatedVideos.length} 个');
-      
+
+      print(
+          '[FILE_NOTIFICATION] 更新文件列表: 照片 ${updatedPictures.length} 张, 视频 ${updatedVideos.length} 个');
+
       if (mounted) {
+        // 取消防抖定时器，立即更新（因为这是主要的文件列表更新）
+        _debounceTimer?.cancel();
+        _pendingStateUpdate = false;
+        _logger.log(
+            '执行 setState 更新文件列表，将触发所有缩略图重建: 照片 ${updatedPictures.length} 张, 视频 ${updatedVideos.length} 个',
+            tag: 'THUMBNAIL_REFRESH');
         setState(() {
           _pictures = updatedPictures;
           _videos = updatedVideos;
         });
         print('[FILE_NOTIFICATION] UI已更新');
-        print('[FILE_NOTIFICATION] 检查自动下载条件: fileType=$fileType, updatedPictures.length=${updatedPictures.length}, updatedVideos.length=${updatedVideos.length}');
+        print(
+            '[FILE_NOTIFICATION] 检查自动下载条件: fileType=$fileType, updatedPictures.length=${updatedPictures.length}, updatedVideos.length=${updatedVideos.length}');
 
         // 自动下载最新照片/视频
         if (fileType == 'image' && updatedPictures.isNotEmpty) {
@@ -559,7 +592,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             print('[FILE_NOTIFICATION] 堆栈: $stackTrace');
           }
         } else {
-          print('[FILE_NOTIFICATION] 自动下载条件不满足: fileType=$fileType, picturesEmpty=${updatedPictures.isEmpty}, videosEmpty=${updatedVideos.isEmpty}');
+          print(
+              '[FILE_NOTIFICATION] 自动下载条件不满足: fileType=$fileType, picturesEmpty=${updatedPictures.isEmpty}, videosEmpty=${updatedVideos.isEmpty}');
         }
       } else {
         print('[FILE_NOTIFICATION] Widget未挂载，跳过自动下载');
@@ -570,7 +604,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       await _incrementalRefreshFileList();
     }
   }
-  
+
   /// 增量更新文件列表（只获取新增/修改的文件）
   Future<void> _incrementalRefreshFileList() async {
     if (_lastUpdateTime == null) {
@@ -578,48 +612,49 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       await _refreshFileList();
       return;
     }
-    
+
     try {
       // 减去1秒，确保能获取到刚刚创建的文件（即使时间戳相同）
       final since = _lastUpdateTime! - 1000;
       final result = await widget.apiService.getFileList(
         since: since,
       );
-      
+
       if (result['success'] && mounted) {
         final newPictures = result['pictures'] as List<FileInfo>;
         final newVideos = result['videos'] as List<FileInfo>;
-        
+
         if (newPictures.isEmpty && newVideos.isEmpty) {
           // 没有新文件，不需要更新
           return;
         }
-        
+
         // 检查新文件的下载状态
         await _checkDownloadStatus([...newPictures, ...newVideos]);
-        
+
         // 合并新文件到现有列表（去重，按修改时间排序）
         final existingFileNames = <String>{};
         for (var file in [..._pictures, ..._videos]) {
           existingFileNames.add(file.name);
         }
-        
+
         final updatedPictures = <FileInfo>[..._pictures];
         final updatedVideos = <FileInfo>[..._videos];
-        
+
         for (var file in newPictures) {
           if (!existingFileNames.contains(file.name)) {
             updatedPictures.add(file);
             existingFileNames.add(file.name);
           } else {
             // 更新已存在的文件
-            final index = updatedPictures.indexWhere((f) => f.name == file.name);
+            final index =
+                updatedPictures.indexWhere((f) => f.name == file.name);
             if (index >= 0) {
               updatedPictures[index] = file;
             }
           }
         }
-        
+
         for (var file in newVideos) {
           if (!existingFileNames.contains(file.name)) {
             updatedVideos.add(file);
@@ -632,18 +667,22 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             }
           }
         }
-        
+
         // 按修改时间排序
-        updatedPictures.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+        updatedPictures
+            .sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
         updatedVideos.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
-        
+
         // 更新最后更新时间
         final allFiles = [...updatedPictures, ...updatedVideos];
         if (allFiles.isNotEmpty) {
           allFiles.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
           _lastUpdateTime = allFiles.first.modifiedTime.millisecondsSinceEpoch;
         }
-        
+
+        _logger.log(
+            '执行 setState 增量更新文件列表，将触发所有缩略图重建: 照片 ${updatedPictures.length} 张, 视频 ${updatedVideos.length} 个',
+            tag: 'THUMBNAIL_REFRESH');
         setState(() {
           _pictures = updatedPictures;
           _videos = updatedVideos;
@@ -654,31 +693,34 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       print('增量更新文件列表失败: $e');
     }
   }
-  
+
   /// 加载更多文件（分页加载）
   Future<void> _loadMoreFiles() async {
     if (_isLoadingMore || !_hasMore) {
       return;
     }
-    
+
     setState(() {
       _isLoadingMore = true;
     });
-    
+
     try {
       final nextPage = _currentPage + 1;
       final result = await widget.apiService.getFileList(
         page: nextPage,
         pageSize: _pageSize,
       );
-      
+
       if (result['success'] && mounted) {
         final newPictures = result['pictures'] as List<FileInfo>;
         final newVideos = result['videos'] as List<FileInfo>;
-        
+
         // 检查新文件的下载状态
         await _checkDownloadStatus([...newPictures, ...newVideos]);
-        
+
+        _logger.log(
+            '执行 setState 加载更多文件，将触发所有缩略图重建: 新增照片 ${newPictures.length} 张, 新增视频 ${newVideos.length} 个',
+            tag: 'THUMBNAIL_REFRESH');
         setState(() {
           _pictures.addAll(newPictures);
           _videos.addAll(newVideos);
@@ -698,7 +740,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       _showError('加载更多失败: $e');
     }
   }
-  
+
   /// 批量检查文件下载状态
   Future<void> _checkDownloadStatus(List<FileInfo> files) async {
     final downloadDir = await _downloadSettings.getDownloadPath();
@@ -711,16 +753,34 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       _downloadedStatusCache[file.name] = exists;
       if (oldStatus != exists) {
         hasChanged = true;
-        print('[DOWNLOAD_STATUS] 文件下载状态变化: ${file.name}, 旧状态=$oldStatus, 新状态=$exists');
+        print(
+            '[DOWNLOAD_STATUS] 文件下载状态变化: ${file.name}, 旧状态=$oldStatus, 新状态=$exists');
       }
     }
-    // 如果状态有变化，触发UI更新
+    // 如果状态有变化，使用防抖机制延迟更新UI
+    // 注意：虽然会触发 setState，但 Future 缓存可以避免缩略图重新加载
     if (hasChanged && mounted) {
-      print('[DOWNLOAD_STATUS] 检测到状态变化，触发UI更新');
-      setState(() {
-        // 状态缓存已更新，这里只是触发UI刷新
-      });
+      _logger.log('检测到下载状态变化，使用防抖机制更新UI: 变化的文件数=${files.length}',
+          tag: 'DOWNLOAD_STATUS');
+      _debouncedSetState(reason: '下载状态变化');
     }
+  }
+
+  /// 防抖的 setState：合并短时间内的多次更新
+  void _debouncedSetState({String? reason}) {
+    _pendingStateUpdate = true;
+    _debounceTimer?.cancel();
+    _logger.log('防抖 setState 请求: reason=$reason', tag: 'THUMBNAIL_REFRESH');
+    _debounceTimer = Timer(const Duration(milliseconds: 100), () {
+      if (_pendingStateUpdate && mounted) {
+        _pendingStateUpdate = false;
+        _logger.log('执行防抖 setState，将触发所有缩略图重建: reason=$reason',
+            tag: 'THUMBNAIL_REFRESH');
+        setState(() {
+          // 状态缓存已更新，这里只是触发UI刷新
+        });
+      }
+    });
   }
 
   /// 自动下载文件（收到新文件通知时自动下载）
@@ -745,9 +805,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
           if (await localFile.exists()) {
             _downloadedStatusCache[file.name] = true;
             if (mounted) {
-              setState(() {
-                // 更新UI显示下载状态
-              });
+              // 使用防抖机制，避免频繁刷新
+              _debouncedSetState(reason: '自动下载文件已存在: ${file.name}');
             }
           }
           print('[AUTO_DOWNLOAD] 文件已下载完成: ${file.name}');
@@ -762,9 +821,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       if (await localFile.exists()) {
         _downloadedStatusCache[file.name] = true;
         if (mounted) {
-          setState(() {
-            // 更新UI显示下载状态
-          });
+          // 使用防抖机制，避免频繁刷新
+          _debouncedSetState(reason: '自动下载检查文件已存在: ${file.name}');
         }
         print('[AUTO_DOWNLOAD] 文件已存在: ${file.name}');
         return;
@@ -779,7 +837,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
 
       // 取消之前的订阅
       _autoDownloadSubscription?.cancel();
-      
+
       // 监听下载完成（只监听一次）
       _autoDownloadSubscription = _downloadManager.tasksStream.listen((tasks) {
         final task = tasks.firstWhere(
@@ -793,15 +851,15 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
           // 更新下载状态缓存
           _downloadedStatusCache[task.fileName] = true;
           if (mounted) {
-            setState(() {
-              // 更新UI显示下载状态
-            });
+            // 使用防抖机制，避免频繁刷新
+            _debouncedSetState(reason: '自动下载完成: ${task.fileName}');
           }
           print('[AUTO_DOWNLOAD] 自动下载完成: ${task.fileName}');
         } else if (task.status == DownloadStatus.failed) {
           _autoDownloadSubscription?.cancel();
           _autoDownloadSubscription = null;
-          print('[AUTO_DOWNLOAD] 自动下载失败: ${task.fileName}, 错误: ${task.errorMessage}');
+          print(
+              '[AUTO_DOWNLOAD] 自动下载失败: ${task.fileName}, 错误: ${task.errorMessage}');
         }
       });
     } catch (e) {
@@ -815,7 +873,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       final downloadDir = await _downloadSettings.getDownloadPath();
       final localPath = path.join(downloadDir, file.name);
       final localFile = File(localPath);
-      
+
       if (await localFile.exists()) {
         // 文件已下载，直接打开
         final result = await OpenFile.open(localPath);
@@ -829,7 +887,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
           remoteFilePath: file.path,
           fileName: file.name,
         );
-        
+
         // 监听下载完成（只监听一次）
         StreamSubscription? subscription;
         subscription = _downloadManager.tasksStream.listen((tasks) {
@@ -837,7 +895,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             (t) => t.id == taskId,
             orElse: () => tasks.first,
           );
-          
+
           if (task.status == DownloadStatus.completed) {
             subscription?.cancel();
             if (mounted) {
@@ -860,7 +918,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   /// 全选
   void _selectAll() {
     final allFiles = [..._pictures, ..._videos];
-    
+
     setState(() {
       if (_selectedFiles.length == allFiles.length && allFiles.isNotEmpty) {
         // 如果已全选，则取消全选
@@ -878,32 +936,32 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   /// 批量下载
   Future<void> _batchDownload() async {
     if (_selectedFiles.isEmpty) return;
-    
+
     int successCount = 0;
     int skipCount = 0;
-    
+
     for (var fileName in _selectedFiles) {
       final allFiles = [..._pictures, ..._videos];
       final file = allFiles.firstWhere(
         (f) => f.name == fileName,
         orElse: () => allFiles.first,
       );
-      
+
       // 检查是否已下载
       if (_downloadedStatusCache[fileName] == true) {
         skipCount++;
         continue;
       }
-      
+
       // 检查是否正在下载
       final existingTask = await _downloadManager.findTaskByFileName(fileName);
-      if (existingTask != null && 
-          (existingTask.status == DownloadStatus.downloading || 
-           existingTask.status == DownloadStatus.pending)) {
+      if (existingTask != null &&
+          (existingTask.status == DownloadStatus.downloading ||
+              existingTask.status == DownloadStatus.pending)) {
         skipCount++;
         continue;
       }
-      
+
       try {
         await _downloadManager.addDownload(
           remoteFilePath: file.path,
@@ -914,19 +972,19 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         // 忽略单个文件的错误，继续处理其他文件
       }
     }
-    
+
     setState(() {
       _isSelectionMode = false;
       _selectedFiles.clear();
     });
-    
+
     _showSuccess('批量下载完成：成功 $successCount 个，跳过 $skipCount 个');
   }
 
   /// 批量删除本地文件
   Future<void> _batchDeleteLocal() async {
     if (_selectedFiles.isEmpty) return;
-    
+
     // 确认对话框
     final confirmed = await showDialog<bool>(
       context: context,
@@ -948,16 +1006,16 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     );
 
     if (confirmed != true) return;
-    
+
     int successCount = 0;
     int failCount = 0;
-    
+
     for (var fileName in _selectedFiles) {
       try {
         final downloadDir = await _downloadSettings.getDownloadPath();
         final localPath = path.join(downloadDir, fileName);
         final localFile = File(localPath);
-        
+
         if (await localFile.exists()) {
           await localFile.delete();
           _downloadedStatusCache[fileName] = false;
@@ -969,12 +1027,12 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         failCount++;
       }
     }
-    
+
     setState(() {
       _isSelectionMode = false;
       _selectedFiles.clear();
     });
-    
+
     _showSuccess('批量删除完成：成功 $successCount 个，失败 $failCount 个');
   }
 
@@ -984,7 +1042,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       final downloadDir = await _downloadSettings.getDownloadPath();
       final localPath = path.join(downloadDir, file.name);
       final localFile = File(localPath);
-      
+
       if (!await localFile.exists()) {
         _showError('文件不存在');
         return;
@@ -1004,7 +1062,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       } else {
         _showError('不支持的操作系统');
       }
-      
+
       _showSuccess('已在资源管理器中打开');
     } catch (e) {
       _showError('打开资源管理器失败: $e');
@@ -1017,7 +1075,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       final downloadDir = await _downloadSettings.getDownloadPath();
       final localPath = path.join(downloadDir, file.name);
       final localFile = File(localPath);
-      
+
       if (!await localFile.exists()) {
         _showError('文件不存在');
         return;
@@ -1027,7 +1085,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       if (Platform.isMacOS) {
         // macOS: 使用 osascript 复制文件引用
         try {
-          final escapedPath = localPath.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+          final escapedPath =
+              localPath.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
           // 使用 POSIX file 复制文件引用，而不是文件内容
           final script = 'set the clipboard to POSIX file "$escapedPath"';
           final result = await Process.run('osascript', ['-e', script]);
@@ -1045,7 +1104,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         }
       } else if (Platform.isWindows) {
         // Windows: 使用 PowerShell 复制文件
-        final escapedPath = localPath.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+        final escapedPath =
+            localPath.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
         final result = await Process.run('powershell', [
           '-Command',
           'Set-Clipboard -Path "$escapedPath"',
@@ -1062,7 +1122,12 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         try {
           // 先尝试复制文件内容
           final fileBytes = await localFile.readAsBytes();
-          final process = await Process.start('xclip', ['-selection', 'clipboard', '-t', file.isVideo ? 'video/mp4' : 'image/png']);
+          final process = await Process.start('xclip', [
+            '-selection',
+            'clipboard',
+            '-t',
+            file.isVideo ? 'video/mp4' : 'image/png'
+          ]);
           process.stdin.add(fileBytes);
           await process.stdin.close();
           final exitCode = await process.exitCode;
@@ -1075,7 +1140,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
           // 如果 xclip 失败，尝试 xsel
           try {
             final fileBytes = await localFile.readAsBytes();
-            final process = await Process.start('xsel', ['--clipboard', '--input']);
+            final process =
+                await Process.start('xsel', ['--clipboard', '--input']);
             process.stdin.add(fileBytes);
             await process.stdin.close();
             final exitCode = await process.exitCode;
@@ -1106,7 +1172,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       final downloadDir = await _downloadSettings.getDownloadPath();
       final localPath = path.join(downloadDir, file.name);
       final localFile = File(localPath);
-      
+
       if (!await localFile.exists()) {
         _showError('文件不存在');
         return;
@@ -1210,9 +1276,9 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
 
       // 检查是否正在下载
       final existingTask = await _downloadManager.findTaskByFileName(file.name);
-      if (existingTask != null && 
-          (existingTask.status == DownloadStatus.downloading || 
-           existingTask.status == DownloadStatus.pending)) {
+      if (existingTask != null &&
+          (existingTask.status == DownloadStatus.downloading ||
+              existingTask.status == DownloadStatus.pending)) {
         _showInfo('文件正在下载中');
         return;
       }
@@ -1221,14 +1287,14 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         remoteFilePath: file.path,
         fileName: file.name,
       );
-      
+
       final downloadDir = await _downloadSettings.getDownloadPath();
       _showSuccess('已添加到下载队列\n保存位置: $downloadDir');
     } catch (e) {
       _showError('添加下载失败: $e');
     }
   }
-  
+
   /// 检查文件是否已下载
   Future<bool> _isFileDownloaded(FileInfo file) async {
     try {
@@ -1264,7 +1330,9 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Text(
-                    _isSelectionMode ? '已选择 ${_selectedFiles.length} 项' : '文件管理',
+                    _isSelectionMode
+                        ? '已选择 ${_selectedFiles.length} 项'
+                        : '文件管理',
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 20,
@@ -1277,7 +1345,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             if (_isSelectionMode) ...[
               // 全选按钮
               IconButton(
-                icon: const Icon(Icons.select_all, color: Colors.white, size: 20),
+                icon:
+                    const Icon(Icons.select_all, color: Colors.white, size: 20),
                 onPressed: _selectAll,
                 tooltip: '全选',
                 padding: EdgeInsets.zero,
@@ -1330,32 +1399,38 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
               // 网格大小调整（仅在网格模式下显示）
               if (_viewMode == 'grid') ...[
                 IconButton(
-                  icon: const Icon(Icons.zoom_out, color: Colors.white, size: 20),
+                  icon:
+                      const Icon(Icons.zoom_out, color: Colors.white, size: 20),
                   onPressed: _gridItemSize > _minGridSize
                       ? () async {
                           setState(() {
-                            _gridItemSize = (_gridItemSize - 50).clamp(_minGridSize, _maxGridSize);
+                            _gridItemSize = (_gridItemSize - 50)
+                                .clamp(_minGridSize, _maxGridSize);
                           });
                           await _saveViewPreferences();
                         }
                       : null,
                   tooltip: '缩小网格',
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                  constraints:
+                      const BoxConstraints(minWidth: 40, minHeight: 40),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.zoom_in, color: Colors.white, size: 20),
+                  icon:
+                      const Icon(Icons.zoom_in, color: Colors.white, size: 20),
                   onPressed: _gridItemSize < _maxGridSize
                       ? () async {
                           setState(() {
-                            _gridItemSize = (_gridItemSize + 50).clamp(_minGridSize, _maxGridSize);
+                            _gridItemSize = (_gridItemSize + 50)
+                                .clamp(_minGridSize, _maxGridSize);
                           });
                           await _saveViewPreferences();
                         }
                       : null,
                   tooltip: '放大网格',
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                  constraints:
+                      const BoxConstraints(minWidth: 40, minHeight: 40),
                 ),
               ],
               // 分组模式选择
@@ -1419,7 +1494,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
               ),
               // 多选模式
               IconButton(
-                icon: const Icon(Icons.checklist, color: Colors.white, size: 20),
+                icon:
+                    const Icon(Icons.checklist, color: Colors.white, size: 20),
                 onPressed: () {
                   setState(() {
                     _isSelectionMode = true;
@@ -1443,146 +1519,153 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     }
 
     return Scaffold(
-      appBar: widget.showAppBar ? AppBar(
-        title: Text(_isSelectionMode ? '已选择 ${_selectedFiles.length} 项' : '文件管理'),
-        actions: [
-          if (_isSelectionMode) ...[
-            // 全选按钮
-            IconButton(
-              icon: const Icon(Icons.select_all),
-              onPressed: _selectAll,
-              tooltip: '全选',
-            ),
-            IconButton(
-              icon: const Icon(Icons.download),
-              onPressed: _selectedFiles.isEmpty ? null : _batchDownload,
-              tooltip: '批量下载',
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete),
-              onPressed: _selectedFiles.isEmpty ? null : _batchDeleteLocal,
-              tooltip: '批量删除本地文件',
-            ),
-            IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: () {
-                setState(() {
-                  _isSelectionMode = false;
-                  _selectedFiles.clear();
-                });
-              },
-              tooltip: '取消选择',
-            ),
-          ] else ...[
-            // 视图模式切换
-            IconButton(
-              icon: Icon(_viewMode == 'list' ? Icons.grid_view : Icons.list),
-              onPressed: () async {
-                setState(() {
-                  _viewMode = _viewMode == 'list' ? 'grid' : 'list';
-                });
-                await _saveViewPreferences();
-              },
-              tooltip: _viewMode == 'list' ? '切换到网格视图' : '切换到列表视图',
-            ),
-            // 网格大小调整（仅在网格模式下显示）
-            if (_viewMode == 'grid') ...[
-              IconButton(
-                icon: const Icon(Icons.zoom_out),
-                onPressed: _gridItemSize > _minGridSize
-                    ? () async {
-                        setState(() {
-                          _gridItemSize = (_gridItemSize - 50).clamp(_minGridSize, _maxGridSize);
-                        });
-                        await _saveViewPreferences();
-                      }
-                    : null,
-                tooltip: '缩小网格',
-              ),
-              IconButton(
-                icon: const Icon(Icons.zoom_in),
-                onPressed: _gridItemSize < _maxGridSize
-                    ? () async {
-                        setState(() {
-                          _gridItemSize = (_gridItemSize + 50).clamp(_minGridSize, _maxGridSize);
-                        });
-                        await _saveViewPreferences();
-                      }
-                    : null,
-                tooltip: '放大网格',
-              ),
-            ],
-            // 分组模式选择
-            PopupMenuButton<String>(
-              icon: Icon(_getGroupModeIcon(_groupMode)),
-              tooltip: '文件组织方式',
-              onSelected: (value) async {
-                setState(() {
-                  _groupMode = value;
-                });
-                await _saveViewPreferences();
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: 'none',
-                  child: Row(
-                    children: [
-                      Icon(Icons.view_list),
-                      SizedBox(width: 8),
-                      Text('无分组'),
+      appBar: widget.showAppBar
+          ? AppBar(
+              title: Text(
+                  _isSelectionMode ? '已选择 ${_selectedFiles.length} 项' : '文件管理'),
+              actions: [
+                if (_isSelectionMode) ...[
+                  // 全选按钮
+                  IconButton(
+                    icon: const Icon(Icons.select_all),
+                    onPressed: _selectAll,
+                    tooltip: '全选',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.download),
+                    onPressed: _selectedFiles.isEmpty ? null : _batchDownload,
+                    tooltip: '批量下载',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete),
+                    onPressed:
+                        _selectedFiles.isEmpty ? null : _batchDeleteLocal,
+                    tooltip: '批量删除本地文件',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () {
+                      setState(() {
+                        _isSelectionMode = false;
+                        _selectedFiles.clear();
+                      });
+                    },
+                    tooltip: '取消选择',
+                  ),
+                ] else ...[
+                  // 视图模式切换
+                  IconButton(
+                    icon: Icon(
+                        _viewMode == 'list' ? Icons.grid_view : Icons.list),
+                    onPressed: () async {
+                      setState(() {
+                        _viewMode = _viewMode == 'list' ? 'grid' : 'list';
+                      });
+                      await _saveViewPreferences();
+                    },
+                    tooltip: _viewMode == 'list' ? '切换到网格视图' : '切换到列表视图',
+                  ),
+                  // 网格大小调整（仅在网格模式下显示）
+                  if (_viewMode == 'grid') ...[
+                    IconButton(
+                      icon: const Icon(Icons.zoom_out),
+                      onPressed: _gridItemSize > _minGridSize
+                          ? () async {
+                              setState(() {
+                                _gridItemSize = (_gridItemSize - 50)
+                                    .clamp(_minGridSize, _maxGridSize);
+                              });
+                              await _saveViewPreferences();
+                            }
+                          : null,
+                      tooltip: '缩小网格',
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.zoom_in),
+                      onPressed: _gridItemSize < _maxGridSize
+                          ? () async {
+                              setState(() {
+                                _gridItemSize = (_gridItemSize + 50)
+                                    .clamp(_minGridSize, _maxGridSize);
+                              });
+                              await _saveViewPreferences();
+                            }
+                          : null,
+                      tooltip: '放大网格',
+                    ),
+                  ],
+                  // 分组模式选择
+                  PopupMenuButton<String>(
+                    icon: Icon(_getGroupModeIcon(_groupMode)),
+                    tooltip: '文件组织方式',
+                    onSelected: (value) async {
+                      setState(() {
+                        _groupMode = value;
+                      });
+                      await _saveViewPreferences();
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(
+                        value: 'none',
+                        child: Row(
+                          children: [
+                            Icon(Icons.view_list),
+                            SizedBox(width: 8),
+                            Text('无分组'),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'day',
+                        child: Row(
+                          children: [
+                            Icon(Icons.calendar_today),
+                            SizedBox(width: 8),
+                            Text('按天'),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'week',
+                        child: Row(
+                          children: [
+                            Icon(Icons.view_week),
+                            SizedBox(width: 8),
+                            Text('按周'),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'month',
+                        child: Row(
+                          children: [
+                            Icon(Icons.calendar_view_month),
+                            SizedBox(width: 8),
+                            Text('按月'),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
-                ),
-                const PopupMenuItem(
-                  value: 'day',
-                  child: Row(
-                    children: [
-                      Icon(Icons.calendar_today),
-                      SizedBox(width: 8),
-                      Text('按天'),
-                    ],
+                  // 多选模式
+                  IconButton(
+                    icon: const Icon(Icons.checklist),
+                    onPressed: () {
+                      setState(() {
+                        _isSelectionMode = true;
+                      });
+                    },
+                    tooltip: '多选模式',
                   ),
-                ),
-                const PopupMenuItem(
-                  value: 'week',
-                  child: Row(
-                    children: [
-                      Icon(Icons.view_week),
-                      SizedBox(width: 8),
-                      Text('按周'),
-                    ],
+                  IconButton(
+                    icon: const Icon(Icons.refresh),
+                    onPressed: _refreshFileList,
+                    tooltip: '刷新',
                   ),
-                ),
-                const PopupMenuItem(
-                  value: 'month',
-                  child: Row(
-                    children: [
-                      Icon(Icons.calendar_view_month),
-                      SizedBox(width: 8),
-                      Text('按月'),
-                    ],
-                  ),
-                ),
+                ],
               ],
-            ),
-            // 多选模式
-            IconButton(
-              icon: const Icon(Icons.checklist),
-              onPressed: () {
-                setState(() {
-                  _isSelectionMode = true;
-                });
-              },
-              tooltip: '多选模式',
-            ),
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              onPressed: _refreshFileList,
-              tooltip: '刷新',
-            ),
-          ],
-        ],
-      ) : null,
+            )
+          : null,
       body: LayoutBuilder(
         builder: (context, constraints) {
           return Column(
@@ -1606,7 +1689,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   /// 获取文件的分组键（用于分组显示）
   String _getGroupKey(FileInfo file) {
     final date = file.modifiedTime;
-    
+
     switch (_groupMode) {
       case 'day':
         // 按天分组：YYYY-MM-DD
@@ -1623,11 +1706,11 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         return '';
     }
   }
-  
+
   /// 格式化分组标题
   String _formatGroupTitle(String groupKey) {
     if (groupKey.isEmpty) return '';
-    
+
     switch (_groupMode) {
       case 'day':
         // 解析日期并格式化：YYYY-MM-DD -> YYYY年MM月DD日
@@ -1640,7 +1723,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
           final now = DateTime.now();
           final today = DateTime(now.year, now.month, now.day);
           final yesterday = today.subtract(const Duration(days: 1));
-          
+
           if (date == today) {
             return '今天';
           } else if (date == yesterday) {
@@ -1675,24 +1758,24 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         return groupKey;
     }
   }
-  
+
   /// 对文件列表进行分组
   Map<String, List<FileInfo>> _groupFiles(List<FileInfo> files) {
     if (_groupMode == 'none') {
       return {'': files};
     }
-    
+
     final grouped = <String, List<FileInfo>>{};
     for (var file in files) {
       final key = _getGroupKey(file);
       grouped.putIfAbsent(key, () => []).add(file);
     }
-    
+
     // 对每个分组内的文件按时间排序（最新的在前）
     for (var key in grouped.keys) {
       grouped[key]!.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
     }
-    
+
     return grouped;
   }
 
@@ -1718,11 +1801,11 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         ),
       );
     }
-    
+
     // 对文件进行分组
     final groupedFiles = _groupFiles(allFiles);
     final groupKeys = groupedFiles.keys.toList();
-    
+
     // 对分组键进行排序（最新的在前）
     if (_groupMode != 'none') {
       groupKeys.sort((a, b) {
@@ -1748,13 +1831,16 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             const padding = 16.0; // 左右各8px
             const spacing = 8.0; // 列间距
             final availableWidth = constraints.maxWidth - padding;
-            
+
             // 计算列数：availableWidth = crossAxisCount * itemWidth + (crossAxisCount - 1) * spacing
             // 即：availableWidth = crossAxisCount * (itemWidth + spacing) - spacing
             // crossAxisCount = (availableWidth + spacing) / (itemWidth + spacing)
             // 确保至少减去一个 spacing 来避免溢出
-            final crossAxisCount = ((availableWidth - spacing) / (_gridItemSize + spacing)).floor().clamp(1, 10);
-            
+            final crossAxisCount =
+                ((availableWidth - spacing) / (_gridItemSize + spacing))
+                    .floor()
+                    .clamp(1, 10);
+
             // 使用CustomScrollView支持分组标题跨列显示
             return CustomScrollView(
               controller: _gridScrollController,
@@ -1766,7 +1852,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                     // 分组标题（如果有分组模式）
                     if (_groupMode != 'none' && key.isNotEmpty)
                       SliverToBoxAdapter(
-                        child: _buildGroupHeader(_formatGroupTitle(key), crossAxisCount),
+                        child: _buildGroupHeader(
+                            _formatGroupTitle(key), crossAxisCount),
                       ),
                     // 文件网格
                     SliverPadding(
@@ -1822,7 +1909,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     if (_hasMore) {
       totalItemCount++; // 加载更多指示器
     }
-    
+
     return RefreshIndicator(
       onRefresh: _refreshFileList,
       child: ListView.builder(
@@ -1839,7 +1926,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
               }
               currentIndex++;
             }
-            
+
             // 文件项
             for (var file in groupedFiles[key]!) {
               if (currentIndex == index) {
@@ -1849,7 +1936,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
               currentIndex++;
             }
           }
-          
+
           // 加载更多指示器
           if (currentIndex == index && _hasMore) {
             return Center(
@@ -1861,19 +1948,19 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
               ),
             );
           }
-          
+
           return const SizedBox.shrink();
         },
       ),
     );
   }
-  
+
   /// 构建分组标题
   Widget _buildGroupHeader(String title, int crossAxisCount) {
     if (_groupMode == 'none' || title.isEmpty) {
       return const SizedBox.shrink();
     }
-    
+
     // 网格视图：标题占满整行
     if (_viewMode == 'grid' && crossAxisCount > 1) {
       return Container(
@@ -1894,7 +1981,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         ),
       );
     }
-    
+
     // 列表视图：标准标题样式
     return Container(
       width: double.infinity,
@@ -1943,13 +2030,16 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             const padding = 16.0; // 左右各8px
             const spacing = 8.0; // 列间距
             final availableWidth = constraints.maxWidth - padding;
-            
+
             // 计算列数：availableWidth = crossAxisCount * itemWidth + (crossAxisCount - 1) * spacing
             // 即：availableWidth = crossAxisCount * (itemWidth + spacing) - spacing
             // crossAxisCount = (availableWidth + spacing) / (itemWidth + spacing)
             // 确保至少减去一个 spacing 来避免溢出
-            final crossAxisCount = ((availableWidth - spacing) / (_gridItemSize + spacing)).floor().clamp(1, 10);
-            
+            final crossAxisCount =
+                ((availableWidth - spacing) / (_gridItemSize + spacing))
+                    .floor()
+                    .clamp(1, 10);
+
             return GridView.builder(
               controller: _gridScrollController,
               padding: const EdgeInsets.all(8),
@@ -2000,12 +2090,13 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   Widget _buildListItem(FileInfo file, {bool isHighlighted = false}) {
     final isDownloaded = _downloadedStatusCache[file.name] == true;
     final isSelected = _selectedFiles.contains(file.name);
-    
+
+    // 使用稳定的 key 来避免不必要的重建
     return Card(
-      key: isHighlighted ? _highlightKey : null,
+      key: ValueKey('list_item_${file.name}'),
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      color: isHighlighted 
-          ? Colors.yellow.shade100 
+      color: isHighlighted
+          ? Colors.yellow.shade100
           : (isSelected ? Colors.blue.shade50 : null),
       elevation: isHighlighted ? 4 : null,
       child: Column(
@@ -2025,8 +2116,9 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                     },
                   )
                 : CircleAvatar(
-                    backgroundColor:
-                        file.isVideo ? Colors.red.shade100 : Colors.blue.shade100,
+                    backgroundColor: file.isVideo
+                        ? Colors.red.shade100
+                        : Colors.blue.shade100,
                     child: Icon(
                       file.isVideo ? Icons.videocam : Icons.image,
                       color: file.isVideo ? Colors.red : Colors.blue,
@@ -2040,7 +2132,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                 Row(
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
                         color: file.isVideo ? Colors.red : Colors.blue,
                         borderRadius: BorderRadius.circular(4),
@@ -2082,7 +2175,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                     Expanded(
                       child: Text(
                         file.path,
-                        style: const TextStyle(fontSize: 11, color: Colors.grey),
+                        style:
+                            const TextStyle(fontSize: 11, color: Colors.grey),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -2093,11 +2187,13 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                 if (isDownloaded)
                   Row(
                     children: [
-                      const Icon(Icons.check_circle, size: 12, color: Colors.green),
+                      const Icon(Icons.check_circle,
+                          size: 12, color: Colors.green),
                       const SizedBox(width: 4),
                       Text(
                         '已下载',
-                        style: const TextStyle(fontSize: 11, color: Colors.green),
+                        style:
+                            const TextStyle(fontSize: 11, color: Colors.green),
                       ),
                     ],
                   ),
@@ -2115,11 +2211,12 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   Widget _buildGridItem(FileInfo file, {bool isHighlighted = false}) {
     final isDownloaded = _downloadedStatusCache[file.name] == true;
     final isSelected = _selectedFiles.contains(file.name);
-    
+
+    // 使用稳定的 key 来避免不必要的重建
     return Card(
-      key: isHighlighted ? _highlightKey : null,
-      color: isHighlighted 
-          ? Colors.yellow.shade100 
+      key: ValueKey('grid_item_${file.name}'),
+      color: isHighlighted
+          ? Colors.yellow.shade100
           : (isSelected ? Colors.blue.shade50 : null),
       elevation: isHighlighted ? 4 : null,
       child: InkWell(
@@ -2145,8 +2242,11 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                   Container(
                     width: double.infinity,
                     decoration: BoxDecoration(
-                      color: file.isVideo ? Colors.red.shade100 : Colors.blue.shade100,
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                      color: file.isVideo
+                          ? Colors.red.shade100
+                          : Colors.blue.shade100,
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(4)),
                     ),
                     // 缩略图独立于本地文件存在性，只要服务器上有文件就显示
                     child: _buildThumbnail(file),
@@ -2156,9 +2256,12 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                     top: 4,
                     left: 4,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 3),
                       decoration: BoxDecoration(
-                        color: file.isVideo ? Colors.red.withOpacity(0.9) : Colors.blue.withOpacity(0.9),
+                        color: file.isVideo
+                            ? Colors.red.withOpacity(0.9)
+                            : Colors.blue.withOpacity(0.9),
                         borderRadius: BorderRadius.circular(4),
                         boxShadow: [
                           BoxShadow(
@@ -2211,7 +2314,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                     const Positioned(
                       top: 4,
                       right: 4,
-                      child: Icon(Icons.check_circle, color: Colors.green, size: 20),
+                      child: Icon(Icons.check_circle,
+                          color: Colors.green, size: 20),
                     ),
                 ],
               ),
@@ -2228,7 +2332,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                     file.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 1),
                   Row(
@@ -2238,7 +2343,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                       Flexible(
                         child: Text(
                           file.formattedSize,
-                          style: const TextStyle(fontSize: 9, color: Colors.grey),
+                          style:
+                              const TextStyle(fontSize: 9, color: Colors.grey),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -2260,42 +2366,60 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   /// 构建缩略图（独立于本地文件存在性，只要服务器上有文件就显示缩略图）
   Widget _buildThumbnail(FileInfo file) {
     try {
+      _logger.log('构建缩略图 Widget: ${file.name}', tag: 'THUMBNAIL_REFRESH');
       // 直接获取缩略图，不检查本地文件是否存在
       // 缩略图独立于本地文件，只要服务器上有文件就应该显示
-      return FutureBuilder<String?>(
-        future: _getThumbnail(file),
-        builder: (context, thumbnailSnapshot) {
-          if (thumbnailSnapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          
-          if (thumbnailSnapshot.hasData && thumbnailSnapshot.data != null) {
-            return Image.file(
-              File(thumbnailSnapshot.data!),
-              fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) {
-                return Center(
-                  child: Icon(
-                    file.isVideo ? Icons.videocam : Icons.image,
-                    size: 48,
-                    color: file.isVideo ? Colors.red : Colors.blue,
-                  ),
-                );
-              },
+      // 使用稳定的 key 和 RepaintBoundary 来避免不必要的重建
+      return RepaintBoundary(
+        key: ValueKey('thumbnail_${file.name}'),
+        child: FutureBuilder<String?>(
+          future: _getThumbnail(file),
+          builder: (context, thumbnailSnapshot) {
+            _logger.log(
+                'FutureBuilder builder 被调用: ${file.name}, connectionState=${thumbnailSnapshot.connectionState}, hasData=${thumbnailSnapshot.hasData}',
+                tag: 'THUMBNAIL_REFRESH');
+
+            if (thumbnailSnapshot.connectionState == ConnectionState.waiting) {
+              _logger.log('缩略图加载中: ${file.name}', tag: 'THUMBNAIL_REFRESH');
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            if (thumbnailSnapshot.hasData && thumbnailSnapshot.data != null) {
+              _logger.log('显示缩略图: ${file.name}, path=${thumbnailSnapshot.data}',
+                  tag: 'THUMBNAIL_REFRESH');
+              return Image.file(
+                File(thumbnailSnapshot.data!),
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  _logger.log('缩略图加载失败: ${file.name}, error=$error',
+                      tag: 'THUMBNAIL_REFRESH');
+                  return Center(
+                    child: Icon(
+                      file.isVideo ? Icons.videocam : Icons.image,
+                      size: 48,
+                      color: file.isVideo ? Colors.red : Colors.blue,
+                    ),
+                  );
+                },
+              );
+            }
+
+            // 如果获取失败，显示占位符
+            _logger.log('缩略图获取失败，显示占位符: ${file.name}',
+                tag: 'THUMBNAIL_REFRESH');
+            return Center(
+              child: Icon(
+                file.isVideo ? Icons.videocam : Icons.image,
+                size: 48,
+                color: file.isVideo ? Colors.red : Colors.blue,
+              ),
             );
-          }
-          
-          // 如果获取失败，显示占位符
-          return Center(
-            child: Icon(
-              file.isVideo ? Icons.videocam : Icons.image,
-              size: 48,
-              color: file.isVideo ? Colors.red : Colors.blue,
-            ),
-          );
-        },
+          },
+        ),
       );
-    } catch (e) {
+    } catch (e, stackTrace) {
+      _logger.logError('构建缩略图异常: ${file.name}',
+          error: e, stackTrace: stackTrace);
       return Center(
         child: Icon(
           file.isVideo ? Icons.videocam : Icons.image,
@@ -2306,50 +2430,71 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     }
   }
 
-  /// 获取缩略图（照片和视频统一处理，从服务器下载并缓存）
-  Future<String?> _getThumbnail(FileInfo file) async {
+  /// 获取缩略图 Future（缓存 Future 本身，避免重复创建）
+  Future<String?> _getThumbnail(FileInfo file) {
+    // 如果已经有缓存的 Future，直接返回（避免重复创建）
+    if (_thumbnailFutureCache.containsKey(file.name)) {
+      _logger.log('使用缓存的 Future: ${file.name}', tag: 'THUMBNAIL_REFRESH');
+      return _thumbnailFutureCache[file.name]!;
+    }
+
+    // 创建新的 Future 并缓存
+    final future = _loadThumbnail(file);
+    _thumbnailFutureCache[file.name] = future;
+    return future;
+  }
+
+  /// 实际加载缩略图（照片和视频统一处理，从服务器下载并缓存）
+  Future<String?> _loadThumbnail(FileInfo file) async {
     try {
+      _logger.log('开始获取缩略图: ${file.name}', tag: 'THUMBNAIL_REFRESH');
       // 确保缓存目录已初始化
       if (_thumbnailCacheDir == null) {
         await _initializeThumbnailCache();
       }
       if (_thumbnailCacheDir == null) {
-        print('缩略图缓存目录初始化失败');
+        _logger.log('缩略图缓存目录初始化失败: ${file.name}', tag: 'THUMBNAIL_REFRESH');
         return null;
       }
 
       // 构建缓存文件路径
       final thumbnailFileName = '${file.name}.jpg';
-      final thumbnailFilePath = path.join(_thumbnailCacheDir!.path, thumbnailFileName);
+      final thumbnailFilePath =
+          path.join(_thumbnailCacheDir!.path, thumbnailFileName);
 
       // 检查缓存文件是否存在（不依赖内存缓存，直接检查文件系统）
       final cachedFile = File(thumbnailFilePath);
       if (await cachedFile.exists()) {
-        print('使用缓存的缩略图: $thumbnailFilePath');
+        _logger.log('使用缓存的缩略图: ${file.name}, path=$thumbnailFilePath',
+            tag: 'THUMBNAIL_REFRESH');
         // 更新内存缓存
         _thumbnailCache[file.name] = thumbnailFilePath;
         return thumbnailFilePath;
       }
 
-      print('缓存不存在，从服务器下载缩略图: ${file.name}');
+      _logger.log('缓存不存在，从服务器下载缩略图: ${file.name}', tag: 'THUMBNAIL_REFRESH');
       // 从服务器下载缩略图
-      final thumbnailBytes = await widget.apiService.downloadThumbnail(file.path, file.isVideo);
+      final thumbnailBytes =
+          await widget.apiService.downloadThumbnail(file.path, file.isVideo);
       if (thumbnailBytes == null) {
-        print('下载缩略图失败: ${file.name}');
+        _logger.log('下载缩略图失败: ${file.name}', tag: 'THUMBNAIL_REFRESH');
         return null;
       }
 
-      print('下载成功，保存缩略图到缓存: $thumbnailFilePath (大小: ${thumbnailBytes.length} 字节)');
+      _logger.log(
+          '下载成功，保存缩略图到缓存: ${file.name}, path=$thumbnailFilePath, 大小=${thumbnailBytes.length} 字节',
+          tag: 'THUMBNAIL_REFRESH');
       // 保存到缓存目录
       await cachedFile.writeAsBytes(thumbnailBytes);
 
       // 更新内存缓存
       _thumbnailCache[file.name] = thumbnailFilePath;
-      print('缩略图已缓存: $thumbnailFilePath');
+      _logger.log('缩略图已缓存: ${file.name}, path=$thumbnailFilePath',
+          tag: 'THUMBNAIL_REFRESH');
       return thumbnailFilePath;
     } catch (e, stackTrace) {
-      print('获取缩略图失败: $e');
-      print('堆栈跟踪: $stackTrace');
+      _logger.logError('获取缩略图异常: ${file.name}',
+          error: e, stackTrace: stackTrace);
       return null;
     }
   }
@@ -2357,7 +2502,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   /// 构建文件操作按钮（直接显示）
   Widget _buildFileActionButtons(FileInfo file, {bool compact = false}) {
     final isDownloaded = _downloadedStatusCache[file.name] == true;
-    
+
     if (compact) {
       // 紧凑模式（网格视图）- 紧凑排列
       return Row(
@@ -2419,7 +2564,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         ],
       );
     }
-    
+
     // 完整模式（列表视图）
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -2603,7 +2748,4 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         return Icons.view_list;
     }
   }
-
 }
-
-
