@@ -593,7 +593,9 @@ class HttpServerService {
         logger.log('客户端已连接WebSocket，当前连接数: ${_webSocketChannels.length}', tag: 'WEBSOCKET');
         
         // 发送初始连接确认（包含预览尺寸和服务器版本）
-        final previewSize = cameraService.getPreviewSize();
+        // 如果相机未初始化，预览尺寸可能为null，使用默认值
+        final previewSize = cameraService.getPreviewSize() ?? {'width': 640, 'height': 480};
+        logger.log('WebSocket连接时返回预览尺寸: ${previewSize['width']}x${previewSize['height']} (相机初始化: ${cameraService.isInitialized})', tag: 'PREVIEW_SIZE');
         final serverVersion = await _versionCompatibilityService.getServerVersion();
         channel.sink.add(json.encode({
           'type': 'notification',
@@ -601,7 +603,7 @@ class HttpServerService {
           'data': {
             'status': 'connected',
             'exclusive': _exclusiveWebSocketChannel == channel,
-            'previewSize': previewSize, // 包含预览尺寸
+            'previewSize': previewSize, // 包含预览尺寸（如果相机未初始化，使用默认值640x480）
             'serverVersion': serverVersion, // 服务器版本号
             'timestamp': DateTime.now().millisecondsSinceEpoch,
           },
@@ -1348,7 +1350,9 @@ class HttpServerService {
   
   /// 处理获取状态请求
   Future<Map<String, dynamic>> _handleGetStatusRequest() async {
-    final previewSize = cameraService.getPreviewSize();
+    // 如果相机未初始化，预览尺寸可能为null，使用默认值
+    final previewSize = cameraService.getPreviewSize() ?? {'width': 640, 'height': 480};
+    logger.log('返回预览尺寸给客户端: ${previewSize['width']}x${previewSize['height']} (相机初始化: ${cameraService.isInitialized})', tag: 'PREVIEW_SIZE');
     final orientationStatus = await cameraService.getOrientationStatus();
     return {
       'success': true,
@@ -1358,7 +1362,7 @@ class HttpServerService {
         'currentStatus': cameraService.status.toString(),
         'canChangeSettings': cameraService.status.canChangeSettings,
         'isLocked': cameraService.status.isLocked,
-        'previewSize': previewSize,
+        'previewSize': previewSize, // 包含预览尺寸（如果相机未初始化，使用默认值640x480）
         'orientation': orientationStatus ?? {
           'orientationLocked': true,
           'lockedRotationAngle': 0,

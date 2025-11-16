@@ -39,8 +39,21 @@ class CameraService {
   Uint8List? get lastPreviewFrame => _lastPreviewFrame;
   
   /// 获取预览尺寸
-  Map<String, int> getPreviewSize() {
-    return _nativeCamera?.getPreviewSize() ?? {'width': 640, 'height': 480};
+  /// 如果相机未初始化，返回null表示预览尺寸未知
+  /// 调用者应该检查返回值，如果为null表示相机未初始化，预览尺寸未知
+  Map<String, int>? getPreviewSize() {
+    if (_nativeCamera == null || !_nativeCamera!.isInitialized) {
+      _logger.logCamera('获取预览尺寸：相机未初始化，返回null', details: '');
+      return null;
+    }
+    return _nativeCamera!.getPreviewSize();
+  }
+  
+  /// 获取预览尺寸（带默认值）
+  /// 如果相机未初始化，返回默认值640x480
+  /// 注意：此方法用于向后兼容，新代码应该使用 getPreviewSize() 并检查null
+  Map<String, int> getPreviewSizeWithDefault() {
+    return getPreviewSize() ?? {'width': 640, 'height': 480};
   }
   
   /// 获取方向状态

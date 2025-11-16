@@ -77,6 +77,38 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   final ValueNotifier<Map<String, int>> _previewSizeNotifier =
       ValueNotifier<Map<String, int>>({'width': 640, 'height': 480});
 
+  /// 统一更新预览尺寸的方法
+  /// 从服务器返回的预览尺寸数据中提取并更新本地状态
+  void _updatePreviewSize(Map<String, dynamic>? previewSizeData) {
+    if (previewSizeData == null) {
+      _logger.log('预览尺寸数据为null，跳过更新', tag: 'PREVIEW');
+      return;
+    }
+
+    final width = previewSizeData['width'] as int?;
+    final height = previewSizeData['height'] as int?;
+
+    if (width == null || height == null) {
+      _logger.log('预览尺寸数据不完整: width=$width, height=$height，跳过更新', tag: 'PREVIEW');
+      return;
+    }
+
+    // 检查是否与当前值相同，避免不必要的更新
+    final currentSize = _previewSizeNotifier.value;
+    if (currentSize['width'] == width && currentSize['height'] == height) {
+      _logger.log('预览尺寸未变化: ${width}x${height}，跳过更新', tag: 'PREVIEW');
+      return;
+    }
+
+    if (mounted) {
+      _previewSizeNotifier.value = {
+        'width': width,
+        'height': height,
+      };
+      _logger.log('更新预览尺寸: ${width}x${height} (之前: ${currentSize['width']}x${currentSize['height']})', tag: 'PREVIEW');
+    }
+  }
+
   // 当前旋转角度（0-360度），用于客户端旋转预览流
   final ValueNotifier<int> _rotationAngleNotifier = ValueNotifier<int>(0);
 
@@ -154,6 +186,13 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
 
       if (result['success'] == true && result['status'] != null) {
         final status = result['status'] as Map<String, dynamic>;
+        
+        // 统一处理预览尺寸更新
+        if (status['previewSize'] != null) {
+          final previewSize = status['previewSize'] as Map<String, dynamic>?;
+          _updatePreviewSize(previewSize);
+        }
+        
         final orientation = status['orientation'] as Map<String, dynamic>?;
 
         if (orientation != null) {
@@ -345,22 +384,10 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
               }
             } else if (event == 'connected') {
               _logger.log('WebSocket连接确认', tag: 'WEBSOCKET');
-              // 获取预览尺寸
+              // 统一处理预览尺寸更新
               if (data != null && data['previewSize'] != null) {
-                final previewSize =
-                    data['previewSize'] as Map<String, dynamic>?;
-                if (previewSize != null) {
-                  final width = previewSize['width'] as int? ?? 640;
-                  final height = previewSize['height'] as int? ?? 480;
-                  if (mounted) {
-                    _previewSizeNotifier.value = {
-                      'width': width,
-                      'height': height
-                    };
-                    _logger.log('收到服务器预览尺寸: ${width}x${height}',
-                        tag: 'PREVIEW');
-                  }
-                }
+                final previewSize = data['previewSize'] as Map<String, dynamic>?;
+                _updatePreviewSize(previewSize);
               }
             }
           } catch (e) {
@@ -1481,21 +1508,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                                     return ValueListenableBuilder<int>(
                                       valueListenable: _rotationAngleNotifier,
                                       builder: (context, rotationAngle, _) {
-                                        // 计算旋转后的宽高比
-                                        var width = previewSize['width'] ?? 640;
-                                        var height =
-                                            previewSize['height'] ?? 480;
-
-                                        // 如果旋转90度或270度，交换宽高
-                                        if (rotationAngle == 90 ||
-                                            rotationAngle == 270) {
-                                          final temp = width;
-                                          width = height;
-                                          height = temp;
-                                        }
-
-                                        final aspectRatio = width / height;
-
                                         // 如果预览流URL还未加载，显示加载指示器
                                         if (_previewStreamUrl == null) {
                                           return const Center(
@@ -1503,18 +1515,26 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                                           );
                                         }
                                         
-                                        return AspectRatio(
-                                          aspectRatio: aspectRatio,
+                                        // 最简单直接的方法：外层填充整个容器
+                                        // 当旋转90度或270度时，交换宽高传递给MjpegStreamWidget
+                                        // 这样FittedBox会使用正确的宽高比，避免裁剪
+                                        var displayWidth = previewSize['width'];
+                                        var displayHeight = previewSize['height'];
+                                        if (rotationAngle == 90 || rotationAngle == 270) {
+                                          // 旋转90度或270度时，交换宽高
+                                          final temp = displayWidth;
+                                          displayWidth = displayHeight;
+                                          displayHeight = temp;
+                                        }
+                                        
+                                        return Positioned.fill(
                                           child: Transform.rotate(
-                                            angle:
-                                                rotationAngle * math.pi / 180,
+                                            angle: rotationAngle * math.pi / 180,
                                             child: MjpegStreamWidget(
                                               key: ValueKey('preview_$_previewStreamKey'),
                                               streamUrl: _previewStreamUrl!,
-                                              previewWidth:
-                                                  previewSize['width'],
-                                              previewHeight:
-                                                  previewSize['height'],
+                                              previewWidth: displayWidth,
+                                              previewHeight: displayHeight,
                                             ),
                                           ),
                                         );

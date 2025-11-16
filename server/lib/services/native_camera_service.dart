@@ -92,9 +92,14 @@ class NativeCameraService {
     try {
       final result = await _methodChannel.invokeMethod<Map<dynamic, dynamic>>('getPreviewSize');
       if (result != null) {
-        _previewWidth = result['width'] as int? ?? 640;
-        _previewHeight = result['height'] as int? ?? 480;
-        _logger.logCamera('获取预览尺寸', details: '${_previewWidth}x$_previewHeight');
+        final width = result['width'] as int? ?? 640;
+        final height = result['height'] as int? ?? 480;
+        _logger.logCamera('从Android端获取预览尺寸', details: '${width}x${height} (之前: ${_previewWidth}x${_previewHeight})');
+        _previewWidth = width;
+        _previewHeight = height;
+        _logger.logCamera('更新预览尺寸完成', details: '${_previewWidth}x$_previewHeight');
+      } else {
+        _logger.logCamera('Android端返回null，使用默认预览尺寸', details: '640x480');
       }
     } catch (e, stackTrace) {
       _logger.logError('获取预览尺寸失败', error: e, stackTrace: stackTrace);
@@ -103,6 +108,7 @@ class NativeCameraService {
   
   /// 获取预览尺寸
   Map<String, int> getPreviewSize() {
+    _logger.logCamera('返回预览尺寸给调用者', details: '${_previewWidth}x$_previewHeight');
     return {
       'width': _previewWidth,
       'height': _previewHeight,

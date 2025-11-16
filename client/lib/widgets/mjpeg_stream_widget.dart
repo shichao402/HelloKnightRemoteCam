@@ -159,26 +159,44 @@ class _MjpegStreamWidgetState extends State<MjpegStreamWidget> {
       });
     }
 
-    // 直接填充父容器，由外层的 AspectRatio 控制宽高比
-    return Mjpeg(
-      key: ValueKey('mjpeg_$_reconnectAttempts'), // 使用key强制重建以重连
-      isLive: true,
-      stream: widget.streamUrl,
-      error: (context, error, stack) {
-        _logger.logError('MJPEG流错误', error: error, stackTrace: stack);
-        // 延迟调用_onError，避免在build期间调用setState
-        Future.microtask(() => _onError(error.toString()));
-        return const Center(
-          child: Icon(
-            Icons.videocam_off,
-            size: 64,
-            color: Colors.grey,
+    // 直接填充父容器，使用FittedBox确保视频填充整个容器
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 使用contain避免裁剪，保持完整画面
+        final previewWidth = widget.previewWidth?.toDouble() ?? 640;
+        final previewHeight = widget.previewHeight?.toDouble() ?? 480;
+        
+        return SizedBox.expand(
+          child: FittedBox(
+            fit: BoxFit.contain,
+            alignment: Alignment.center,
+            child: SizedBox(
+              width: previewWidth,
+              height: previewHeight,
+              child: Mjpeg(
+                key: ValueKey('mjpeg_$_reconnectAttempts'), // 使用key强制重建以重连
+                isLive: true,
+                stream: widget.streamUrl,
+                error: (context, error, stack) {
+                  _logger.logError('MJPEG流错误', error: error, stackTrace: stack);
+                  // 延迟调用_onError，避免在build期间调用setState
+                  Future.microtask(() => _onError(error.toString()));
+                  return const Center(
+                    child: Icon(
+                      Icons.videocam_off,
+                      size: 64,
+                      color: Colors.grey,
+                    ),
+                  );
+                },
+                loading: (context) {
+                  return const Center(
+                    child: CircularProgressIndicator(),
+                  );
+                },
+              ),
+            ),
           ),
-        );
-      },
-      loading: (context) {
-        return const Center(
-          child: CircularProgressIndicator(),
         );
       },
     );
