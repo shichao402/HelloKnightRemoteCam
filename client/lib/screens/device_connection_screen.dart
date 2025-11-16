@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../services/api_service_manager.dart';
 import '../services/connection_settings_service.dart';
 import '../services/device_config_service.dart';
 import '../services/logger_service.dart';
@@ -17,11 +18,11 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
   final _formKey = GlobalKey<FormState>();
   final _hostController = TextEditingController(text: '192.168.50.205');
   final _portController = TextEditingController(text: '8080');
-  
+
   final _connectionSettings = ConnectionSettingsService();
   final _deviceConfigService = DeviceConfigService();
   final _logger = ClientLoggerService();
-  
+
   bool _isConnecting = false;
   bool _isAutoConnecting = false;
   bool _autoConnectEnabled = true;
@@ -35,7 +36,7 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
   Future<void> _loadSettingsAndAutoConnect() async {
     try {
       final settings = await _connectionSettings.getConnectionSettings();
-      
+
       setState(() {
         _hostController.text = settings['host'] as String;
         _portController.text = (settings['port'] as int).toString();
@@ -81,8 +82,7 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
     }
 
     // 检查必填字段
-    if (_hostController.text.isEmpty || 
-        _portController.text.isEmpty) {
+    if (_hostController.text.isEmpty || _portController.text.isEmpty) {
       if (!_isAutoConnecting && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -107,19 +107,23 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
         port: int.parse(_portController.text),
       );
 
-      _logger.log('尝试连接到 ${_hostController.text}:${_portController.text}', tag: 'CONNECTION');
+      // 注册到全局管理器，以便在应用退出时能够优雅关闭
+      ApiServiceManager().setCurrentApiService(apiService);
+
+      _logger.log('尝试连接到 ${_hostController.text}:${_portController.text}',
+          tag: 'CONNECTION');
 
       // 测试连接
       final pingSuccess = await apiService.ping();
-      
+
       if (!mounted) return;
 
       if (pingSuccess) {
         _logger.log('连接成功', tag: 'CONNECTION');
-        
+
         // 清除跳过自动连接标志（连接成功后恢复自动连接）
         await _connectionSettings.setSkipAutoConnectOnce(false);
-        
+
         // 保存连接设置
         if (saveSettings) {
           await _connectionSettings.saveConnectionSettings(
@@ -131,16 +135,18 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
 
         // 连接WebSocket并获取设备信息
         await apiService.connectWebSocket();
-        
+
         // 获取设备信息
         String? deviceModel;
         try {
           final deviceInfoResult = await apiService.getDeviceInfo();
-          if (deviceInfoResult['success'] == true && deviceInfoResult['deviceInfo'] != null) {
-            final deviceInfo = deviceInfoResult['deviceInfo'] as Map<String, dynamic>;
+          if (deviceInfoResult['success'] == true &&
+              deviceInfoResult['deviceInfo'] != null) {
+            final deviceInfo =
+                deviceInfoResult['deviceInfo'] as Map<String, dynamic>;
             deviceModel = deviceInfo['model'] as String?;
             _logger.log('获取设备信息成功，型号: $deviceModel', tag: 'CONNECTION');
-            
+
             // 注册设备（设置独占连接）
             if (deviceModel != null && deviceModel.isNotEmpty) {
               await apiService.registerDevice(deviceModel);
@@ -149,11 +155,12 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
         } catch (e, stackTrace) {
           _logger.logError('获取设备信息失败', error: e, stackTrace: stackTrace);
         }
-        
+
         // 获取并应用保存的设备配置
         if (deviceModel != null && deviceModel.isNotEmpty) {
           try {
-            final savedConfig = await _deviceConfigService.getDeviceConfig(deviceModel);
+            final savedConfig =
+                await _deviceConfigService.getDeviceConfig(deviceModel);
             if (savedConfig != null) {
               _logger.log('找到保存的设备配置，应用配置', tag: 'CONNECTION');
               // 应用配置到服务器
@@ -175,7 +182,8 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
           ),
         );
       } else {
-        final errorMsg = '连接失败：无法访问服务器 (${_hostController.text}:${_portController.text})';
+        final errorMsg =
+            '连接失败：无法访问服务器 (${_hostController.text}:${_portController.text})';
         _logger.log(errorMsg, tag: 'CONNECTION');
         // 自动连接失败时也显示错误信息
         if (mounted) {
@@ -261,7 +269,7 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 48),
-                
+
                 // 服务器地址
                 TextFormField(
                   controller: _hostController,
@@ -280,7 +288,7 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
                   },
                 ),
                 const SizedBox(height: 16),
-                
+
                 // 端口
                 TextFormField(
                   controller: _portController,
@@ -302,7 +310,7 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
                   },
                 ),
                 const SizedBox(height: 16),
-                
+
                 // 自动连接选项
                 CheckboxListTile(
                   value: _autoConnectEnabled,
@@ -322,7 +330,7 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
                   controlAffinity: ListTileControlAffinity.leading,
                 ),
                 const SizedBox(height: 16),
-                
+
                 // 连接按钮
                 ElevatedButton(
                   onPressed: _isConnecting ? null : _connect,

@@ -58,6 +58,31 @@ class ApiService {
     _useWebSocket = false;
     _pendingRequests.clear();
   }
+
+  // 检查WebSocket是否已连接
+  bool get isWebSocketConnected => _webSocketChannel != null;
+
+  // 优雅关闭连接（尝试发送断开通知后关闭）
+  Future<void> gracefulDisconnect() async {
+    if (_webSocketChannel == null) {
+      logger.log('WebSocket未连接，跳过断开操作', tag: 'LIFECYCLE');
+      return;
+    }
+
+    try {
+      logger.log('开始优雅关闭WebSocket连接', tag: 'LIFECYCLE');
+      
+      // WebSocket关闭时会自动触发服务器端的onDone回调，服务器会自动清理连接
+      // 不需要发送额外的断开消息，直接关闭即可
+      disconnectWebSocket();
+      
+      logger.log('WebSocket连接已优雅关闭', tag: 'LIFECYCLE');
+    } catch (e, stackTrace) {
+      logger.logError('优雅关闭连接失败', error: e, stackTrace: stackTrace);
+      // 即使失败也尝试强制断开
+      disconnectWebSocket();
+    }
+  }
   
   // 释放资源
   void dispose() {

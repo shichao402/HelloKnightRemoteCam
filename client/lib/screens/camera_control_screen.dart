@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:math' as math;
 import '../services/api_service.dart';
+import '../services/api_service_manager.dart';
 import '../services/download_manager.dart';
 import '../models/file_info.dart';
 import '../models/download_task.dart';
@@ -81,6 +82,9 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   @override
   void initState() {
     super.initState();
+    // 注册到全局管理器，以便在应用退出时能够优雅关闭
+    ApiServiceManager().setCurrentApiService(widget.apiService);
+
     _downloadManager = DownloadManager(baseUrl: widget.apiService.baseUrl);
     _downloadManager.initialize();
     _refreshFileList();
@@ -506,8 +510,11 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       _webSocketSubscription?.cancel();
       _webSocketSubscription = null;
 
-      // 关闭WebSocket连接
-      widget.apiService.disconnectWebSocket();
+      // 优雅关闭WebSocket连接
+      await widget.apiService.gracefulDisconnect();
+
+      // 清除全局管理器中的ApiService（用户主动断开）
+      ApiServiceManager().setCurrentApiService(null);
 
       // 更新连接状态
       if (mounted) {
@@ -523,7 +530,8 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       _returnToConnectionScreen();
     } catch (e) {
       _logger.logError('断开连接失败', error: e);
-      // 即使出错也返回连接页面
+      // 即使出错也清除全局管理器并返回连接页面
+      ApiServiceManager().setCurrentApiService(null);
       _returnToConnectionScreen();
     }
   }

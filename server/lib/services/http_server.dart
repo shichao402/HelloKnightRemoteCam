@@ -557,26 +557,11 @@ class HttpServerService {
             _handleWebSocketMessage(channel, message, clientIpForChannel);
           },
           onDone: () {
-            _webSocketChannels.remove(channel);
-            _webSocketChannelToIp.remove(channel);
-            // 如果断开的是独占连接，清除独占状态
-            if (_exclusiveWebSocketChannel == channel) {
-              _exclusiveWebSocketChannel = null;
-              _exclusiveClientDeviceModel = null;
-              logger.log('独占WebSocket连接已断开，清除独占状态', tag: 'WEBSOCKET');
-            }
-            logger.log('客户端已断开WebSocket，当前连接数: ${_webSocketChannels.length}', tag: 'WEBSOCKET');
+            _handleWebSocketDisconnect(channel, clientIpForChannel);
           },
           onError: (error) {
-            _webSocketChannels.remove(channel);
-            _webSocketChannelToIp.remove(channel);
-            // 如果断开的是独占连接，清除独占状态
-            if (_exclusiveWebSocketChannel == channel) {
-              _exclusiveWebSocketChannel = null;
-              _exclusiveClientDeviceModel = null;
-              logger.log('独占WebSocket连接错误，清除独占状态', tag: 'WEBSOCKET');
-            }
             logger.log('WebSocket错误: $error', tag: 'WEBSOCKET');
+            _handleWebSocketDisconnect(channel, clientIpForChannel);
           },
           cancelOnError: true,
         );
@@ -965,7 +950,58 @@ class HttpServerService {
     }
   }
   
-  /// 发送WebSocket响应
+  /// 处理WebSocket连接断开
+  void _handleWebSocketDisconnect(WebSocketChannel channel, String? clientIp) {
+    try {
+      logger.log('客户端断开WebSocket连接${clientIp != null ? ' (IP: $clientIp)' : ''}', tag: 'WEBSOCKET');
+      
+      // 从WebSocket连接列表中移除
+      _webSocketChannels.remove(channel);
+      
+      // 从IP映射中移除
+      _webSocketChannelToIp.remove(channel);
+      
+      // 如果断开的是独占连接，清除独占状态
+      if (_exclusiveWebSocketChannel == channel) {
+        _exclusiveWebSocketChannel = null;
+        _exclusiveClientDeviceModel = null;
+        logger.log('独占WebSocket连接已断开，清除独占状态', tag: 'WEBSOCKET');
+      }
+      
+      // 如果有IP地址，从连接设备列表中移除
+      if (clientIp != null && clientIp.isNotEmpty && clientIp != 'unknown') {
+        if (_connectedDevices.containsKey(clientIp)) {
+          _connectedDevices.remove(clientIp);
+          logger.log('已从连接设备列表中移除: $clientIp', tag: 'CONNECTION');
+          
+          // 通知监听者连接状态变化
+          _notifyListeners();
+        }
+      }
+      
+      // 清理该客户端对应的预览流连接
+      if (clientIp != null && clientIp.isNotEmpty && clientIp != 'unknown') {
+        final previewController = _previewStreamControllers[clientIp];
+        if (previewController != null) {
+          try {
+            if (!previewController.isClosed) {
+              previewController.close();
+            }
+            _previewStreamControllers.remove(clientIp);
+            logger.log('已清理客户端 $clientIp 的预览流连接', tag: 'PREVIEW');
+          } catch (e) {
+            logger.log('清理预览流连接时出错: $e', tag: 'PREVIEW');
+            _previewStreamControllers.remove(clientIp);
+          }
+        }
+      }
+      
+      logger.log('WebSocket断开处理完成，当前连接数: ${_webSocketChannels.length}', tag: 'WEBSOCKET');
+    } catch (e, stackTrace) {
+      logger.logError('处理WebSocket断开连接失败', error: e, stackTrace: stackTrace);
+    }
+  }
+
   void _sendWebSocketResponse(WebSocketChannel channel, String messageId, bool success, Map<String, dynamic>? data, String? error) {
     try {
       channel.sink.add(json.encode({
