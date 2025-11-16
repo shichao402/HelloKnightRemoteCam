@@ -1150,6 +1150,7 @@ class HttpServerService {
   /// 处理获取状态请求
   Future<Map<String, dynamic>> _handleGetStatusRequest() async {
     final previewSize = cameraService.getPreviewSize();
+    final orientationStatus = await cameraService.getOrientationStatus();
     return {
       'success': true,
       'status': {
@@ -1158,7 +1159,12 @@ class HttpServerService {
         'currentStatus': cameraService.status.toString(),
         'canChangeSettings': cameraService.status.canChangeSettings,
         'isLocked': cameraService.status.isLocked,
-        'previewSize': previewSize, // 添加预览尺寸
+        'previewSize': previewSize,
+        'orientation': orientationStatus ?? {
+          'orientationLocked': true,
+          'lockedRotationAngle': 0,
+          'currentDeviceOrientation': 0,
+        },
       },
     };
   }

@@ -171,6 +171,10 @@ class MainActivity: FlutterActivity() {
                     Log.d("MainActivity", "锁定旋转角度已设置: $angle")
                     result.success(true)
                 }
+                "getOrientationStatus" -> {
+                    val status = camera2Manager?.getOrientationStatus()
+                    result.success(status)
+                }
                 "getPreviewSize" -> {
                     val size = camera2Manager?.getPreviewSize()
                     if (size != null) {

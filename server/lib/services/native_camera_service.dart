@@ -123,6 +123,25 @@ class NativeCameraService {
     }
   }
   
+  /// 获取方向状态
+  Future<Map<String, dynamic>?> getOrientationStatus() async {
+    try {
+      final result = await _methodChannel.invokeMethod<Map<dynamic, dynamic>>('getOrientationStatus');
+      if (result != null) {
+        return {
+          'orientationLocked': result['orientationLocked'] as bool? ?? true,
+          'lockedRotationAngle': result['lockedRotationAngle'] as int? ?? 0,
+          'currentDeviceOrientation': result['currentDeviceOrientation'] as int? ?? 0,
+          'sensorOrientation': result['sensorOrientation'] as int? ?? 0,
+        };
+      }
+      return null;
+    } catch (e, stackTrace) {
+      _logger.logError('获取方向状态失败', error: e, stackTrace: stackTrace);
+      return null;
+    }
+  }
+  
   /// 启动预览流
   void _startPreviewStream() {
     _previewSubscription?.cancel();

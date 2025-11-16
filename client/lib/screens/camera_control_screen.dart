@@ -2,13 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
 import 'dart:async';
-import 'dart:convert';
-import 'package:web_socket_channel/web_socket_channel.dart';
+import 'dart:math' as math;
 import '../services/api_service.dart';
 import '../services/download_manager.dart';
 import '../models/file_info.dart';
 import '../models/download_task.dart';
 import '../widgets/mjpeg_stream_widget.dart';
+import '../services/orientation_preferences_service.dart';
 import 'settings_screen.dart';
 import 'advanced_camera_settings_screen.dart';
 import 'settings_selection_screen.dart';
@@ -40,7 +40,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   StreamSubscription<List<DownloadTask>>? _downloadSubscription;
   final DownloadSettingsService _downloadSettings = DownloadSettingsService();
   final Map<String, bool> _downloadedStatusCache = {}; // 缓存下载状态
-  
+
   // 连接状态管理
   bool _isConnected = true;
   bool _isReconnecting = false;
@@ -48,28 +48,33 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   Timer? _connectionCheckTimer;
   StreamSubscription? _webSocketSubscription; // WebSocket通知消息订阅
   final ClientLoggerService _logger = ClientLoggerService();
-  
+
   // 左右布局比例（0.0-1.0，表示左侧占比）
   double _leftPanelRatio = 0.3; // 默认左侧30%
-  
+
   // 设备方向（0=竖屏, 90=横屏右转, 180=倒置, 270=横屏左转）
   // 使用ValueNotifier，只更新预览部分，不影响文件列表
   final ValueNotifier<int> _deviceOrientationNotifier = ValueNotifier<int>(0);
-  
+
   // 方向锁定状态（true=锁定，使用固定方向；false=解锁，使用重力感应）
   bool _orientationLocked = true; // 默认锁定
-  
+
   // 锁定状态下的手动旋转角度（0, 90, 180, 270度）
   int _lockedRotationAngle = 0; // 默认0度（竖屏）
-  
-  // 当前旋转圈数（用于计算最短路径）
-  final ValueNotifier<double> _rotationTurnsNotifier = ValueNotifier<double>(0.0);
-  
+
+  // 传感器方向（从服务器获取，用于计算预览旋转角度）
+  int _sensorOrientation = 0;
+
   // 预览尺寸（从服务器获取，默认640x480）
-  final ValueNotifier<Map<String, int>> _previewSizeNotifier = ValueNotifier<Map<String, int>>({'width': 640, 'height': 480});
-  
-  // 记录上次的预览尺寸，用于避免重复日志
-  Map<String, int>? _lastLoggedPreviewSize;
+  final ValueNotifier<Map<String, int>> _previewSizeNotifier =
+      ValueNotifier<Map<String, int>>({'width': 640, 'height': 480});
+
+  // 当前旋转角度（0-360度），用于客户端旋转预览流
+  final ValueNotifier<int> _rotationAngleNotifier = ValueNotifier<int>(0);
+
+  // 方向偏好设置服务
+  final OrientationPreferencesService _orientationPrefs =
+      OrientationPreferencesService();
 
   @override
   void initState() {
@@ -84,13 +89,71 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     // 初始化方向锁定状态（默认锁定）
     _initializeOrientationLock();
   }
-  
+
   /// 初始化方向锁定状态
   Future<void> _initializeOrientationLock() async {
-    // 默认锁定状态已在变量初始化时设置，这里可以添加从服务器获取状态的逻辑
-    // 目前默认锁定，保持与server端一致
-    // 初始化旋转角度
-    _updateRotationTurns();
+    try {
+      // 先从本地存储读取保存的偏好设置
+      final savedPrefs = await _orientationPrefs.getAllPreferences();
+      final savedOrientationLocked = savedPrefs['orientationLocked'] as bool;
+      final savedLockedRotationAngle = savedPrefs['lockedRotationAngle'] as int;
+
+      _logger.log(
+          '从本地存储读取方向偏好: 锁定=$savedOrientationLocked, 锁定角度=$savedLockedRotationAngle°',
+          tag: 'ORIENTATION');
+
+      // 先使用本地保存的值设置本地状态
+      setState(() {
+        _orientationLocked = savedOrientationLocked;
+        _lockedRotationAngle = savedLockedRotationAngle;
+      });
+
+      // 从服务器获取方向状态（获取传感器方向和设备方向）
+      final result = await widget.apiService.getSettingsStatus();
+      if (result['success'] == true && result['status'] != null) {
+        final status = result['status'] as Map<String, dynamic>;
+        final orientation = status['orientation'] as Map<String, dynamic>?;
+
+        if (orientation != null) {
+          final currentDeviceOrientation =
+              orientation['currentDeviceOrientation'] as int? ?? 0;
+          final sensorOrientation =
+              orientation['sensorOrientation'] as int? ?? 0;
+
+          _logger.log(
+              '从服务器获取方向状态: 设备方向=$currentDeviceOrientation, 传感器方向=$sensorOrientation',
+              tag: 'ORIENTATION');
+
+          // 更新传感器方向和设备方向
+          setState(() {
+            _sensorOrientation = sensorOrientation;
+          });
+          _deviceOrientationNotifier.value = currentDeviceOrientation;
+
+          // 将本地保存的偏好设置同步到服务器
+          await widget.apiService.setOrientationLock(savedOrientationLocked);
+          if (savedOrientationLocked) {
+            await widget.apiService
+                .setLockedRotationAngle(savedLockedRotationAngle);
+            _logger.log(
+                '已同步本地偏好设置到服务器: 锁定=$savedOrientationLocked, 锁定角度=$savedLockedRotationAngle°',
+                tag: 'ORIENTATION');
+          }
+        } else {
+          // 如果没有方向信息，使用默认值
+          _logger.log('服务器未返回方向信息，使用本地保存的偏好设置', tag: 'ORIENTATION');
+        }
+      } else {
+        _logger.log('获取服务器状态失败，使用本地保存的偏好设置', tag: 'ORIENTATION');
+      }
+
+      // 更新客户端预览旋转角度
+      _updatePreviewRotation();
+    } catch (e, stackTrace) {
+      _logger.logError('初始化方向锁定状态失败', error: e, stackTrace: stackTrace);
+      // 出错时使用默认值
+      _updatePreviewRotation();
+    }
   }
 
   @override
@@ -100,23 +163,23 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     _connectionCheckTimer?.cancel();
     _webSocketSubscription?.cancel();
     _deviceOrientationNotifier.dispose();
-    _rotationTurnsNotifier.dispose();
+    _rotationAngleNotifier.dispose();
     _previewSizeNotifier.dispose();
     super.dispose();
   }
-  
+
   /// 启动WebSocket连接（监听server的新文件通知）
   void _startFileListRefreshTimer() {
     _logger.log('准备启动WebSocket通知监听', tag: 'WEBSOCKET');
     _connectToWebSocketNotifications();
   }
-  
+
   /// 连接到WebSocket通知流（监听服务器推送的通知）
   void _connectToWebSocketNotifications() async {
     try {
       // 确保ApiService的WebSocket已连接
       await widget.apiService.connectWebSocket();
-      
+
       // 监听通知消息
       final notificationStream = widget.apiService.webSocketNotifications;
       if (notificationStream != null) {
@@ -125,13 +188,13 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
             if (!mounted || !_isConnected) {
               return;
             }
-            
+
             try {
               final event = notification['event'] as String?;
               final data = notification['data'] as Map<String, dynamic>?;
-              
+
               _logger.log('收到WebSocket通知: event=$event', tag: 'WEBSOCKET');
-              
+
               // 处理新文件通知
               if (event == 'new_files' && data != null) {
                 _logger.log('收到新文件通知，直接使用通知中的文件信息', tag: 'WEBSOCKET');
@@ -142,41 +205,30 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                 final orientation = data['orientation'] as int?;
                 if (orientation != null) {
                   _logger.log('收到设备方向变化通知: $orientation 度', tag: 'ORIENTATION');
-                  // 更新设备方向（使用ValueNotifier，只更新预览部分，不影响文件列表）
                   if (mounted) {
                     _deviceOrientationNotifier.value = orientation;
-                    // 更新旋转角度（使用最短路径）
-                    _updateRotationTurns();
+                    // 更新客户端预览旋转角度
+                    _updatePreviewRotation();
                   }
                 }
               } else if (event == 'connected') {
                 _logger.log('WebSocket连接确认', tag: 'WEBSOCKET');
-                _logger.log('connected事件数据: $data', tag: 'PREVIEW');
                 // 获取预览尺寸
-                if (data != null) {
-                  _logger.log('data不为null，检查previewSize', tag: 'PREVIEW');
-                  if (data['previewSize'] != null) {
-                    _logger.log('previewSize不为null: ${data['previewSize']}', tag: 'PREVIEW');
-                    final previewSize = data['previewSize'] as Map<String, dynamic>?;
-                    _logger.log('转换后的previewSize: $previewSize', tag: 'PREVIEW');
-                    if (previewSize != null) {
-                      final width = previewSize['width'] as int? ?? 640;
-                      final height = previewSize['height'] as int? ?? 480;
-                      _logger.log('解析预览尺寸: width=$width, height=$height', tag: 'PREVIEW');
-                      if (mounted) {
-                        _previewSizeNotifier.value = {'width': width, 'height': height};
-                        _logger.log('收到服务器预览尺寸: ${width}x${height}，已更新到预览组件', tag: 'PREVIEW');
-                      } else {
-                        _logger.log('组件未mounted，无法更新预览尺寸', tag: 'PREVIEW');
-                      }
-                    } else {
-                      _logger.log('预览尺寸数据格式错误: previewSize为null', tag: 'PREVIEW');
+                if (data != null && data['previewSize'] != null) {
+                  final previewSize =
+                      data['previewSize'] as Map<String, dynamic>?;
+                  if (previewSize != null) {
+                    final width = previewSize['width'] as int? ?? 640;
+                    final height = previewSize['height'] as int? ?? 480;
+                    if (mounted) {
+                      _previewSizeNotifier.value = {
+                        'width': width,
+                        'height': height
+                      };
+                      _logger.log('收到服务器预览尺寸: ${width}x${height}',
+                          tag: 'PREVIEW');
                     }
-                  } else {
-                    _logger.log('data中previewSize为null，data内容: $data', tag: 'PREVIEW');
                   }
-                } else {
-                  _logger.log('未收到服务器预览尺寸，data为null，使用默认值640x480', tag: 'PREVIEW');
                 }
               }
             } catch (e) {
@@ -209,19 +261,20 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       }
     }
   }
-  
+
   // 开始连接检查
   void _startConnectionCheck() {
-    _connectionCheckTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
+    _connectionCheckTimer =
+        Timer.periodic(const Duration(seconds: 5), (timer) async {
       if (!mounted) {
         timer.cancel();
         return;
       }
-      
+
       try {
         final pingSuccess = await widget.apiService.ping();
         if (!mounted) return;
-        
+
         // 只在连接状态实际变化时才调用 setState
         if (!pingSuccess && _isConnected) {
           // 连接断开
@@ -251,29 +304,29 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       }
     });
   }
-  
+
   // 开始重连
   void _startReconnect() {
     if (_isReconnecting) {
       _logger.log('已在重连中，跳过', tag: 'CONNECTION');
       return;
     }
-    
+
     _logger.log('开始重连流程', tag: 'CONNECTION');
     setState(() {
       _isReconnecting = true;
     });
-    
+
     _reconnectTimer?.cancel();
     int reconnectAttempts = 0;
     const maxReconnectAttempts = 20; // 最多尝试20次（约1分钟）
-    
+
     _reconnectTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
       if (!mounted) {
         timer.cancel();
         return;
       }
-      
+
       reconnectAttempts++;
       if (reconnectAttempts > maxReconnectAttempts) {
         _logger.log('达到最大重连次数，停止重连', tag: 'CONNECTION');
@@ -286,11 +339,11 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         }
         return;
       }
-      
+
       try {
         _logger.log('尝试重连... (第$reconnectAttempts次)', tag: 'CONNECTION');
         final pingSuccess = await widget.apiService.ping();
-        
+
         if (mounted) {
           if (pingSuccess) {
             setState(() {
@@ -302,7 +355,8 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
             _logger.log('重连成功', tag: 'CONNECTION');
             _refreshFileList();
           } else {
-            _logger.log('重连失败：ping返回false (第$reconnectAttempts次)', tag: 'CONNECTION');
+            _logger.log('重连失败：ping返回false (第$reconnectAttempts次)',
+                tag: 'CONNECTION');
           }
         }
       } catch (e) {
@@ -310,13 +364,13 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       }
     });
   }
-  
+
   // 手动重连
   Future<void> _manualReconnect() async {
     setState(() {
       _isReconnecting = true;
     });
-    
+
     try {
       final pingSuccess = await widget.apiService.ping();
       if (mounted) {
@@ -324,7 +378,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           _isConnected = pingSuccess;
           _isReconnecting = false;
         });
-        
+
         if (pingSuccess) {
           _showSuccess('重连成功');
           _refreshFileList();
@@ -341,31 +395,31 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       }
     }
   }
-  
+
   // 主动断开连接
   Future<void> _disconnect() async {
     try {
       _logger.log('主动断开连接', tag: 'CONNECTION');
-      
+
       // 设置跳过本次自动连接标志（用户主动断开后，本次不自动连接）
       final connectionSettings = ConnectionSettingsService();
       await connectionSettings.setSkipAutoConnectOnce(true);
-      
+
       // 停止连接检查定时器
       _connectionCheckTimer?.cancel();
       _connectionCheckTimer = null;
-      
+
       // 停止重连定时器
       _reconnectTimer?.cancel();
       _reconnectTimer = null;
-      
+
       // 取消WebSocket订阅
       _webSocketSubscription?.cancel();
       _webSocketSubscription = null;
-      
+
       // 关闭WebSocket连接
       widget.apiService.disconnectWebSocket();
-      
+
       // 更新连接状态
       if (mounted) {
         setState(() {
@@ -373,9 +427,9 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           _isReconnecting = false;
         });
       }
-      
+
       _logger.log('连接已断开', tag: 'CONNECTION');
-      
+
       // 返回连接页面
       _returnToConnectionScreen();
     } catch (e) {
@@ -384,7 +438,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       _returnToConnectionScreen();
     }
   }
-  
+
   // 返回连接页面
   void _returnToConnectionScreen() {
     Navigator.of(context).pushAndRemoveUntil(
@@ -399,10 +453,10 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       if (result['success'] && mounted) {
         final pictures = result['pictures'] as List<FileInfo>;
         final videos = result['videos'] as List<FileInfo>;
-        
+
         // 检查所有文件的下载状态
         await _checkDownloadStatus([...pictures, ...videos]);
-        
+
         setState(() {
           _pictures = pictures;
           _videos = videos;
@@ -448,7 +502,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       }
     }
   }
-  
+
   /// 增量更新文件列表（只获取新增/修改的文件）
   /// 处理新文件通知（直接使用通知中的文件信息）
   Future<void> _handleNewFilesNotification(Map<String, dynamic> data) async {
@@ -456,15 +510,16 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       _logger.log('收到新文件通知，开始处理', tag: 'FILE_NOTIFICATION');
       final fileType = data['fileType'] as String?;
       final filesData = data['files'] as List<dynamic>?;
-      
-      _logger.log('文件类型: $fileType, 文件数量: ${filesData?.length ?? 0}', tag: 'FILE_NOTIFICATION');
-      
+
+      _logger.log('文件类型: $fileType, 文件数量: ${filesData?.length ?? 0}',
+          tag: 'FILE_NOTIFICATION');
+
       if (filesData == null || filesData.isEmpty) {
         _logger.log('没有文件信息，回退到增量刷新', tag: 'FILE_NOTIFICATION');
         await _incrementalRefreshFileList();
         return;
       }
-      
+
       // 解析文件信息
       final List<FileInfo> newFiles = [];
       for (var fileJson in filesData) {
@@ -476,26 +531,27 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           _logger.logError('解析文件信息失败', error: e);
         }
       }
-      
+
       if (newFiles.isEmpty) {
         _logger.log('解析后没有有效文件，跳过更新', tag: 'FILE_NOTIFICATION');
         return;
       }
-      
-      _logger.log('成功解析 ${newFiles.length} 个文件，准备更新UI', tag: 'FILE_NOTIFICATION');
-      
+
+      _logger.log('成功解析 ${newFiles.length} 个文件，准备更新UI',
+          tag: 'FILE_NOTIFICATION');
+
       // 检查新文件的下载状态
       await _checkDownloadStatus(newFiles);
-      
+
       // 合并新文件到现有列表（去重，按修改时间排序）
       final existingFileNames = <String>{};
       for (var file in [..._pictures, ..._videos]) {
         existingFileNames.add(file.name);
       }
-      
+
       final updatedPictures = <FileInfo>[..._pictures];
       final updatedVideos = <FileInfo>[..._videos];
-      
+
       for (var file in newFiles) {
         if (!existingFileNames.contains(file.name)) {
           // 根据文件类型添加到对应列表
@@ -508,7 +564,8 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         } else {
           // 更新已存在的文件
           if (fileType == 'image' || file.isImage) {
-            final index = updatedPictures.indexWhere((f) => f.name == file.name);
+            final index =
+                updatedPictures.indexWhere((f) => f.name == file.name);
             if (index >= 0) {
               updatedPictures[index] = file;
             }
@@ -520,20 +577,22 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           }
         }
       }
-      
+
       // 按修改时间排序
       updatedPictures.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
       updatedVideos.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
-      
-      _logger.log('更新文件列表: 照片 ${updatedPictures.length} 张, 视频 ${updatedVideos.length} 个', tag: 'FILE_NOTIFICATION');
-      
+
+      _logger.log(
+          '更新文件列表: 照片 ${updatedPictures.length} 张, 视频 ${updatedVideos.length} 个',
+          tag: 'FILE_NOTIFICATION');
+
       if (mounted) {
         setState(() {
           _pictures = updatedPictures;
           _videos = updatedVideos;
         });
         _logger.log('UI已更新', tag: 'FILE_NOTIFICATION');
-        
+
         // 自动下载最新照片/视频
         if (fileType == 'image' && updatedPictures.isNotEmpty) {
           final latestPicture = updatedPictures.first;
@@ -549,7 +608,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       await _incrementalRefreshFileList();
     }
   }
-  
+
   Future<void> _incrementalRefreshFileList() async {
     try {
       // 计算最后更新时间（使用最新文件的修改时间，减去1秒以确保能获取到新文件）
@@ -560,43 +619,44 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         // 减去1秒，确保能获取到刚刚创建的文件（即使时间戳相同）
         since = allFiles.first.modifiedTime.millisecondsSinceEpoch - 1000;
       }
-      
+
       final result = await widget.apiService.getFileList(since: since);
-      
+
       if (result['success'] && mounted) {
         final newPictures = result['pictures'] as List<FileInfo>;
         final newVideos = result['videos'] as List<FileInfo>;
-        
+
         if (newPictures.isEmpty && newVideos.isEmpty) {
           // 没有新文件，不需要更新
           return;
         }
-        
+
         // 检查新文件的下载状态
         await _checkDownloadStatus([...newPictures, ...newVideos]);
-        
+
         // 合并新文件到现有列表（去重，按修改时间排序）
         final existingFileNames = <String>{};
         for (var file in [..._pictures, ..._videos]) {
           existingFileNames.add(file.name);
         }
-        
+
         final updatedPictures = <FileInfo>[..._pictures];
         final updatedVideos = <FileInfo>[..._videos];
-        
+
         for (var file in newPictures) {
           if (!existingFileNames.contains(file.name)) {
             updatedPictures.add(file);
             existingFileNames.add(file.name);
           } else {
             // 更新已存在的文件
-            final index = updatedPictures.indexWhere((f) => f.name == file.name);
+            final index =
+                updatedPictures.indexWhere((f) => f.name == file.name);
             if (index >= 0) {
               updatedPictures[index] = file;
             }
           }
         }
-        
+
         for (var file in newVideos) {
           if (!existingFileNames.contains(file.name)) {
             updatedVideos.add(file);
@@ -609,11 +669,12 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
             }
           }
         }
-        
+
         // 按修改时间排序
-        updatedPictures.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+        updatedPictures
+            .sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
         updatedVideos.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
-        
+
         setState(() {
           _pictures = updatedPictures;
           _videos = updatedVideos;
@@ -629,14 +690,14 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     try {
       // 检查是否已经在下载中或已完成
       final existingTask = await _downloadManager.findTaskByFileName(file.name);
-      
+
       if (existingTask != null) {
-        if (existingTask.status == DownloadStatus.downloading || 
+        if (existingTask.status == DownloadStatus.downloading ||
             existingTask.status == DownloadStatus.pending) {
           // 已经在下载中
           return;
         }
-        
+
         if (existingTask.status == DownloadStatus.completed) {
           // 已经下载完成
           if (mounted) {
@@ -647,22 +708,22 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           return;
         }
       }
-      
+
       final taskId = await _downloadManager.addDownload(
         remoteFilePath: file.path,
         fileName: file.name,
       );
-      
+
       // 取消之前的订阅
       _downloadSubscription?.cancel();
-      
+
       // 监听下载完成（只监听一次）
       _downloadSubscription = _downloadManager.tasksStream.listen((tasks) {
         final task = tasks.firstWhere(
           (t) => t.id == taskId,
           orElse: () => tasks.first,
         );
-        
+
         if (task.status == DownloadStatus.completed) {
           _downloadSubscription?.cancel();
           _downloadSubscription = null;
@@ -687,9 +748,9 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
 
   Future<void> _showDownloadSuccess(String fileName, String filePath) async {
     final downloadDir = await _downloadSettings.getDownloadPath();
-    
+
     if (!mounted) return;
-    
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Column(
@@ -745,7 +806,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           _isRecording = !_isRecording;
         });
         _showSuccess(_isRecording ? '录像已开始' : '录像已停止');
-        
+
         if (!wasRecording && _isRecording) {
           // 录像已开始
         } else if (wasRecording && !_isRecording) {
@@ -772,14 +833,14 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     try {
       // 检查是否已经在下载中或已完成
       final existingTask = await _downloadManager.findTaskByFileName(file.name);
-      
+
       if (existingTask != null) {
-        if (existingTask.status == DownloadStatus.downloading || 
+        if (existingTask.status == DownloadStatus.downloading ||
             existingTask.status == DownloadStatus.pending) {
           // 已经在下载中
           return;
         }
-        
+
         if (existingTask.status == DownloadStatus.completed) {
           // 已经下载完成
           if (mounted) {
@@ -790,22 +851,22 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           return;
         }
       }
-      
+
       final taskId = await _downloadManager.addDownload(
         remoteFilePath: file.path,
         fileName: file.name,
       );
-      
+
       // 取消之前的订阅
       _downloadSubscription?.cancel();
-      
+
       // 监听下载完成（只监听一次）
       _downloadSubscription = _downloadManager.tasksStream.listen((tasks) {
         final task = tasks.firstWhere(
           (t) => t.id == taskId,
           orElse: () => tasks.first,
         );
-        
+
         if (task.status == DownloadStatus.completed) {
           _downloadSubscription?.cancel();
           _downloadSubscription = null;
@@ -860,56 +921,33 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     );
   }
 
-  /// 计算预览旋转圈数
-  /// 如果方向锁定：使用手动旋转角度（0, 90, 180, 270度）
-  /// 如果方向解锁：预览根据设备方向旋转（因为server端使用重力感应）
-  double _getRotationTurns([int? deviceOrientation]) {
-    final orientation = deviceOrientation ?? _deviceOrientationNotifier.value;
-    if (_orientationLocked) {
-      // 方向锁定：使用手动旋转角度
-      // 预览流本身有180度偏差，需要补偿：手动角度 + 180度
-      final totalRotation = (_lockedRotationAngle + 180) % 360;
-      return totalRotation / 360.0;
-    } else {
-      // 方向解锁：server端使用重力感应，预览需要根据设备方向旋转
-      // 补偿-90°偏差：如果手机是0°，预览需要+90°来显示正确方向
-      final compensatedOrientation = (orientation + 90) % 360;
-      return compensatedOrientation / 360.0;
-    }
+  /// 更新预览旋转角度（客户端处理旋转）
+  /// 预览旋转角度必须与拍照方向一致，确保预览和拍摄的画面状态一致
+  void _updatePreviewRotation() {
+    // 客户端根据锁定状态和方向计算旋转角度，与拍照方向一致
+    // 锁定状态：sensorOrientation + 90 + lockedRotationAngle（与拍照逻辑一致）
+    // 解锁状态：sensorOrientation + currentDeviceOrientation（与拍照逻辑一致）
+    final rotationAngle = _orientationLocked
+        ? (_sensorOrientation + 90 + _lockedRotationAngle) % 360
+        : (_sensorOrientation + _deviceOrientationNotifier.value) % 360;
+    _rotationAngleNotifier.value = rotationAngle;
+    _logger.log(
+        '更新预览旋转角度: ${_orientationLocked ? "锁定" : "解锁"}, 角度=$rotationAngle° (传感器=$_sensorOrientation°, ${_orientationLocked ? "锁定角度=$_lockedRotationAngle°" : "设备方向=${_deviceOrientationNotifier.value}°"})',
+        tag: 'PREVIEW');
   }
-  
-  /// 计算最短路径的旋转圈数
-  /// 确保从当前角度到目标角度总是选择最短路径（顺时针或逆时针）
-  double _calculateShortestRotation(double currentTurns, double targetTurns) {
-    // 计算差值（可能超过1圈）
-    double diff = targetTurns - currentTurns;
-    
-    // 规范化到[-0.5, 0.5]范围内（最短路径）
-    while (diff > 0.5) {
-      diff -= 1.0;
-    }
-    while (diff < -0.5) {
-      diff += 1.0;
-    }
-    
-    // 返回当前角度加上最短路径差值
-    return currentTurns + diff;
-  }
-  
+
   /// 旋转预览（锁定状态下）
   Future<void> _rotatePreview() async {
-    // 每次旋转90度
     final newAngle = (_lockedRotationAngle + 90) % 360;
     try {
-      // 更新server端的锁定旋转角度
+      // 发送旋转角度到服务器（用于拍照方向）
       final result = await widget.apiService.setLockedRotationAngle(newAngle);
       if (result['success'] == true) {
-        setState(() {
-          _lockedRotationAngle = newAngle;
-        });
-        _logger.log('旋转预览到 ${newAngle}°', tag: 'PREVIEW');
-        // 更新旋转角度（使用最短路径）
-        _updateRotationTurns();
+        setState(() => _lockedRotationAngle = newAngle);
+        // 保存到本地存储
+        await _orientationPrefs.saveLockedRotationAngle(newAngle);
+        // 更新客户端预览旋转角度
+        _updatePreviewRotation();
         _showSuccess('预览已旋转到 ${newAngle}°');
       } else {
         _showError('设置旋转角度失败: ${result['error']}');
@@ -918,15 +956,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       _showError('设置旋转角度失败: $e');
     }
   }
-  
-  /// 更新旋转角度（使用最短路径）
-  void _updateRotationTurns() {
-    final targetTurns = _getRotationTurns();
-    final currentTurns = _rotationTurnsNotifier.value;
-    final shortestTurns = _calculateShortestRotation(currentTurns, targetTurns);
-    _rotationTurnsNotifier.value = shortestTurns;
-  }
-  
+
   /// 切换方向锁定状态
   Future<void> _toggleOrientationLock() async {
     final newLockState = !_orientationLocked;
@@ -936,6 +966,14 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         setState(() {
           _orientationLocked = newLockState;
         });
+        // 保存到本地存储
+        await _orientationPrefs.saveOrientationLocked(newLockState);
+        // 如果切换到锁定状态，确保服务器使用当前的锁定角度
+        if (newLockState) {
+          await widget.apiService.setLockedRotationAngle(_lockedRotationAngle);
+        }
+        // 更新客户端预览旋转角度
+        _updatePreviewRotation();
         _showSuccess(newLockState ? '方向已锁定' : '方向已解锁');
       } else {
         _showError('设置方向锁定失败: ${result['error']}');
@@ -955,7 +993,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       ),
     );
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -1030,7 +1067,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           final leftWidth = totalWidth * _leftPanelRatio;
           // 右侧宽度 = 总宽度 - 左侧宽度 - 分割线宽度，确保不溢出
           final rightWidth = totalWidth - leftWidth - dividerWidth;
-          
+
           return Row(
             children: [
               // 左侧：视频预览区域（根据视频分辨率动态调整宽高比）
@@ -1038,25 +1075,27 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                 width: leftWidth,
                 child: Column(
                   children: [
-                    // 控制按钮区域（预览窗口上方）
+                    // 控制按钮区域
                     Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                      margin: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
                         color: Colors.grey[800],
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
                           // 拍照按钮
                           Expanded(
                             child: ElevatedButton.icon(
-                              onPressed: _isOperating || _isRecording ? null : _takePicture,
+                              onPressed: (_isOperating || _isRecording)
+                                  ? null
+                                  : _takePicture,
                               icon: const Icon(Icons.camera, size: 18),
-                              label: const Text('拍照', style: TextStyle(fontSize: 12)),
+                              label: const Text('拍照',
+                                  style: TextStyle(fontSize: 12)),
                               style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                padding: const EdgeInsets.all(8),
                                 backgroundColor: Colors.blue,
                               ),
                             ),
@@ -1067,16 +1106,14 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                             child: ElevatedButton.icon(
                               onPressed: _isOperating ? null : _toggleRecording,
                               icon: Icon(
-                                _isRecording ? Icons.stop : Icons.videocam,
-                                size: 18,
-                              ),
-                              label: Text(
-                                _isRecording ? '停止' : '录像',
-                                style: const TextStyle(fontSize: 12),
-                              ),
+                                  _isRecording ? Icons.stop : Icons.videocam,
+                                  size: 18),
+                              label: Text(_isRecording ? '停止' : '录像',
+                                  style: const TextStyle(fontSize: 12)),
                               style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                                backgroundColor: _isRecording ? Colors.red : Colors.green,
+                                padding: const EdgeInsets.all(8),
+                                backgroundColor:
+                                    _isRecording ? Colors.red : Colors.green,
                               ),
                             ),
                           ),
@@ -1089,19 +1126,23 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                               onPressed: _rotatePreview,
                               tooltip: '旋转预览（当前: ${_lockedRotationAngle}°）',
                               style: IconButton.styleFrom(
-                                backgroundColor: Colors.blue.withOpacity(0.2),
-                              ),
+                                  backgroundColor:
+                                      Colors.blue.withOpacity(0.2)),
                             ),
                           // 方向锁定按钮
                           IconButton(
-                            icon: Icon(
-                              _orientationLocked ? Icons.lock : Icons.lock_open,
-                              color: _orientationLocked ? Colors.orange : Colors.grey,
-                            ),
+                            icon: Icon(_orientationLocked
+                                ? Icons.lock
+                                : Icons.lock_open),
+                            color: _orientationLocked
+                                ? Colors.orange
+                                : Colors.grey,
                             onPressed: _toggleOrientationLock,
                             tooltip: _orientationLocked ? '方向已锁定' : '方向已解锁',
                             style: IconButton.styleFrom(
-                              backgroundColor: _orientationLocked ? Colors.orange.withOpacity(0.2) : Colors.transparent,
+                              backgroundColor: _orientationLocked
+                                  ? Colors.orange.withOpacity(0.2)
+                                  : Colors.transparent,
                             ),
                           ),
                         ],
@@ -1110,7 +1151,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                     // 预览区域
                     Expanded(
                       child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                        margin: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
                           color: Colors.black,
                           borderRadius: BorderRadius.circular(8),
@@ -1120,54 +1161,41 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                           borderRadius: BorderRadius.circular(8),
                           child: Stack(
                             children: [
-                              // 使用ValueListenableBuilder，只更新预览部分，不影响文件列表
+                              // 预览窗口：客户端处理旋转，UI层只处理宽高比
                               Positioned.fill(
                                 child: ValueListenableBuilder<Map<String, int>>(
                                   valueListenable: _previewSizeNotifier,
                                   builder: (context, previewSize, _) {
-                                    return ValueListenableBuilder<double>(
-                                      valueListenable: _rotationTurnsNotifier,
-                                      builder: (context, rotationTurns, child) {
-                                        // 根据预览尺寸计算宽高比
+                                    return ValueListenableBuilder<int>(
+                                      valueListenable: _rotationAngleNotifier,
+                                      builder: (context, rotationAngle, _) {
+                                        // 计算旋转后的宽高比
                                         var width = previewSize['width'] ?? 640;
-                                        var height = previewSize['height'] ?? 480;
-                                        
-                                        // 计算旋转角度（0-1圈转换为0-360度）
-                                        final rotationDegrees = (rotationTurns * 360) % 360;
-                                        
-                                        // 如果旋转90度或270度，需要交换宽高
-                                        if ((rotationDegrees >= 90 && rotationDegrees < 180) || 
-                                            (rotationDegrees >= 270 && rotationDegrees < 360)) {
-                                          // 旋转90度或270度，交换宽高
+                                        var height =
+                                            previewSize['height'] ?? 480;
+
+                                        // 如果旋转90度或270度，交换宽高
+                                        if (rotationAngle == 90 ||
+                                            rotationAngle == 270) {
                                           final temp = width;
                                           width = height;
                                           height = temp;
                                         }
-                                        
-                                        // 计算宽高比
+
                                         final aspectRatio = width / height;
-                                        
-                                        // 记录预览尺寸使用情况（仅在尺寸变化时输出）
-                                        final currentSize = {'width': previewSize['width'], 'height': previewSize['height']};
-                                        if (_lastLoggedPreviewSize == null || 
-                                            _lastLoggedPreviewSize!['width'] != currentSize['width'] || 
-                                            _lastLoggedPreviewSize!['height'] != currentSize['height']) {
-                                          _logger.log('使用预览尺寸: ${previewSize['width']}x${previewSize['height']}, 旋转角度: ${rotationDegrees}°, 计算后宽高比: $aspectRatio (${width}/${height})', tag: 'PREVIEW');
-                                          _lastLoggedPreviewSize = Map<String, int>.from(currentSize);
-                                        }
-                                        
-                                        return Center(
-                                          child: AspectRatio(
-                                            aspectRatio: aspectRatio,
-                                            child: AnimatedRotation(
-                                              turns: rotationTurns,
-                                              duration: const Duration(milliseconds: 200),
-                                              child: MjpegStreamWidget(
-                                                streamUrl: widget.apiService.getPreviewStreamUrl(),
-                                                fit: BoxFit.contain, // 使用contain确保完整显示，不会被裁剪
-                                                previewWidth: previewSize['width'], // 使用服务器返回的预览宽度
-                                                previewHeight: previewSize['height'], // 使用服务器返回的预览高度
-                                              ),
+
+                                        return AspectRatio(
+                                          aspectRatio: aspectRatio,
+                                          child: Transform.rotate(
+                                            angle:
+                                                rotationAngle * math.pi / 180,
+                                            child: MjpegStreamWidget(
+                                              streamUrl: widget.apiService
+                                                  .getPreviewStreamUrl(),
+                                              previewWidth:
+                                                  previewSize['width'],
+                                              previewHeight:
+                                                  previewSize['height'],
                                             ),
                                           ),
                                         );
@@ -1280,7 +1308,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       final downloadDir = await _downloadSettings.getDownloadPath();
       final localPath = path.join(downloadDir, file.name);
       final localFile = File(localPath);
-      
+
       if (!await localFile.exists()) {
         _showInfo('文件不存在');
         return;
@@ -1300,7 +1328,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       } else {
         _showInfo('不支持的操作系统');
       }
-      
+
       _showInfo('已在资源管理器中打开');
     } catch (e) {
       _showInfo('打开资源管理器失败: $e');
@@ -1313,7 +1341,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       final downloadDir = await _downloadSettings.getDownloadPath();
       final localPath = path.join(downloadDir, file.name);
       final localFile = File(localPath);
-      
+
       if (!await localFile.exists()) {
         _showInfo('文件不存在');
         return;
@@ -1323,7 +1351,8 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       if (Platform.isMacOS) {
         // macOS: 使用 osascript 复制文件引用
         try {
-          final escapedPath = localPath.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+          final escapedPath =
+              localPath.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
           // 使用 POSIX file 复制文件引用，而不是文件内容
           final script = 'set the clipboard to POSIX file "$escapedPath"';
           final result = await Process.run('osascript', ['-e', script]);
@@ -1342,7 +1371,8 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       } else if (Platform.isWindows) {
         // Windows: 使用 PowerShell 复制文件
         try {
-          final escapedPath = localPath.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+          final escapedPath =
+              localPath.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
           final result = await Process.run('powershell', [
             '-Command',
             'Set-Clipboard -Path "$escapedPath"',
@@ -1361,7 +1391,12 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         // Linux: 使用 xclip 复制文件
         try {
           final fileBytes = await localFile.readAsBytes();
-          final process = await Process.start('xclip', ['-selection', 'clipboard', '-t', file.isVideo ? 'video/mp4' : 'image/png']);
+          final process = await Process.start('xclip', [
+            '-selection',
+            'clipboard',
+            '-t',
+            file.isVideo ? 'video/mp4' : 'image/png'
+          ]);
           process.stdin.add(fileBytes);
           await process.stdin.close();
           final exitCode = await process.exitCode;
@@ -1373,7 +1408,8 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         } catch (e) {
           try {
             final fileBytes = await localFile.readAsBytes();
-            final process = await Process.start('xsel', ['--clipboard', '--input']);
+            final process =
+                await Process.start('xsel', ['--clipboard', '--input']);
             process.stdin.add(fileBytes);
             await process.stdin.close();
             final exitCode = await process.exitCode;
@@ -1402,7 +1438,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       final downloadDir = await _downloadSettings.getDownloadPath();
       final localPath = path.join(downloadDir, file.name);
       final localFile = File(localPath);
-      
+
       if (!await localFile.exists()) {
         _showInfo('文件不存在');
         return;
@@ -1451,9 +1487,9 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
 
       // 检查是否正在下载
       final existingTask = await _downloadManager.findTaskByFileName(file.name);
-      if (existingTask != null && 
-          (existingTask.status == DownloadStatus.downloading || 
-           existingTask.status == DownloadStatus.pending)) {
+      if (existingTask != null &&
+          (existingTask.status == DownloadStatus.downloading ||
+              existingTask.status == DownloadStatus.pending)) {
         _showInfo('文件正在下载中');
         return;
       }
@@ -1462,7 +1498,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         remoteFilePath: file.path,
         fileName: file.name,
       );
-      
+
       final downloadDir = await _downloadSettings.getDownloadPath();
       _showInfo('已添加到下载队列\n保存位置: $downloadDir');
     } catch (e) {
@@ -1470,4 +1506,3 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     }
   }
 }
-

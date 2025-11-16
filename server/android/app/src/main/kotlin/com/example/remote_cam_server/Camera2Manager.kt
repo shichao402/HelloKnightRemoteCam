@@ -69,6 +69,10 @@ class Camera2Manager(private val context: Context) {
     @Volatile
     private var actualPreviewHeight: Int = 480
     
+    // 相机传感器方向（在初始化时获取）
+    @Volatile
+    private var sensorOrientation: Int = 0
+    
     suspend fun initialize(cameraId: String, previewWidth: Int, previewHeight: Int): Boolean {
         try {
             Log.d(TAG, "开始初始化相机，相机ID: $cameraId, 预览尺寸: ${previewWidth}x${previewHeight}")
@@ -78,6 +82,10 @@ class Camera2Manager(private val context: Context) {
             Log.d(TAG, "获取相机管理器成功")
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             Log.d(TAG, "获取相机特性成功")
+            
+            // 获取并保存传感器方向
+            sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            Log.d(TAG, "传感器方向: $sensorOrientation 度")
             
             // 获取支持的输出尺寸
             val streamConfigurationMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
@@ -369,8 +377,8 @@ class Camera2Manager(private val context: Context) {
             val uSize = uBuffer.remaining()
             val vSize = vBuffer.remaining()
             
-            val width = image.width
-            val height = image.height
+            var width = image.width
+            var height = image.height
             
             // 创建NV21格式的字节数组
             val nv21 = ByteArray(ySize + uSize + vSize)
@@ -379,7 +387,8 @@ class Camera2Manager(private val context: Context) {
             vBuffer.get(nv21, ySize, vSize)
             uBuffer.get(nv21, ySize + vSize, uSize)
             
-            // 使用YuvImage将NV21转换为JPEG
+            // 预览流：只发送原始YUV数据，不做旋转处理
+            // 旋转由客户端根据锁定状态和方向统一处理
             val yuvImage = android.graphics.YuvImage(
                 nv21,
                 ImageFormat.NV21,
@@ -398,12 +407,13 @@ class Camera2Manager(private val context: Context) {
             val jpegBytes = jpegOutputStream.toByteArray()
             jpegOutputStream.close()
             
-            // 调用回调函数传递JPEG数据
+            // 调用回调函数传递JPEG数据（原始数据，未旋转）
             previewFrameCallback?.invoke(jpegBytes)
         } catch (e: Exception) {
             Log.e(TAG, "处理预览图像失败", e)
         }
     }
+    
     
     fun startRecording(
         outputPath: String, 
@@ -1313,6 +1323,16 @@ class Camera2Manager(private val context: Context) {
     // 获取实际预览尺寸
     fun getPreviewSize(): Pair<Int, Int> {
         return Pair(actualPreviewWidth, actualPreviewHeight)
+    }
+    
+    // 获取方向状态
+    fun getOrientationStatus(): Map<String, Any> {
+        return mapOf(
+            "orientationLocked" to orientationLocked,
+            "lockedRotationAngle" to lockedRotationAngle,
+            "currentDeviceOrientation" to currentDeviceOrientation,
+            "sensorOrientation" to sensorOrientation
+        )
     }
 }
 

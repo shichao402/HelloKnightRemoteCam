@@ -42,6 +42,11 @@ class CameraService {
   Map<String, int> getPreviewSize() {
     return _nativeCamera?.getPreviewSize() ?? {'width': 640, 'height': 480};
   }
+  
+  /// 获取方向状态
+  Future<Map<String, dynamic>?> getOrientationStatus() async {
+    return await _nativeCamera?.getOrientationStatus();
+  }
 
   /// 恢复预览流（应用切回前台时调用）
   Future<void> resumePreview() async {

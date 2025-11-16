@@ -4,16 +4,15 @@ import 'package:flutter_mjpeg/flutter_mjpeg.dart';
 import '../services/logger_service.dart';
 
 /// 使用flutter_mjpeg库显示MJPEG流的Widget
+/// 注意：此组件直接填充父容器，宽高比由外层的 AspectRatio 控制
 class MjpegStreamWidget extends StatefulWidget {
   final String streamUrl;
-  final BoxFit fit;
-  final int? previewWidth;  // 预览流的实际宽度（从服务器获取）
-  final int? previewHeight; // 预览流的实际高度（从服务器获取）
+  final int? previewWidth; // 预览流的实际宽度（从服务器获取，仅用于日志）
+  final int? previewHeight; // 预览流的实际高度（从服务器获取，仅用于日志）
 
   const MjpegStreamWidget({
     Key? key,
     required this.streamUrl,
-    this.fit = BoxFit.contain,
     this.previewWidth,
     this.previewHeight,
   }) : super(key: key);
@@ -29,40 +28,33 @@ class _MjpegStreamWidgetState extends State<MjpegStreamWidget> {
   Timer? _reconnectTimer;
   int _reconnectAttempts = 0;
   static const int _maxReconnectAttempts = 10;
-  
-  // 记录上次的预览尺寸，用于避免重复日志
-  int? _lastLoggedWidth;
-  int? _lastLoggedHeight;
 
   @override
   void initState() {
     super.initState();
     _logger.log('初始化MJPEG流: ${widget.streamUrl}', tag: 'PREVIEW');
-    // 记录初始预览尺寸
+    // 记录初始预览尺寸（如果提供）
     if (widget.previewWidth != null && widget.previewHeight != null) {
-      _logger.log('MjpegStreamWidget使用服务器预览尺寸: ${widget.previewWidth}x${widget.previewHeight}', tag: 'PREVIEW');
-      _lastLoggedWidth = widget.previewWidth;
-      _lastLoggedHeight = widget.previewHeight;
-    } else {
-      _logger.log('MjpegStreamWidget使用默认预览尺寸: 640x480 (服务器尺寸未提供)', tag: 'PREVIEW');
+      _logger.log(
+          'MjpegStreamWidget使用服务器预览尺寸: ${widget.previewWidth}x${widget.previewHeight}',
+          tag: 'PREVIEW');
     }
   }
-  
+
   @override
   void didUpdateWidget(MjpegStreamWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     // 仅在预览尺寸变化时记录日志
-    if (widget.previewWidth != oldWidget.previewWidth || widget.previewHeight != oldWidget.previewHeight) {
+    if (widget.previewWidth != oldWidget.previewWidth ||
+        widget.previewHeight != oldWidget.previewHeight) {
       if (widget.previewWidth != null && widget.previewHeight != null) {
-        _logger.log('MjpegStreamWidget预览尺寸已更新: ${widget.previewWidth}x${widget.previewHeight}', tag: 'PREVIEW');
-        _lastLoggedWidth = widget.previewWidth;
-        _lastLoggedHeight = widget.previewHeight;
-      } else {
-        _logger.log('MjpegStreamWidget预览尺寸已更新为默认值: 640x480', tag: 'PREVIEW');
+        _logger.log(
+            'MjpegStreamWidget预览尺寸已更新: ${widget.previewWidth}x${widget.previewHeight}',
+            tag: 'PREVIEW');
       }
     }
   }
-  
+
   @override
   void dispose() {
     _reconnectTimer?.cancel();
@@ -72,19 +64,19 @@ class _MjpegStreamWidgetState extends State<MjpegStreamWidget> {
   void _onError(String error) {
     _logger.logError('MJPEG流错误', error: Exception(error));
     if (!mounted) return;
-    
+
     // 使用addPostFrameCallback确保不在build期间调用setState
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      
+
       // 只有非超时错误才触发重连（超时可能是正常的）
       final isTimeout = error.contains('Timeout') || error.contains('超时');
-      
+
       setState(() {
         _hasError = true;
         _errorMessage = error;
       });
-      
+
       // 自动重连（超时错误也重连，但延迟更短）
       if (!isTimeout || _reconnectAttempts < 3) {
         _scheduleReconnect();
@@ -93,18 +85,18 @@ class _MjpegStreamWidgetState extends State<MjpegStreamWidget> {
       }
     });
   }
-  
+
   // 安排重连
   void _scheduleReconnect() {
     if (_reconnectAttempts >= _maxReconnectAttempts) {
       _logger.log('达到最大重连次数，停止重连', tag: 'PREVIEW');
       return;
     }
-    
+
     _reconnectTimer?.cancel();
     _reconnectAttempts++;
     _logger.log('安排重连MJPEG流 (第$_reconnectAttempts次)', tag: 'PREVIEW');
-    
+
     _reconnectTimer = Timer(Duration(seconds: 3 * _reconnectAttempts), () {
       if (mounted) {
         _logger.log('执行重连MJPEG流 (第$_reconnectAttempts次)', tag: 'PREVIEW');
@@ -165,7 +157,7 @@ class _MjpegStreamWidgetState extends State<MjpegStreamWidget> {
         ],
       );
     }
-    
+
     // 如果错误但没有重连定时器，说明可能是临时错误，直接尝试重建
     if (_hasError && _reconnectTimer == null) {
       // 重置错误状态，让流重新连接
@@ -180,42 +172,28 @@ class _MjpegStreamWidgetState extends State<MjpegStreamWidget> {
       });
     }
 
-    // 使用预览流的实际分辨率（从服务器获取）
-    final previewWidth = widget.previewWidth ?? 640;
-    final previewHeight = widget.previewHeight ?? 480;
-    
-    // 使用FittedBox实现BoxFit效果，保持原始比例
-    return FittedBox(
-      fit: widget.fit, // BoxFit.contain 保持原始比例，内切于父容器
-      alignment: Alignment.center,
-      child: SizedBox(
-        // 使用预览流的实际分辨率（从服务器获取）
-        // 这个尺寸用于FittedBox计算缩放，确保保持原始比例
-        width: previewWidth.toDouble(),
-        height: previewHeight.toDouble(),
-        child: Mjpeg(
-          key: ValueKey('mjpeg_$_reconnectAttempts'), // 使用key强制重建以重连
-          isLive: true,
-          stream: widget.streamUrl,
-          error: (context, error, stack) {
-            _logger.logError('MJPEG流错误', error: error, stackTrace: stack);
-            // 延迟调用_onError，避免在build期间调用setState
-            Future.microtask(() => _onError(error.toString()));
-            return const Center(
-              child: Icon(
-                Icons.videocam_off,
-                size: 64,
-                color: Colors.grey,
-              ),
-            );
-          },
-          loading: (context) {
-            return const Center(
-              child: CircularProgressIndicator(),
-            );
-          },
-        ),
-      ),
+    // 直接填充父容器，由外层的 AspectRatio 控制宽高比
+    return Mjpeg(
+      key: ValueKey('mjpeg_$_reconnectAttempts'), // 使用key强制重建以重连
+      isLive: true,
+      stream: widget.streamUrl,
+      error: (context, error, stack) {
+        _logger.logError('MJPEG流错误', error: error, stackTrace: stack);
+        // 延迟调用_onError，避免在build期间调用setState
+        Future.microtask(() => _onError(error.toString()));
+        return const Center(
+          child: Icon(
+            Icons.videocam_off,
+            size: 64,
+            color: Colors.grey,
+          ),
+        );
+      },
+      loading: (context) {
+        return const Center(
+          child: CircularProgressIndicator(),
+        );
+      },
     );
   }
 }
