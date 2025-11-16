@@ -593,16 +593,19 @@ class Camera2Manager(private val context: Context) {
                 setVideoFrameRate(videoFrameRate)
                 setVideoEncodingBitRate(videoBitRate)
                 
-                // 设置视频方向
+                // 设置视频方向（与拍照方向计算逻辑一致，确保预览和拍摄方向一致）
                 val videoOrientation = if (orientationLocked) {
                     // 方向锁定：使用手动旋转角度
-                    lockedRotationAngle
+                    // sensorOrientation + 90（基础补偿）+ lockedRotationAngle（手动旋转）
+                    (sensorOrientation + 90 + lockedRotationAngle) % 360
                 } else {
                     // 方向解锁：使用重力感应调整方向
-                    currentDeviceOrientation
+                    // 计算视频方向：sensorOrientation + deviceOrientation
+                    // deviceOrientation是相对于竖屏的角度（0, 90, 180, 270）
+                    (sensorOrientation + currentDeviceOrientation) % 360
                 }
                 setOrientationHint(videoOrientation)
-                Log.d(TAG, "MediaRecorder配置: 分辨率=${finalVideoSize.width}x${finalVideoSize.height}, 帧率=${videoFrameRate}fps, 比特率=${videoBitRate}, 方向=$videoOrientation (锁定=$orientationLocked)")
+                Log.d(TAG, "MediaRecorder配置: 分辨率=${finalVideoSize.width}x${finalVideoSize.height}, 帧率=${videoFrameRate}fps, 比特率=${videoBitRate}, 方向=$videoOrientation (锁定=$orientationLocked, 传感器方向=$sensorOrientation, ${if (orientationLocked) "锁定角度=$lockedRotationAngle" else "设备方向=$currentDeviceOrientation"})")
                 
                 // 如果使用持久化Surface，设置它
                 val persistentSurfaceToUse = persistentSurface

@@ -20,6 +20,7 @@ import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
 import '../services/connection_settings_service.dart';
+import '../utils/retry_helper.dart';
 
 class CameraControlScreen extends StatefulWidget {
   final ApiService apiService;
@@ -44,9 +45,10 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   // 连接状态管理
   bool _isConnected = true;
   bool _isReconnecting = false;
-  Timer? _reconnectTimer;
   Timer? _connectionCheckTimer;
   StreamSubscription? _webSocketSubscription; // WebSocket通知消息订阅
+  RetryHelper? _reconnectHelper; // 重连助手
+  RetryHelper? _webSocketReconnectHelper; // WebSocket重连助手
   final ClientLoggerService _logger = ClientLoggerService();
 
   // 左右布局比例（0.0-1.0，表示左侧占比）
@@ -92,6 +94,8 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
 
   /// 初始化方向锁定状态
   Future<void> _initializeOrientationLock() async {
+    if (!mounted) return;
+
     try {
       // 先从本地存储读取保存的偏好设置
       final savedPrefs = await _orientationPrefs.getAllPreferences();
@@ -103,13 +107,17 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           tag: 'ORIENTATION');
 
       // 先使用本地保存的值设置本地状态
-      setState(() {
-        _orientationLocked = savedOrientationLocked;
-        _lockedRotationAngle = savedLockedRotationAngle;
-      });
+      if (mounted) {
+        setState(() {
+          _orientationLocked = savedOrientationLocked;
+          _lockedRotationAngle = savedLockedRotationAngle;
+        });
+      }
 
       // 从服务器获取方向状态（获取传感器方向和设备方向）
       final result = await widget.apiService.getSettingsStatus();
+      if (!mounted) return;
+
       if (result['success'] == true && result['status'] != null) {
         final status = result['status'] as Map<String, dynamic>;
         final orientation = status['orientation'] as Map<String, dynamic>?;
@@ -125,19 +133,26 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
               tag: 'ORIENTATION');
 
           // 更新传感器方向和设备方向
-          setState(() {
-            _sensorOrientation = sensorOrientation;
-          });
+          if (mounted) {
+            setState(() {
+              _sensorOrientation = sensorOrientation;
+            });
+          }
           _deviceOrientationNotifier.value = currentDeviceOrientation;
 
           // 将本地保存的偏好设置同步到服务器
-          await widget.apiService.setOrientationLock(savedOrientationLocked);
-          if (savedOrientationLocked) {
-            await widget.apiService
-                .setLockedRotationAngle(savedLockedRotationAngle);
-            _logger.log(
-                '已同步本地偏好设置到服务器: 锁定=$savedOrientationLocked, 锁定角度=$savedLockedRotationAngle°',
-                tag: 'ORIENTATION');
+          try {
+            await widget.apiService.setOrientationLock(savedOrientationLocked);
+            if (savedOrientationLocked) {
+              await widget.apiService
+                  .setLockedRotationAngle(savedLockedRotationAngle);
+              _logger.log(
+                  '已同步本地偏好设置到服务器: 锁定=$savedOrientationLocked, 锁定角度=$savedLockedRotationAngle°',
+                  tag: 'ORIENTATION');
+            }
+          } catch (e, stackTrace) {
+            _logger.logError('同步偏好设置到服务器失败', error: e, stackTrace: stackTrace);
+            // 继续执行，不中断初始化流程
           }
         } else {
           // 如果没有方向信息，使用默认值
@@ -148,18 +163,23 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       }
 
       // 更新客户端预览旋转角度
-      _updatePreviewRotation();
+      if (mounted) {
+        _updatePreviewRotation();
+      }
     } catch (e, stackTrace) {
       _logger.logError('初始化方向锁定状态失败', error: e, stackTrace: stackTrace);
       // 出错时使用默认值
-      _updatePreviewRotation();
+      if (mounted) {
+        _updatePreviewRotation();
+      }
     }
   }
 
   @override
   void dispose() {
     _downloadSubscription?.cancel();
-    _reconnectTimer?.cancel();
+    _reconnectHelper?.dispose();
+    _webSocketReconnectHelper?.dispose();
     _connectionCheckTimer?.cancel();
     _webSocketSubscription?.cancel();
     _deviceOrientationNotifier.dispose();
@@ -171,95 +191,134 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   /// 启动WebSocket连接（监听server的新文件通知）
   void _startFileListRefreshTimer() {
     _logger.log('准备启动WebSocket通知监听', tag: 'WEBSOCKET');
-    _connectToWebSocketNotifications();
+    _connectToWebSocketNotificationsWithRetry();
   }
 
   /// 连接到WebSocket通知流（监听服务器推送的通知）
-  void _connectToWebSocketNotifications() async {
+  /// 返回 true 表示连接成功，false 表示连接失败需要重试
+  Future<bool> _connectToWebSocketNotifications() async {
+    if (!mounted || !_isConnected) return false;
+
     try {
       // 确保ApiService的WebSocket已连接
       await widget.apiService.connectWebSocket();
 
       // 监听通知消息
       final notificationStream = widget.apiService.webSocketNotifications;
-      if (notificationStream != null) {
-        _webSocketSubscription = notificationStream.listen(
-          (notification) {
-            if (!mounted || !_isConnected) {
-              return;
-            }
+      if (notificationStream == null) {
+        _logger.log('WebSocket通知流不可用', tag: 'WEBSOCKET');
+        return false;
+      }
 
-            try {
-              final event = notification['event'] as String?;
-              final data = notification['data'] as Map<String, dynamic>?;
+      // 取消之前的订阅
+      _webSocketSubscription?.cancel();
 
-              _logger.log('收到WebSocket通知: event=$event', tag: 'WEBSOCKET');
+      _webSocketSubscription = notificationStream.listen(
+        (notification) {
+          _logger.log('收到WebSocket通知原始数据: $notification', tag: 'WEBSOCKET');
+          _logger.log('当前连接状态: mounted=$mounted, _isConnected=$_isConnected',
+              tag: 'WEBSOCKET');
 
-              // 处理新文件通知
-              if (event == 'new_files' && data != null) {
-                _logger.log('收到新文件通知，直接使用通知中的文件信息', tag: 'WEBSOCKET');
-                // 收到新文件通知，直接使用通知中的文件信息
-                _handleNewFilesNotification(data);
-              } else if (event == 'orientation_changed' && data != null) {
-                // 处理设备方向变化通知
-                final orientation = data['orientation'] as int?;
-                if (orientation != null) {
-                  _logger.log('收到设备方向变化通知: $orientation 度', tag: 'ORIENTATION');
-                  if (mounted) {
-                    _deviceOrientationNotifier.value = orientation;
-                    // 更新客户端预览旋转角度
+          if (!mounted || !_isConnected) {
+            _logger.log('跳过通知处理: mounted=$mounted, _isConnected=$_isConnected',
+                tag: 'WEBSOCKET');
+            return;
+          }
+
+          try {
+            final event = notification['event'] as String?;
+            final data = notification['data'] as Map<String, dynamic>?;
+
+            _logger.log('收到WebSocket通知: event=$event', tag: 'WEBSOCKET');
+
+            // 处理新文件通知
+            if (event == 'new_files' && data != null) {
+              _logger.log('收到新文件通知，直接使用通知中的文件信息', tag: 'WEBSOCKET');
+              // 收到新文件通知，直接使用通知中的文件信息
+              _handleNewFilesNotification(data);
+            } else if (event == 'orientation_changed' && data != null) {
+              // 处理设备方向变化通知
+              final orientation = data['orientation'] as int?;
+              _logger.log(
+                  '处理方向变化通知: orientation=$orientation, _orientationLocked=$_orientationLocked',
+                  tag: 'ORIENTATION');
+              if (orientation != null) {
+                _logger.log('收到设备方向变化通知: $orientation 度', tag: 'ORIENTATION');
+                if (mounted) {
+                  _deviceOrientationNotifier.value = orientation;
+                  // 只有在解锁状态下才更新预览旋转角度
+                  // 锁定状态下旋转角度由锁定角度决定，不受设备方向影响
+                  if (!_orientationLocked) {
+                    _logger.log('方向已解锁，更新预览旋转角度', tag: 'ORIENTATION');
                     _updatePreviewRotation();
-                  }
-                }
-              } else if (event == 'connected') {
-                _logger.log('WebSocket连接确认', tag: 'WEBSOCKET');
-                // 获取预览尺寸
-                if (data != null && data['previewSize'] != null) {
-                  final previewSize =
-                      data['previewSize'] as Map<String, dynamic>?;
-                  if (previewSize != null) {
-                    final width = previewSize['width'] as int? ?? 640;
-                    final height = previewSize['height'] as int? ?? 480;
-                    if (mounted) {
-                      _previewSizeNotifier.value = {
-                        'width': width,
-                        'height': height
-                      };
-                      _logger.log('收到服务器预览尺寸: ${width}x${height}',
-                          tag: 'PREVIEW');
-                    }
+                  } else {
+                    _logger.log('方向已锁定，跳过更新预览旋转角度', tag: 'ORIENTATION');
                   }
                 }
               }
-            } catch (e) {
-              _logger.logError('处理WebSocket通知失败', error: e);
-            }
-          },
-          onError: (error) {
-            _logger.logError('WebSocket通知流错误', error: error);
-            // 连接失败，5秒后重试
-            if (mounted && _isConnected) {
-              Future.delayed(const Duration(seconds: 5), () {
-                if (mounted && _isConnected) {
-                  _connectToWebSocketNotifications();
+            } else if (event == 'connected') {
+              _logger.log('WebSocket连接确认', tag: 'WEBSOCKET');
+              // 获取预览尺寸
+              if (data != null && data['previewSize'] != null) {
+                final previewSize =
+                    data['previewSize'] as Map<String, dynamic>?;
+                if (previewSize != null) {
+                  final width = previewSize['width'] as int? ?? 640;
+                  final height = previewSize['height'] as int? ?? 480;
+                  if (mounted) {
+                    _previewSizeNotifier.value = {
+                      'width': width,
+                      'height': height
+                    };
+                    _logger.log('收到服务器预览尺寸: ${width}x${height}',
+                        tag: 'PREVIEW');
+                  }
                 }
-              });
+              }
             }
-          },
-          cancelOnError: false,
-        );
-      }
+          } catch (e) {
+            _logger.logError('处理WebSocket通知失败', error: e);
+          }
+        },
+        onError: (error) {
+          _logger.logError('WebSocket通知流错误', error: error);
+          // 触发重连
+          if (mounted && _isConnected) {
+            _webSocketReconnectHelper?.cancel();
+            _connectToWebSocketNotificationsWithRetry();
+          }
+        },
+        cancelOnError: false,
+      );
+
+      return true; // 连接成功
     } catch (e, stackTrace) {
       _logger.logError('连接WebSocket通知流失败', error: e, stackTrace: stackTrace);
-      // 连接失败，5秒后重试
-      if (mounted && _isConnected) {
-        Future.delayed(const Duration(seconds: 5), () {
-          if (mounted && _isConnected) {
-            _connectToWebSocketNotifications();
-          }
-        });
-      }
+      return false; // 连接失败，需要重试
     }
+  }
+
+  /// 连接到WebSocket通知流（使用重试助手）
+  void _connectToWebSocketNotificationsWithRetry() {
+    if (!mounted || !_isConnected) return;
+
+    // 取消之前的重连助手
+    _webSocketReconnectHelper?.cancel();
+    _webSocketReconnectHelper = RetryHelper();
+
+    _webSocketReconnectHelper!.executeWithRetry(
+      operation: _connectToWebSocketNotifications,
+      onSuccess: () {
+        _logger.log('WebSocket通知流连接成功', tag: 'WEBSOCKET');
+      },
+      onFailure: () {
+        _logger.log('WebSocket通知流连接失败，已达到最大重试次数', tag: 'WEBSOCKET');
+      },
+      maxAttempts: 20,
+      interval: const Duration(seconds: 5),
+      timeout: const Duration(seconds: 10),
+      tag: 'WEBSOCKET_RECONNECT',
+    );
   }
 
   // 开始连接检查
@@ -291,6 +350,10 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           });
           _logger.log('连接已恢复', tag: 'CONNECTION');
           _refreshFileList();
+          // 重新初始化方向状态（确保方向信息是最新的）
+          _initializeOrientationLock();
+          // 重新连接WebSocket通知流
+          _connectToWebSocketNotificationsWithRetry();
         }
         // 如果连接状态没有变化（pingSuccess == _isConnected），不调用 setState
       } catch (e) {
@@ -313,56 +376,72 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     }
 
     _logger.log('开始重连流程', tag: 'CONNECTION');
-    setState(() {
-      _isReconnecting = true;
-    });
+    if (mounted) {
+      setState(() {
+        _isReconnecting = true;
+      });
+    }
 
-    _reconnectTimer?.cancel();
-    int reconnectAttempts = 0;
-    const maxReconnectAttempts = 20; // 最多尝试20次（约1分钟）
+    // 取消之前的重连助手
+    _reconnectHelper?.cancel();
+    _reconnectHelper = RetryHelper();
 
-    _reconnectTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
+    _reconnectHelper!.executeWithRetry(
+      operation: () async {
+        if (!mounted) return false;
 
-      reconnectAttempts++;
-      if (reconnectAttempts > maxReconnectAttempts) {
-        _logger.log('达到最大重连次数，停止重连', tag: 'CONNECTION');
-        timer.cancel();
-        _reconnectTimer = null;
+        try {
+          _logger.log('尝试重连... (第${_reconnectHelper!.attempts}次)',
+              tag: 'CONNECTION');
+          final pingSuccess = await widget.apiService.ping();
+
+          if (!mounted) return false;
+
+          if (pingSuccess) {
+            if (mounted) {
+              setState(() {
+                _isConnected = true;
+                _isReconnecting = false;
+              });
+            }
+            _logger.log('重连成功', tag: 'CONNECTION');
+            _refreshFileList();
+            // 重新初始化方向状态（确保方向信息是最新的）
+            if (mounted) {
+              _initializeOrientationLock();
+            }
+            // 重新连接WebSocket通知流
+            if (mounted) {
+              _connectToWebSocketNotificationsWithRetry();
+            }
+            return true; // 重连成功
+          } else {
+            _logger.log('重连失败：ping返回false (第${_reconnectHelper!.attempts}次)',
+                tag: 'CONNECTION');
+            return false; // 需要重试
+          }
+        } catch (e) {
+          _logger.log('重连失败: $e (第${_reconnectHelper!.attempts}次)',
+              tag: 'CONNECTION');
+          return false; // 需要重试
+        }
+      },
+      onSuccess: () {
+        _logger.log('重连成功', tag: 'CONNECTION');
+      },
+      onFailure: () {
+        _logger.log('重连失败，已达到最大重试次数', tag: 'CONNECTION');
         if (mounted) {
           setState(() {
             _isReconnecting = false;
           });
         }
-        return;
-      }
-
-      try {
-        _logger.log('尝试重连... (第$reconnectAttempts次)', tag: 'CONNECTION');
-        final pingSuccess = await widget.apiService.ping();
-
-        if (mounted) {
-          if (pingSuccess) {
-            setState(() {
-              _isConnected = true;
-              _isReconnecting = false;
-            });
-            timer.cancel();
-            _reconnectTimer = null;
-            _logger.log('重连成功', tag: 'CONNECTION');
-            _refreshFileList();
-          } else {
-            _logger.log('重连失败：ping返回false (第$reconnectAttempts次)',
-                tag: 'CONNECTION');
-          }
-        }
-      } catch (e) {
-        _logger.log('重连失败: $e (第$reconnectAttempts次)', tag: 'CONNECTION');
-      }
-    });
+      },
+      maxAttempts: 20,
+      interval: const Duration(seconds: 3),
+      timeout: const Duration(seconds: 5),
+      tag: 'CONNECTION_RECONNECT',
+    );
   }
 
   // 手动重连
@@ -382,6 +461,10 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         if (pingSuccess) {
           _showSuccess('重连成功');
           _refreshFileList();
+          // 重新初始化方向状态（确保方向信息是最新的）
+          _initializeOrientationLock();
+          // 重新连接WebSocket通知流
+          _connectToWebSocketNotificationsWithRetry();
         } else {
           _showError('重连失败，请检查服务器状态');
         }
@@ -409,9 +492,13 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       _connectionCheckTimer?.cancel();
       _connectionCheckTimer = null;
 
-      // 停止重连定时器
-      _reconnectTimer?.cancel();
-      _reconnectTimer = null;
+      // 停止重连助手
+      _reconnectHelper?.cancel();
+      _reconnectHelper = null;
+
+      // 停止WebSocket重连助手
+      _webSocketReconnectHelper?.cancel();
+      _webSocketReconnectHelper = null;
 
       // 取消WebSocket订阅
       _webSocketSubscription?.cancel();
@@ -924,48 +1011,73 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   /// 更新预览旋转角度（客户端处理旋转）
   /// 预览旋转角度必须与拍照方向一致，确保预览和拍摄的画面状态一致
   void _updatePreviewRotation() {
-    // 客户端根据锁定状态和方向计算旋转角度，与拍照方向一致
-    // 锁定状态：sensorOrientation + 90 + lockedRotationAngle（与拍照逻辑一致）
-    // 解锁状态：sensorOrientation + currentDeviceOrientation（与拍照逻辑一致）
-    final rotationAngle = _orientationLocked
-        ? (_sensorOrientation + 90 + _lockedRotationAngle) % 360
-        : (_sensorOrientation + _deviceOrientationNotifier.value) % 360;
-    _rotationAngleNotifier.value = rotationAngle;
-    _logger.log(
-        '更新预览旋转角度: ${_orientationLocked ? "锁定" : "解锁"}, 角度=$rotationAngle° (传感器=$_sensorOrientation°, ${_orientationLocked ? "锁定角度=$_lockedRotationAngle°" : "设备方向=${_deviceOrientationNotifier.value}°"})',
-        tag: 'PREVIEW');
+    if (!mounted) return;
+
+    try {
+      // 客户端根据锁定状态和方向计算旋转角度，与拍照方向一致
+      // 锁定状态：sensorOrientation + 90 + lockedRotationAngle（与拍照逻辑一致）
+      // 解锁状态：sensorOrientation + currentDeviceOrientation（与拍照逻辑一致）
+      final rotationAngle = _orientationLocked
+          ? (_sensorOrientation + 90 + _lockedRotationAngle) % 360
+          : (_sensorOrientation + _deviceOrientationNotifier.value) % 360;
+      _rotationAngleNotifier.value = rotationAngle;
+      _logger.log(
+          '更新预览旋转角度: ${_orientationLocked ? "锁定" : "解锁"}, 角度=$rotationAngle° (传感器=$_sensorOrientation°, ${_orientationLocked ? "锁定角度=$_lockedRotationAngle°" : "设备方向=${_deviceOrientationNotifier.value}°"})',
+          tag: 'PREVIEW');
+    } catch (e, stackTrace) {
+      _logger.logError('更新预览旋转角度失败', error: e, stackTrace: stackTrace);
+    }
   }
 
   /// 旋转预览（锁定状态下）
   Future<void> _rotatePreview() async {
+    if (!mounted) return;
+
     final newAngle = (_lockedRotationAngle + 90) % 360;
     try {
       // 发送旋转角度到服务器（用于拍照方向）
       final result = await widget.apiService.setLockedRotationAngle(newAngle);
+      if (!mounted) return;
+
       if (result['success'] == true) {
-        setState(() => _lockedRotationAngle = newAngle);
+        if (mounted) {
+          setState(() => _lockedRotationAngle = newAngle);
+        }
         // 保存到本地存储
         await _orientationPrefs.saveLockedRotationAngle(newAngle);
         // 更新客户端预览旋转角度
-        _updatePreviewRotation();
-        _showSuccess('预览已旋转到 ${newAngle}°');
+        if (mounted) {
+          _updatePreviewRotation();
+          _showSuccess('预览已旋转到 ${newAngle}°');
+        }
       } else {
-        _showError('设置旋转角度失败: ${result['error']}');
+        if (mounted) {
+          _showError('设置旋转角度失败: ${result['error']}');
+        }
       }
-    } catch (e) {
-      _showError('设置旋转角度失败: $e');
+    } catch (e, stackTrace) {
+      _logger.logError('旋转预览失败', error: e, stackTrace: stackTrace);
+      if (mounted) {
+        _showError('设置旋转角度失败: $e');
+      }
     }
   }
 
   /// 切换方向锁定状态
   Future<void> _toggleOrientationLock() async {
+    if (!mounted) return;
+
     final newLockState = !_orientationLocked;
     try {
       final result = await widget.apiService.setOrientationLock(newLockState);
+      if (!mounted) return;
+
       if (result['success'] == true) {
-        setState(() {
-          _orientationLocked = newLockState;
-        });
+        if (mounted) {
+          setState(() {
+            _orientationLocked = newLockState;
+          });
+        }
         // 保存到本地存储
         await _orientationPrefs.saveOrientationLocked(newLockState);
         // 如果切换到锁定状态，确保服务器使用当前的锁定角度
@@ -973,13 +1085,20 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           await widget.apiService.setLockedRotationAngle(_lockedRotationAngle);
         }
         // 更新客户端预览旋转角度
-        _updatePreviewRotation();
-        _showSuccess(newLockState ? '方向已锁定' : '方向已解锁');
+        if (mounted) {
+          _updatePreviewRotation();
+          _showSuccess(newLockState ? '方向已锁定' : '方向已解锁');
+        }
       } else {
-        _showError('设置方向锁定失败: ${result['error']}');
+        if (mounted) {
+          _showError('设置方向锁定失败: ${result['error']}');
+        }
       }
-    } catch (e) {
-      _showError('设置方向锁定失败: $e');
+    } catch (e, stackTrace) {
+      _logger.logError('切换方向锁定状态失败', error: e, stackTrace: stackTrace);
+      if (mounted) {
+        _showError('设置方向锁定失败: $e');
+      }
     }
   }
 
