@@ -29,12 +29,45 @@ class ConnectedDevice {
   final String ipAddress;
   final DateTime connectedAt;
   DateTime lastActivity;
+  // 心跳历史记录：记录最近10秒内的心跳时间戳（用于计算健康度）
+  final List<DateTime> _heartbeatHistory = [];
+  static const int _heartbeatHistoryWindowSeconds = 10; // 记录最近10秒的心跳
 
   ConnectedDevice({
     required this.ipAddress,
     required this.connectedAt,
     required this.lastActivity,
   });
+
+  // 记录一次心跳
+  void recordHeartbeat() {
+    final now = DateTime.now();
+    lastActivity = now;
+    _heartbeatHistory.add(now);
+    
+    // 只保留最近10秒的心跳记录
+    final cutoffTime = now.subtract(Duration(seconds: _heartbeatHistoryWindowSeconds));
+    _heartbeatHistory.removeWhere((timestamp) => timestamp.isBefore(cutoffTime));
+  }
+
+  // 计算心跳健康度（百分比）：最近10秒内应该收到10次心跳（1秒一次）
+  double getHeartbeatHealth() {
+    if (_heartbeatHistory.isEmpty) {
+      return 0.0;
+    }
+    
+    final now = DateTime.now();
+    final cutoffTime = now.subtract(Duration(seconds: _heartbeatHistoryWindowSeconds));
+    final recentHeartbeats = _heartbeatHistory.where((timestamp) => 
+      timestamp.isAfter(cutoffTime)
+    ).length;
+    
+    // 理想情况下，10秒内应该有10次心跳（1秒一次）
+    final expectedHeartbeats = _heartbeatHistoryWindowSeconds;
+    final health = (recentHeartbeats / expectedHeartbeats * 100).clamp(0.0, 100.0);
+    
+    return health;
+  }
 }
 
 class HttpServerService {
@@ -117,13 +150,15 @@ class HttpServerService {
     final wasNew = !_connectedDevices.containsKey(ipAddress);
     
     if (_connectedDevices.containsKey(ipAddress)) {
-      _connectedDevices[ipAddress]!.lastActivity = now;
+      _connectedDevices[ipAddress]!.recordHeartbeat();
     } else {
-      _connectedDevices[ipAddress] = ConnectedDevice(
+      final device = ConnectedDevice(
         ipAddress: ipAddress,
         connectedAt: now,
         lastActivity: now,
       );
+      device.recordHeartbeat(); // 记录首次心跳
+      _connectedDevices[ipAddress] = device;
       logger.log('新设备连接: $ipAddress', tag: 'CONNECTION');
     }
     
@@ -1529,5 +1564,27 @@ class HttpServerService {
   bool get isRunning => _server != null;
   List<ConnectedDevice> get connectedDevices => _connectedDevices.values.toList();
   int get connectedDeviceCount => _connectedDevices.length;
+  
+  // 获取自动停止倒计时（秒），如果没有倒计时则返回null
+  int? getAutoStopCountdown() {
+    if (!_autoStopEnabled || !isRunning || _connectedDevices.isNotEmpty) {
+      return null; // 未启用、未运行或有连接时，无倒计时
+    }
+    
+    if (_noConnectionStartTime == null) {
+      return null; // 还未开始计时
+    }
+    
+    final now = DateTime.now();
+    final elapsed = now.difference(_noConnectionStartTime!);
+    final elapsedSeconds = elapsed.inSeconds;
+    final remainingSeconds = _autoStopSeconds - elapsedSeconds;
+    
+    if (remainingSeconds <= 0) {
+      return 0; // 倒计时已到
+    }
+    
+    return remainingSeconds;
+  }
 }
 

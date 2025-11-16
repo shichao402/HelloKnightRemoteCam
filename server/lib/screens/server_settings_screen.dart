@@ -20,6 +20,13 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   int _autoStopMinutes = 15; // UI显示用分钟，内部转换为秒存储
   bool _debugMode = false;
   bool _isLoading = true;
+  
+  // 临时状态（未保存的修改）
+  bool _tempAutoStartServer = false;
+  bool _tempAutoStopEnabled = false;
+  int _tempAutoStopMinutes = 15;
+  bool _tempDebugMode = false;
+  bool _hasUnsavedChanges = false;
 
   @override
   void initState() {
@@ -38,84 +45,114 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
       final seconds = prefs.getInt(_autoStopSecondsKey) ?? 20;
       _autoStopMinutes = seconds == 0 ? 0 : (seconds / 60).ceil(); // 向上取整到分钟
       _debugMode = _logger.debugEnabled;
+      
+      // 同步临时状态
+      _tempAutoStartServer = _autoStartServer;
+      _tempAutoStopEnabled = _autoStopEnabled;
+      _tempAutoStopMinutes = _autoStopMinutes;
+      _tempDebugMode = _debugMode;
+      _hasUnsavedChanges = false;
+      
       _isLoading = false;
     });
   }
 
-  Future<void> _saveAutoStart(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_autoStartKey, value);
+  // 更新临时状态（不保存）
+  void _updateTempAutoStart(bool value) {
     setState(() {
-      _autoStartServer = value;
+      _tempAutoStartServer = value;
+      _hasUnsavedChanges = _hasChanges();
     });
-    
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(value ? '已启用自动启动服务器' : '已禁用自动启动服务器'),
-        ),
-      );
-    }
   }
 
-  Future<void> _saveAutoStop(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_autoStopEnabledKey, value);
+  void _updateTempAutoStop(bool value) {
     setState(() {
-      _autoStopEnabled = value;
+      _tempAutoStopEnabled = value;
+      _hasUnsavedChanges = _hasChanges();
     });
-    
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(value 
-            ? (_autoStopMinutes == 0 
-                ? '已启用自动停止服务器\n但设置为无限时间（不会自动停止）'
-                : '已启用自动停止服务器\n无客户端连接${_autoStopMinutes}分钟后将自动停止')
-            : '已禁用自动停止服务器'),
-        ),
-      );
-    }
   }
 
-  Future<void> _saveAutoStopMinutes(int minutes) async {
+  void _updateTempAutoStopMinutes(int minutes) {
+    setState(() {
+      _tempAutoStopMinutes = minutes;
+      _hasUnsavedChanges = _hasChanges();
+    });
+  }
+
+  void _updateTempDebugMode(bool value) {
+    setState(() {
+      _tempDebugMode = value;
+      _hasUnsavedChanges = _hasChanges();
+    });
+  }
+
+  // 检查是否有未保存的更改
+  bool _hasChanges() {
+    return _tempAutoStartServer != _autoStartServer ||
+           _tempAutoStopEnabled != _autoStopEnabled ||
+           _tempAutoStopMinutes != _autoStopMinutes ||
+           _tempDebugMode != _debugMode;
+  }
+
+  // 保存所有设置
+  Future<void> _saveAllSettings() async {
+    // 如果没有未保存的更改，直接返回
+    if (!_hasUnsavedChanges) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('没有需要保存的更改'),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+      return;
+    }
+    
     final prefs = await SharedPreferences.getInstance();
-    // UI显示分钟，但存储时转换为秒
-    // 0分钟表示无限时间，保存为0秒
-    final seconds = minutes == 0 ? 0 : minutes * 60;
+    
+    // 保存自动启动设置
+    await prefs.setBool(_autoStartKey, _tempAutoStartServer);
+    
+    // 保存自动停止设置
+    await prefs.setBool(_autoStopEnabledKey, _tempAutoStopEnabled);
+    final seconds = _tempAutoStopMinutes == 0 ? 0 : _tempAutoStopMinutes * 60;
     await prefs.setInt(_autoStopSecondsKey, seconds);
-    setState(() {
-      _autoStopMinutes = minutes;
-    });
     
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(minutes == 0 
-            ? '自动停止时间已设置为无限（不自动停止）'
-            : '自动停止时间已设置为${minutes}分钟（${seconds}秒）'),
-        ),
-      );
-    }
-  }
-
-  Future<void> _saveDebugMode(bool value) async {
-    await _logger.setDebugMode(value);
-    setState(() {
-      _debugMode = value;
-    });
-    
-    if (value) {
+    // 保存调试模式
+    await _logger.setDebugMode(_tempDebugMode);
+    if (_tempDebugMode) {
       await _logger.cleanOldLogs();
     }
     
+    // 更新实际状态
+    setState(() {
+      _autoStartServer = _tempAutoStartServer;
+      _autoStopEnabled = _tempAutoStopEnabled;
+      _autoStopMinutes = _tempAutoStopMinutes;
+      _debugMode = _tempDebugMode;
+      _hasUnsavedChanges = false;
+    });
+    
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(value ? '调试模式已启用\n日志将保存到文件' : '调试模式已禁用'),
+        const SnackBar(
+          content: Text('设置已保存'),
+          duration: Duration(seconds: 2),
         ),
       );
     }
+  }
+
+  // 取消更改，恢复原始设置
+  void _cancelChanges() {
+    setState(() {
+      _tempAutoStartServer = _autoStartServer;
+      _tempAutoStopEnabled = _autoStopEnabled;
+      _tempAutoStopMinutes = _autoStopMinutes;
+      _tempDebugMode = _debugMode;
+      _hasUnsavedChanges = false;
+    });
   }
 
   Future<void> _viewLogFiles() async {
@@ -198,6 +235,42 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('设置'),
+        actions: [
+          if (_hasUnsavedChanges)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: TextButton(
+                onPressed: _cancelChanges,
+                child: const Text(
+                  '取消',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ElevatedButton.icon(
+              onPressed: _saveAllSettings,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _hasUnsavedChanges ? Colors.blue : Colors.grey,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              icon: const Icon(
+                Icons.save,
+                size: 18,
+              ),
+              label: const Text(
+                '保存',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
       body: ListView(
         children: [
@@ -214,39 +287,39 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
           SwitchListTile(
             title: const Text('启动后自动启动服务器'),
             subtitle: const Text('应用启动时自动启动HTTP服务器'),
-            value: _autoStartServer,
-            onChanged: _saveAutoStart,
+            value: _tempAutoStartServer,
+            onChanged: _updateTempAutoStart,
           ),
           SwitchListTile(
             title: const Text('自动停止服务器（电量优化）'),
-            subtitle: Text(_autoStopEnabled 
-              ? (_autoStopMinutes == 0 
+            subtitle: Text(_tempAutoStopEnabled 
+              ? (_tempAutoStopMinutes == 0 
                   ? '已启用自动停止，但设置为无限时间（不会自动停止）'
-                  : '无客户端连接${_autoStopMinutes}分钟后自动停止服务器')
+                  : '无客户端连接${_tempAutoStopMinutes}分钟后自动停止服务器')
               : '无客户端连接时自动停止服务器以节省电量'),
-            value: _autoStopEnabled,
-            onChanged: _saveAutoStop,
+            value: _tempAutoStopEnabled,
+            onChanged: _updateTempAutoStop,
           ),
-          if (_autoStopEnabled)
+          if (_tempAutoStopEnabled)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    _autoStopMinutes == 0 
+                    _tempAutoStopMinutes == 0 
                       ? '自动停止时间: 无限（不自动停止）'
-                      : '自动停止时间: ${_autoStopMinutes}分钟',
+                      : '自动停止时间: ${_tempAutoStopMinutes}分钟',
                     style: const TextStyle(fontSize: 14),
                   ),
                   Slider(
-                    value: _autoStopMinutes.toDouble(),
+                    value: _tempAutoStopMinutes.toDouble(),
                     min: 0,
                     max: 60,
                     divisions: 60,
-                    label: _autoStopMinutes == 0 ? '无限' : '${_autoStopMinutes}分钟',
+                    label: _tempAutoStopMinutes == 0 ? '无限' : '${_tempAutoStopMinutes}分钟',
                     onChanged: (value) {
-                      _saveAutoStopMinutes(value.toInt());
+                      _updateTempAutoStopMinutes(value.toInt());
                     },
                   ),
                 ],
@@ -266,10 +339,10 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
           SwitchListTile(
             title: const Text('启用调试模式'),
             subtitle: const Text('将详细日志保存到文件'),
-            value: _debugMode,
-            onChanged: _saveDebugMode,
+            value: _tempDebugMode,
+            onChanged: _updateTempDebugMode,
           ),
-          if (_debugMode)
+          if (_tempDebugMode)
             ListTile(
               leading: const Icon(Icons.folder),
               title: const Text('查看日志文件'),

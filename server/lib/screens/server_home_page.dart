@@ -352,10 +352,11 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
   // 启动定时刷新
   void _startRefreshTimer() {
     _stopRefreshTimer(); // 先停止已有的定时器
-    _refreshTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+    // 使用1秒刷新间隔，以便倒计时能够实时更新
+    _refreshTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted && _isServerRunning) {
         setState(() {
-          // 触发UI刷新，更新连接设备列表
+          // 触发UI刷新，更新连接设备列表和倒计时
         });
       } else {
         _stopRefreshTimer();
@@ -529,6 +530,42 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
                       '已连接设备',
                       '${_httpServer.connectedDeviceCount} 台',
                     ),
+                    // 显示自动停止倒计时
+                    if (_httpServer.connectedDeviceCount == 0) ...[
+                      const SizedBox(height: 8),
+                      Builder(
+                        builder: (context) {
+                          final countdown = _httpServer.getAutoStopCountdown();
+                          if (countdown != null && countdown > 0) {
+                            return Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: Colors.orange[100],
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.orange[300]!),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.timer, size: 18, color: Colors.orange[800]),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      '服务器将在 ${countdown} 秒后自动停止',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500,
+                                        color: Colors.orange[900],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+                          return const SizedBox.shrink();
+                        },
+                      ),
+                    ],
                     if (_httpServer.connectedDeviceCount > 0) ...[
                       const SizedBox(height: 8),
                       const Divider(),
@@ -543,6 +580,16 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
                       ),
                       const SizedBox(height: 8),
                       ..._httpServer.connectedDevices.map((device) {
+                        final health = device.getHeartbeatHealth();
+                        Color healthColor;
+                        if (health >= 80) {
+                          healthColor = Colors.green;
+                        } else if (health >= 50) {
+                          healthColor = Colors.orange;
+                        } else {
+                          healthColor = Colors.red;
+                        }
+                        
                         return Padding(
                           padding: const EdgeInsets.only(left: 16, top: 4, bottom: 4),
                           child: Row(
@@ -550,12 +597,36 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
                               const Icon(Icons.devices, size: 18, color: Colors.blue),
                               const SizedBox(width: 8),
                               Expanded(
-                                child: Text(
-                                  device.ipAddress,
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                  ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      device.ipAddress,
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          Icons.favorite,
+                                          size: 12,
+                                          color: healthColor,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          '心跳健康度: ${health.toStringAsFixed(0)}%',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: healthColor,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
                                 ),
                               ),
                               const SizedBox(width: 8),
