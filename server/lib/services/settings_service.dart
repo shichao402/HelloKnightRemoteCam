@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/camera_settings.dart';
+import 'logger_service.dart';
 
 class SettingsService {
   static const String _settingsKey = 'camera_settings';
+  final LoggerService _logger = LoggerService();
 
   // 保存设置
   Future<void> saveSettings(CameraSettings settings) async {
@@ -26,7 +28,7 @@ class SettingsService {
       final jsonMap = json.decode(jsonString) as Map<String, dynamic>;
       return CameraSettings.fromJson(jsonMap);
     } catch (e) {
-      print('加载设置失败: $e');
+      _logger.logError('加载设置失败', error: e);
       return const CameraSettings();
     }
   }

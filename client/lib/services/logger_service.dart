@@ -192,6 +192,10 @@ class ClientLoggerService {
 
   // API调用日志（增强版，记录更多详情）
   void logApiCall(String method, String endpoint, {Map<String, dynamic>? params, Map<String, String>? headers, String? body}) {
+    // 调试模式关闭时不输出任何日志
+    if (!_debugEnabled) {
+      return;
+    }
     final paramsStr = params != null ? '\n参数: $params' : '';
     final headersStr = headers != null && headers.isNotEmpty ? '\n请求头: $headers' : '';
     final bodyStr = body != null ? '\n请求体: $body' : '';
@@ -201,6 +205,10 @@ class ClientLoggerService {
 
   // API响应日志（增强版，记录更多详情）
   void logApiResponse(String endpoint, int statusCode, {dynamic body, String? error}) {
+    // 调试模式关闭时不输出任何日志
+    if (!_debugEnabled) {
+      return;
+    }
     final bodyStr = body != null ? '\n响应体: $body' : '';
     final errorStr = error != null ? '\n错误: $error' : '';
     final statusIcon = statusCode >= 200 && statusCode < 300 ? '✓' : '✗';
@@ -210,6 +218,10 @@ class ClientLoggerService {
   
   // 指令记录（记录所有发送到服务端的指令）
   void logCommand(String command, {Map<String, dynamic>? params, String? details}) {
+    // 调试模式关闭时不输出任何日志
+    if (!_debugEnabled) {
+      return;
+    }
     final paramsStr = params != null ? '\n参数: $params' : '';
     final detailsStr = details != null ? '\n详情: $details' : '';
     log('📤 发送指令: $command$paramsStr$detailsStr', tag: 'COMMAND');
@@ -217,6 +229,10 @@ class ClientLoggerService {
   
   // 指令响应记录
   void logCommandResponse(String command, {bool success = true, dynamic result, String? error}) {
+    // 调试模式关闭时不输出任何日志
+    if (!_debugEnabled) {
+      return;
+    }
     final icon = success ? '✓' : '✗';
     final resultStr = result != null ? '\n结果: $result' : '';
     final errorStr = error != null ? '\n错误: $error' : '';
@@ -225,11 +241,19 @@ class ClientLoggerService {
 
   // 下载日志
   void logDownload(String action, {String? details}) {
+    // 调试模式关闭时不输出任何日志
+    if (!_debugEnabled) {
+      return;
+    }
     log('下载: $action${details != null ? " - $details" : ""}', tag: 'DOWNLOAD');
   }
 
   // 错误日志
   void logError(String message, {Object? error, StackTrace? stackTrace}) {
+    // 调试模式关闭时不输出任何日志
+    if (!_debugEnabled) {
+      return;
+    }
     log('错误: $message', tag: 'ERROR');
     if (error != null) {
       log('异常: $error', tag: 'ERROR');
@@ -241,6 +265,10 @@ class ClientLoggerService {
 
   // 连接日志
   void logConnection(String action, {String? details}) {
+    // 调试模式关闭时不输出任何日志
+    if (!_debugEnabled) {
+      return;
+    }
     log('连接: $action${details != null ? " - $details" : ""}', tag: 'CONNECTION');
   }
 

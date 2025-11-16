@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/camera_settings.dart';
+import 'logger_service.dart';
 
 /// 设备配置服务 - 为每个设备保存相机配置
 class DeviceConfigService {
   static const String _prefix = 'device_config_';
+  final ClientLoggerService _logger = ClientLoggerService();
   
   /// 保存设备的相机配置
   Future<void> saveDeviceConfig(String deviceModel, CameraSettings settings) async {
@@ -14,7 +16,7 @@ class DeviceConfigService {
       final json = jsonEncode(settings.toJson());
       await prefs.setString(key, json);
     } catch (e) {
-      print('保存设备配置失败: $e');
+      _logger.logError('保存设备配置失败', error: e);
     }
   }
   
@@ -32,7 +34,7 @@ class DeviceConfigService {
       final json = jsonDecode(jsonStr) as Map<String, dynamic>;
       return CameraSettings.fromJson(json);
     } catch (e) {
-      print('获取设备配置失败: $e');
+      _logger.logError('获取设备配置失败', error: e);
       return null;
     }
   }
@@ -55,7 +57,7 @@ class DeviceConfigService {
       final key = '$_prefix$deviceModel';
       await prefs.remove(key);
     } catch (e) {
-      print('删除设备配置失败: $e');
+      _logger.logError('删除设备配置失败', error: e);
     }
   }
   

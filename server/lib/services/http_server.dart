@@ -123,7 +123,6 @@ class HttpServerService {
     final enabled = await ServerSettings.getAutoStopEnabled();
     final seconds = await ServerSettings.getAutoStopSeconds();
     
-    print('[AUTO_STOP] 更新自动停止设置: 启用=$enabled, 秒数=$seconds');
     logger.log('更新自动停止设置: 启用=$enabled, 秒数=$seconds', tag: 'AUTO_STOP');
     
     _autoStopEnabled = enabled;
@@ -801,7 +800,6 @@ class HttpServerService {
         clientIp = request.headers['x-real-ip']!;
       }
       
-      print('[PREVIEW] 预览流客户端IP: $clientIp');
       logger.log('预览流客户端IP: $clientIp', tag: 'PREVIEW');
       
       // 更新连接设备信息（预览流连接也视为活跃连接）
@@ -867,15 +865,15 @@ class HttpServerService {
 
     // 启动服务器
     _server = await shelf_io.serve(handler, InternetAddress.anyIPv4, _port);
-    print('服务器运行在 http://$_ipAddress:$_port');
+    logger.log('服务器运行在 http://$_ipAddress:$_port', tag: 'SERVER');
 
     // 启动前台服务（保持应用在后台运行时继续工作）
     await _foregroundService.start();
     
     // 加载自动停止设置并启动监控定时器（isRunning是getter，基于_server != null）
-    print('[AUTO_STOP] 开始加载自动停止设置...');
+    logger.log('开始加载自动停止设置...', tag: 'AUTO_STOP');
     await updateAutoStopSettings();
-    print('[AUTO_STOP] 自动停止设置加载完成，enabled=$_autoStopEnabled, seconds=$_autoStopSeconds');
+    logger.log('自动停止设置加载完成，enabled=$_autoStopEnabled, seconds=$_autoStopSeconds', tag: 'AUTO_STOP');
 
     return _ipAddress ?? 'localhost';
   }
@@ -1592,7 +1590,7 @@ class HttpServerService {
     
     await _server?.close(force: true);
     _server = null;
-    print('服务器已停止');
+    logger.log('服务器已停止', tag: 'SERVER');
   }
 
   // 获取本地IP地址
@@ -1612,7 +1610,7 @@ class HttpServerService {
         }
       }
     } catch (e) {
-      print('获取IP地址失败: $e');
+      logger.logError('获取IP地址失败', error: e);
     }
     return null;
   }

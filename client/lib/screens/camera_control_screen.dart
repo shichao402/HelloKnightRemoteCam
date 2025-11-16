@@ -780,7 +780,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       }
     } catch (e) {
       // 增量更新失败不影响UI，只记录错误
-      print('增量更新文件列表失败: $e');
+      _logger.logError('增量更新文件列表失败', error: e);
     }
   }
 

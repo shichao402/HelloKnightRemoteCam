@@ -1,9 +1,11 @@
 import 'package:shared_preferences/shared_preferences.dart';
+import 'logger_service.dart';
 
 /// 方向偏好设置服务 - 保存客户端的锁定状态和旋转角度
 class OrientationPreferencesService {
   static const String _keyOrientationLocked = 'orientation_locked';
   static const String _keyLockedRotationAngle = 'locked_rotation_angle';
+  final ClientLoggerService _logger = ClientLoggerService();
 
   // 默认值
   static const bool defaultOrientationLocked = true;
@@ -15,7 +17,7 @@ class OrientationPreferencesService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(_keyOrientationLocked, locked);
     } catch (e) {
-      print('保存方向锁定状态失败: $e');
+      _logger.logError('保存方向锁定状态失败', error: e);
     }
   }
 
@@ -25,7 +27,7 @@ class OrientationPreferencesService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(_keyLockedRotationAngle, angle);
     } catch (e) {
-      print('保存锁定旋转角度失败: $e');
+      _logger.logError('保存锁定旋转角度失败', error: e);
     }
   }
 
@@ -35,7 +37,7 @@ class OrientationPreferencesService {
       final prefs = await SharedPreferences.getInstance();
       return prefs.getBool(_keyOrientationLocked) ?? defaultOrientationLocked;
     } catch (e) {
-      print('获取方向锁定状态失败: $e');
+      _logger.logError('获取方向锁定状态失败', error: e);
       return defaultOrientationLocked;
     }
   }
@@ -46,7 +48,7 @@ class OrientationPreferencesService {
       final prefs = await SharedPreferences.getInstance();
       return prefs.getInt(_keyLockedRotationAngle) ?? defaultLockedRotationAngle;
     } catch (e) {
-      print('获取锁定旋转角度失败: $e');
+      _logger.logError('获取锁定旋转角度失败', error: e);
       return defaultLockedRotationAngle;
     }
   }
@@ -60,7 +62,7 @@ class OrientationPreferencesService {
         'lockedRotationAngle': prefs.getInt(_keyLockedRotationAngle) ?? defaultLockedRotationAngle,
       };
     } catch (e) {
-      print('获取方向偏好设置失败: $e');
+      _logger.logError('获取方向偏好设置失败', error: e);
       return {
         'orientationLocked': defaultOrientationLocked,
         'lockedRotationAngle': defaultLockedRotationAngle,
@@ -75,7 +77,7 @@ class OrientationPreferencesService {
       await prefs.remove(_keyOrientationLocked);
       await prefs.remove(_keyLockedRotationAngle);
     } catch (e) {
-      print('清除方向偏好设置失败: $e');
+      _logger.logError('清除方向偏好设置失败', error: e);
     }
   }
 }

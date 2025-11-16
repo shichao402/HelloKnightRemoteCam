@@ -99,6 +99,11 @@ class LoggerService {
 
   // 记录日志
   void log(String message, {LogLevel level = LogLevel.info, String? tag}) {
+    // 调试模式关闭时不输出任何日志，也不添加到内存
+    if (!_debugEnabled) {
+      return;
+    }
+    
     final entry = LogEntry(
       message: message,
       level: level,
@@ -113,11 +118,6 @@ class LoggerService {
       _logs.removeAt(0);
     }
     
-    // 调试模式关闭时不输出任何日志
-    if (!_debugEnabled) {
-      return;
-    }
-    
     // 打印到控制台（仅在调试模式启用时）
     print('[${entry.levelString}] ${entry.tag != null ? "[${entry.tag}] " : ""}${entry.message}');
     
@@ -129,24 +129,40 @@ class LoggerService {
 
   // HTTP请求日志
   void logHttpRequest(String method, String path, {Map<String, dynamic>? body}) {
+    // 调试模式关闭时不输出任何日志
+    if (!_debugEnabled) {
+      return;
+    }
     final message = 'HTTP $method $path${body != null ? "\nBody: $body" : ""}';
     log(message, level: LogLevel.request, tag: 'HTTP');
   }
 
   // HTTP响应日志
   void logHttpResponse(int statusCode, String path, {dynamic body}) {
+    // 调试模式关闭时不输出任何日志
+    if (!_debugEnabled) {
+      return;
+    }
     final message = 'Response $statusCode for $path${body != null ? "\nBody: $body" : ""}';
     log(message, level: LogLevel.response, tag: 'HTTP');
   }
 
   // 相机操作日志
   void logCamera(String operation, {String? details}) {
+    // 调试模式关闭时不输出任何日志
+    if (!_debugEnabled) {
+      return;
+    }
     final message = 'Camera: $operation${details != null ? " - $details" : ""}';
     log(message, level: LogLevel.info, tag: 'CAMERA');
   }
 
   // 错误日志
   void logError(String message, {Object? error, StackTrace? stackTrace}) {
+    // 调试模式关闭时不输出任何日志
+    if (!_debugEnabled) {
+      return;
+    }
     final fullMessage = '$message${error != null ? "\nError: $error" : ""}${stackTrace != null ? "\nStack: $stackTrace" : ""}';
     log(fullMessage, level: LogLevel.error, tag: 'ERROR');
   }

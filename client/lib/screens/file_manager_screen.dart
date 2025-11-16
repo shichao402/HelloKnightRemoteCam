@@ -118,7 +118,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
 
   /// 启动WebSocket连接（监听server的新文件通知）
   void _startFileListRefreshTimer() {
-    print('[FileManager] 准备启动WebSocket通知监听');
+    _logger.log('准备启动WebSocket通知监听', tag: 'FILE_MANAGER');
     _connectToWebSocketNotifications();
   }
 
@@ -200,9 +200,11 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       _thumbnailCacheDir = Directory(path.join(cacheDir.path, 'thumbnails'));
       if (!await _thumbnailCacheDir!.exists()) {
         await _thumbnailCacheDir!.create(recursive: true);
-        print('创建缩略图缓存目录: ${_thumbnailCacheDir!.path}');
+        _logger.log('创建缩略图缓存目录: ${_thumbnailCacheDir!.path}',
+            tag: 'THUMBNAIL_CACHE');
       } else {
-        print('缩略图缓存目录已存在: ${_thumbnailCacheDir!.path}');
+        _logger.log('缩略图缓存目录已存在: ${_thumbnailCacheDir!.path}',
+            tag: 'THUMBNAIL_CACHE');
         // 扫描现有缓存文件，填充内存缓存
         try {
           final files = _thumbnailCacheDir!.listSync();
@@ -212,14 +214,14 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
               _thumbnailCache[fileName] = file.path;
             }
           }
-          print('已加载 ${_thumbnailCache.length} 个缓存的缩略图');
+          _logger.log('已加载 ${_thumbnailCache.length} 个缓存的缩略图',
+              tag: 'THUMBNAIL_CACHE');
         } catch (e) {
-          print('扫描缓存目录失败: $e');
+          _logger.logError('扫描缓存目录失败', error: e);
         }
       }
     } catch (e, stackTrace) {
-      print('初始化缩略图缓存目录失败: $e');
-      print('堆栈跟踪: $stackTrace');
+      _logger.logError('初始化缩略图缓存目录失败', error: e, stackTrace: stackTrace);
     }
   }
 
@@ -255,7 +257,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       }
     } catch (e) {
       // 忽略加载错误，使用默认值
-      print('加载视图偏好设置失败: $e');
+      _logger.logError('加载视图偏好设置失败', error: e);
     }
   }
 
@@ -266,9 +268,11 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       await prefs.setString('file_manager_view_mode', _viewMode);
       await prefs.setDouble('file_manager_grid_size', _gridItemSize);
       await prefs.setString('file_manager_group_mode', _groupMode);
-      print('已保存视图偏好: mode=$_viewMode, size=$_gridItemSize, group=$_groupMode');
+      _logger.log(
+          '已保存视图偏好: mode=$_viewMode, size=$_gridItemSize, group=$_groupMode',
+          tag: 'VIEW_PREFERENCES');
     } catch (e) {
-      print('保存视图偏好设置失败: $e');
+      _logger.logError('保存视图偏好设置失败', error: e);
     }
   }
 
@@ -559,15 +563,15 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   /// 处理新文件通知（直接使用通知中的文件信息）
   Future<void> _handleNewFilesNotification(Map<String, dynamic> data) async {
     try {
-      print('[FILE_NOTIFICATION] 收到新文件通知，开始处理');
+      _logger.log('收到新文件通知，开始处理', tag: 'FILE_NOTIFICATION');
       final fileType = data['fileType'] as String?;
       final filesData = data['files'] as List<dynamic>?;
 
-      print(
-          '[FILE_NOTIFICATION] 文件类型: $fileType, 文件数量: ${filesData?.length ?? 0}');
+      _logger.log('文件类型: $fileType, 文件数量: ${filesData?.length ?? 0}',
+          tag: 'FILE_NOTIFICATION');
 
       if (filesData == null || filesData.isEmpty) {
-        print('[FILE_NOTIFICATION] 没有文件信息，回退到增量刷新');
+        _logger.log('没有文件信息，回退到增量刷新', tag: 'FILE_NOTIFICATION');
         await _incrementalRefreshFileList();
         return;
       }
@@ -578,18 +582,19 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         try {
           final fileInfo = FileInfo.fromJson(fileJson as Map<String, dynamic>);
           newFiles.add(fileInfo);
-          print('[FILE_NOTIFICATION] 解析文件成功: ${fileInfo.name}');
+          _logger.log('解析文件成功: ${fileInfo.name}', tag: 'FILE_NOTIFICATION');
         } catch (e) {
-          print('[FILE_NOTIFICATION] 解析文件信息失败: $e');
+          _logger.logError('解析文件信息失败', error: e);
         }
       }
 
       if (newFiles.isEmpty) {
-        print('[FILE_NOTIFICATION] 解析后没有有效文件，跳过更新');
+        _logger.log('解析后没有有效文件，跳过更新', tag: 'FILE_NOTIFICATION');
         return;
       }
 
-      print('[FILE_NOTIFICATION] 成功解析 ${newFiles.length} 个文件，准备更新UI');
+      _logger.log('成功解析 ${newFiles.length} 个文件，准备更新UI',
+          tag: 'FILE_NOTIFICATION');
 
       // 检查新文件的下载状态
       await _checkDownloadStatus(newFiles);
@@ -614,7 +619,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
 
       // 如果没有新文件且没有需要更新的文件，直接返回
       if (trulyNewFiles.isEmpty && updatedExistingFiles.isEmpty) {
-        print('[FILE_NOTIFICATION] 没有新文件或更新，跳过UI更新');
+        _logger.log('没有新文件或更新，跳过UI更新', tag: 'FILE_NOTIFICATION');
         return;
       }
 
@@ -716,8 +721,9 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         _lastUpdateTime = allFiles.first.modifiedTime.millisecondsSinceEpoch;
       }
 
-      print(
-          '[FILE_NOTIFICATION] 更新文件列表: 照片 ${updatedPictures.length} 张, 视频 ${updatedVideos.length} 个');
+      _logger.log(
+          '更新文件列表: 照片 ${updatedPictures.length} 张, 视频 ${updatedVideos.length} 个',
+          tag: 'FILE_NOTIFICATION');
 
       if (mounted) {
         // 取消防抖定时器，立即更新（因为这是主要的文件列表更新）
@@ -730,40 +736,42 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
           _pictures = updatedPictures;
           _videos = updatedVideos;
         });
-        print('[FILE_NOTIFICATION] UI已更新');
-        print(
-            '[FILE_NOTIFICATION] 检查自动下载条件: fileType=$fileType, updatedPictures.length=${updatedPictures.length}, updatedVideos.length=${updatedVideos.length}');
+        _logger.log('UI已更新', tag: 'FILE_NOTIFICATION');
+        _logger.log(
+            '检查自动下载条件: fileType=$fileType, updatedPictures.length=${updatedPictures.length}, updatedVideos.length=${updatedVideos.length}',
+            tag: 'FILE_NOTIFICATION');
 
         // 自动下载最新照片/视频
         if (fileType == 'image' && updatedPictures.isNotEmpty) {
           final latestPicture = updatedPictures.first;
-          print('[FILE_NOTIFICATION] 准备自动下载照片: ${latestPicture.name}');
+          _logger.log('准备自动下载照片: ${latestPicture.name}',
+              tag: 'FILE_NOTIFICATION');
           try {
             await _autoDownloadFile(latestPicture);
-            print('[FILE_NOTIFICATION] 自动下载调用完成');
+            _logger.log('自动下载调用完成', tag: 'FILE_NOTIFICATION');
           } catch (e, stackTrace) {
-            print('[FILE_NOTIFICATION] 自动下载调用失败: $e');
-            print('[FILE_NOTIFICATION] 堆栈: $stackTrace');
+            _logger.logError('自动下载调用失败', error: e, stackTrace: stackTrace);
           }
         } else if (fileType == 'video' && updatedVideos.isNotEmpty) {
           final latestVideo = updatedVideos.first;
-          print('[FILE_NOTIFICATION] 准备自动下载视频: ${latestVideo.name}');
+          _logger.log('准备自动下载视频: ${latestVideo.name}',
+              tag: 'FILE_NOTIFICATION');
           try {
             await _autoDownloadFile(latestVideo);
-            print('[FILE_NOTIFICATION] 自动下载调用完成');
+            _logger.log('自动下载调用完成', tag: 'FILE_NOTIFICATION');
           } catch (e, stackTrace) {
-            print('[FILE_NOTIFICATION] 自动下载调用失败: $e');
-            print('[FILE_NOTIFICATION] 堆栈: $stackTrace');
+            _logger.logError('自动下载调用失败', error: e, stackTrace: stackTrace);
           }
         } else {
-          print(
-              '[FILE_NOTIFICATION] 自动下载条件不满足: fileType=$fileType, picturesEmpty=${updatedPictures.isEmpty}, videosEmpty=${updatedVideos.isEmpty}');
+          _logger.log(
+              '自动下载条件不满足: fileType=$fileType, picturesEmpty=${updatedPictures.isEmpty}, videosEmpty=${updatedVideos.isEmpty}',
+              tag: 'FILE_NOTIFICATION');
         }
       } else {
-        print('[FILE_NOTIFICATION] Widget未挂载，跳过自动下载');
+        _logger.log('Widget未挂载，跳过自动下载', tag: 'FILE_NOTIFICATION');
       }
     } catch (e) {
-      print('处理新文件通知失败: $e');
+      _logger.logError('处理新文件通知失败', error: e);
       // 如果处理失败，回退到增量刷新
       await _incrementalRefreshFileList();
     }
@@ -854,7 +862,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       }
     } catch (e) {
       // 增量更新失败不影响UI，只记录错误
-      print('增量更新文件列表失败: $e');
+      _logger.logError('增量更新文件列表失败', error: e);
     }
   }
 
@@ -917,8 +925,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       _downloadedStatusCache[file.name] = exists;
       if (oldStatus != exists) {
         hasChanged = true;
-        print(
-            '[DOWNLOAD_STATUS] 文件下载状态变化: ${file.name}, 旧状态=$oldStatus, 新状态=$exists');
+        _logger.log('文件下载状态变化: ${file.name}, 旧状态=$oldStatus, 新状态=$exists',
+            tag: 'DOWNLOAD_STATUS');
       }
     }
     // 如果状态有变化，使用防抖机制延迟更新UI
@@ -957,7 +965,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         if (existingTask.status == DownloadStatus.downloading ||
             existingTask.status == DownloadStatus.pending) {
           // 已经在下载中
-          print('[AUTO_DOWNLOAD] 文件已在下载中: ${file.name}');
+          _logger.log('文件已在下载中: ${file.name}', tag: 'AUTO_DOWNLOAD');
           return;
         }
 
@@ -973,7 +981,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
               _debouncedSetState(reason: '自动下载文件已存在: ${file.name}');
             }
           }
-          print('[AUTO_DOWNLOAD] 文件已下载完成: ${file.name}');
+          _logger.log('文件已下载完成: ${file.name}', tag: 'AUTO_DOWNLOAD');
           return;
         }
       }
@@ -988,12 +996,12 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
           // 使用防抖机制，避免频繁刷新
           _debouncedSetState(reason: '自动下载检查文件已存在: ${file.name}');
         }
-        print('[AUTO_DOWNLOAD] 文件已存在: ${file.name}');
+        _logger.log('文件已存在: ${file.name}', tag: 'AUTO_DOWNLOAD');
         return;
       }
 
       // 添加下载任务
-      print('[AUTO_DOWNLOAD] 开始自动下载: ${file.name}');
+      _logger.log('开始自动下载: ${file.name}', tag: 'AUTO_DOWNLOAD');
       final taskId = await _downloadManager.addDownload(
         remoteFilePath: file.path,
         fileName: file.name,
@@ -1018,16 +1026,16 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             // 使用防抖机制，避免频繁刷新
             _debouncedSetState(reason: '自动下载完成: ${task.fileName}');
           }
-          print('[AUTO_DOWNLOAD] 自动下载完成: ${task.fileName}');
+          _logger.log('自动下载完成: ${task.fileName}', tag: 'AUTO_DOWNLOAD');
         } else if (task.status == DownloadStatus.failed) {
           _autoDownloadSubscription?.cancel();
           _autoDownloadSubscription = null;
-          print(
-              '[AUTO_DOWNLOAD] 自动下载失败: ${task.fileName}, 错误: ${task.errorMessage}');
+          _logger.log('自动下载失败: ${task.fileName}, 错误: ${task.errorMessage}',
+              tag: 'AUTO_DOWNLOAD');
         }
       });
     } catch (e) {
-      print('[AUTO_DOWNLOAD] 自动下载失败: ${file.name}, 错误: $e');
+      _logger.logError('自动下载失败: ${file.name}', error: e);
     }
   }
 
