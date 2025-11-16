@@ -55,6 +55,9 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   final double _minGridSize = 150.0;
   final double _maxGridSize = 400.0;
   
+  // 文件组织方式：none, day, week, month
+  String _groupMode = 'none'; // 'none', 'day', 'week', 'month'
+  
   // 多选模式
   bool _isSelectionMode = false;
   final Set<String> _selectedFiles = {}; // 选中的文件名集合
@@ -209,6 +212,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       final prefs = await SharedPreferences.getInstance();
       final savedViewMode = prefs.getString('file_manager_view_mode');
       final savedGridSize = prefs.getDouble('file_manager_grid_size');
+      final savedGroupMode = prefs.getString('file_manager_group_mode');
       
       if (mounted) {
         setState(() {
@@ -218,6 +222,10 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
           
           if (savedGridSize != null && savedGridSize >= _minGridSize && savedGridSize <= _maxGridSize) {
             _gridItemSize = savedGridSize;
+          }
+          
+          if (savedGroupMode != null && (savedGroupMode == 'none' || savedGroupMode == 'day' || savedGroupMode == 'week' || savedGroupMode == 'month')) {
+            _groupMode = savedGroupMode;
           }
         });
       }
@@ -233,7 +241,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('file_manager_view_mode', _viewMode);
       await prefs.setDouble('file_manager_grid_size', _gridItemSize);
-      print('已保存视图偏好: mode=$_viewMode, size=$_gridItemSize');
+      await prefs.setString('file_manager_group_mode', _groupMode);
+      print('已保存视图偏好: mode=$_viewMode, size=$_gridItemSize, group=$_groupMode');
     } catch (e) {
       print('保存视图偏好设置失败: $e');
     }
@@ -1142,6 +1151,65 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                   constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
                 ),
               ],
+              // 分组模式选择
+              PopupMenuButton<String>(
+                icon: Icon(
+                  _getGroupModeIcon(_groupMode),
+                  color: Colors.white,
+                  size: 20,
+                ),
+                tooltip: '文件组织方式',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                onSelected: (value) async {
+                  setState(() {
+                    _groupMode = value;
+                  });
+                  await _saveViewPreferences();
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(
+                    value: 'none',
+                    child: Row(
+                      children: [
+                        Icon(Icons.view_list),
+                        SizedBox(width: 8),
+                        Text('无分组'),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'day',
+                    child: Row(
+                      children: [
+                        Icon(Icons.calendar_today),
+                        SizedBox(width: 8),
+                        Text('按天'),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'week',
+                    child: Row(
+                      children: [
+                        Icon(Icons.view_week),
+                        SizedBox(width: 8),
+                        Text('按周'),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'month',
+                    child: Row(
+                      children: [
+                        Icon(Icons.calendar_view_month),
+                        SizedBox(width: 8),
+                        Text('按月'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
               // 多选模式
               IconButton(
                 icon: const Icon(Icons.checklist, color: Colors.white, size: 20),
@@ -1237,6 +1305,59 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                 tooltip: '放大网格',
               ),
             ],
+            // 分组模式选择
+            PopupMenuButton<String>(
+              icon: Icon(_getGroupModeIcon(_groupMode)),
+              tooltip: '文件组织方式',
+              onSelected: (value) async {
+                setState(() {
+                  _groupMode = value;
+                });
+                await _saveViewPreferences();
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'none',
+                  child: Row(
+                    children: [
+                      Icon(Icons.view_list),
+                      SizedBox(width: 8),
+                      Text('无分组'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'day',
+                  child: Row(
+                    children: [
+                      Icon(Icons.calendar_today),
+                      SizedBox(width: 8),
+                      Text('按天'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'week',
+                  child: Row(
+                    children: [
+                      Icon(Icons.view_week),
+                      SizedBox(width: 8),
+                      Text('按周'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'month',
+                  child: Row(
+                    children: [
+                      Icon(Icons.calendar_view_month),
+                      SizedBox(width: 8),
+                      Text('按月'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
             // 多选模式
             IconButton(
               icon: const Icon(Icons.checklist),
@@ -1275,6 +1396,99 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     );
   }
 
+  /// 获取文件的分组键（用于分组显示）
+  String _getGroupKey(FileInfo file) {
+    final date = file.modifiedTime;
+    
+    switch (_groupMode) {
+      case 'day':
+        // 按天分组：YYYY-MM-DD
+        return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      case 'week':
+        // 按周分组：找到该周的周一日期 YYYY-MM-DD
+        final weekday = date.weekday; // 1=Monday, 7=Sunday
+        final monday = date.subtract(Duration(days: weekday - 1));
+        return '${monday.year}-${monday.month.toString().padLeft(2, '0')}-${monday.day.toString().padLeft(2, '0')}';
+      case 'month':
+        // 按月分组：YYYY-MM
+        return '${date.year}-${date.month.toString().padLeft(2, '0')}';
+      default:
+        return '';
+    }
+  }
+  
+  /// 格式化分组标题
+  String _formatGroupTitle(String groupKey) {
+    if (groupKey.isEmpty) return '';
+    
+    switch (_groupMode) {
+      case 'day':
+        // 解析日期并格式化：YYYY-MM-DD -> YYYY年MM月DD日
+        final parts = groupKey.split('-');
+        if (parts.length == 3) {
+          final year = int.parse(parts[0]);
+          final month = int.parse(parts[1]);
+          final day = int.parse(parts[2]);
+          final date = DateTime(year, month, day);
+          final now = DateTime.now();
+          final today = DateTime(now.year, now.month, now.day);
+          final yesterday = today.subtract(const Duration(days: 1));
+          
+          if (date == today) {
+            return '今天';
+          } else if (date == yesterday) {
+            return '昨天';
+          } else {
+            return '$year年$month月$day日';
+          }
+        }
+        return groupKey;
+      case 'week':
+        // 解析周一的日期并格式化：YYYY-MM-DD -> YYYY年MM月DD日 - YYYY年MM月DD日
+        final parts = groupKey.split('-');
+        if (parts.length == 3) {
+          final year = int.parse(parts[0]);
+          final month = int.parse(parts[1]);
+          final day = int.parse(parts[2]);
+          final monday = DateTime(year, month, day);
+          final sunday = monday.add(const Duration(days: 6));
+          return '${year}年${month}月${day}日 - ${sunday.year}年${sunday.month}月${sunday.day}日';
+        }
+        return groupKey;
+      case 'month':
+        // 解析月份并格式化：YYYY-MM -> YYYY年MM月
+        final parts = groupKey.split('-');
+        if (parts.length == 2) {
+          final year = int.parse(parts[0]);
+          final month = int.parse(parts[1]);
+          return '$year年$month月';
+        }
+        return groupKey;
+      default:
+        return groupKey;
+    }
+  }
+  
+  /// 对文件列表进行分组
+  Map<String, List<FileInfo>> _groupFiles(List<FileInfo> files) {
+    if (_groupMode == 'none') {
+      return {'': files};
+    }
+    
+    final grouped = <String, List<FileInfo>>{};
+    for (var file in files) {
+      final key = _getGroupKey(file);
+      grouped.putIfAbsent(key, () => []).add(file);
+    }
+    
+    // 对每个分组内的文件按时间排序（最新的在前）
+    for (var key in grouped.keys) {
+      grouped[key]!.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+    }
+    
+    return grouped;
+  }
+
   /// 构建合并的照片和视频列表（用图标区分）
   Widget _buildAllFilesList() {
     if (_isLoading) {
@@ -1297,6 +1511,25 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         ),
       );
     }
+    
+    // 对文件进行分组
+    final groupedFiles = _groupFiles(allFiles);
+    final groupKeys = groupedFiles.keys.toList();
+    
+    // 对分组键进行排序（最新的在前）
+    if (_groupMode != 'none') {
+      groupKeys.sort((a, b) {
+        // 按时间倒序排序
+        if (_groupMode == 'day' || _groupMode == 'week') {
+          // YYYY-MM-DD 格式可以直接字符串比较
+          return b.compareTo(a);
+        } else if (_groupMode == 'month') {
+          // YYYY-MM 格式可以直接字符串比较
+          return b.compareTo(a);
+        }
+        return 0;
+      });
+    }
 
     if (_viewMode == 'grid') {
       return RefreshIndicator(
@@ -1315,31 +1548,55 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             // 确保至少减去一个 spacing 来避免溢出
             final crossAxisCount = ((availableWidth - spacing) / (_gridItemSize + spacing)).floor().clamp(1, 10);
             
-            return GridView.builder(
+            // 使用CustomScrollView支持分组标题跨列显示
+            return CustomScrollView(
               controller: _gridScrollController,
-              padding: const EdgeInsets.all(8),
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: crossAxisCount,
-                crossAxisSpacing: spacing,
-                mainAxisSpacing: 8,
-                childAspectRatio: 1.2,
-              ),
-              itemCount: allFiles.length + (_hasMore ? 1 : 0), // 如果有更多，添加一个加载指示器
-              itemBuilder: (context, index) {
-                if (index == allFiles.length) {
-                  // 加载更多指示器
-                  return Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: _isLoadingMore
-                          ? const CircularProgressIndicator()
-                          : const SizedBox.shrink(),
+              slivers: [
+                // 构建分组和文件
+                ...groupKeys.map((key) {
+                  final files = groupedFiles[key]!;
+                  return [
+                    // 分组标题（如果有分组模式）
+                    if (_groupMode != 'none' && key.isNotEmpty)
+                      SliverToBoxAdapter(
+                        child: _buildGroupHeader(_formatGroupTitle(key), crossAxisCount),
+                      ),
+                    // 文件网格
+                    SliverPadding(
+                      padding: const EdgeInsets.all(8),
+                      sliver: SliverGrid(
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: crossAxisCount,
+                          crossAxisSpacing: spacing,
+                          mainAxisSpacing: 8,
+                          childAspectRatio: 1.2,
+                        ),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            if (index < files.length) {
+                              return _buildGridItem(files[index]);
+                            }
+                            return const SizedBox.shrink();
+                          },
+                          childCount: files.length,
+                        ),
+                      ),
                     ),
-                  );
-                }
-                final file = allFiles[index];
-                return _buildGridItem(file);
-              },
+                  ];
+                }).expand((x) => x),
+                // 加载更多指示器
+                if (_hasMore)
+                  SliverToBoxAdapter(
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: _isLoadingMore
+                            ? const CircularProgressIndicator()
+                            : const SizedBox.shrink(),
+                      ),
+                    ),
+                  ),
+              ],
             );
           },
         ),
@@ -1347,14 +1604,47 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     }
 
     // 列表视图
+    // 计算总项目数（包括分组标题）
+    int totalItemCount = 0;
+    for (var key in groupKeys) {
+      if (_groupMode != 'none' && key.isNotEmpty) {
+        totalItemCount++; // 分组标题
+      }
+      totalItemCount += groupedFiles[key]!.length; // 文件项
+    }
+    if (_hasMore) {
+      totalItemCount++; // 加载更多指示器
+    }
+    
     return RefreshIndicator(
       onRefresh: _refreshFileList,
       child: ListView.builder(
         controller: _scrollController,
-        itemCount: allFiles.length + (_hasMore ? 1 : 0), // 如果有更多，添加一个加载指示器
+        itemCount: totalItemCount,
         itemBuilder: (context, index) {
-          if (index == allFiles.length) {
-            // 加载更多指示器
+          // 遍历分组和文件，构建项目
+          int currentIndex = 0;
+          for (var key in groupKeys) {
+            // 分组标题
+            if (_groupMode != 'none' && key.isNotEmpty) {
+              if (currentIndex == index) {
+                return _buildGroupHeader(_formatGroupTitle(key), 1);
+              }
+              currentIndex++;
+            }
+            
+            // 文件项
+            for (var file in groupedFiles[key]!) {
+              if (currentIndex == index) {
+                final isHighlighted = widget.highlightFileName == file.name;
+                return _buildListItem(file, isHighlighted: isHighlighted);
+              }
+              currentIndex++;
+            }
+          }
+          
+          // 加载更多指示器
+          if (currentIndex == index && _hasMore) {
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -1364,10 +1654,56 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
               ),
             );
           }
-          final file = allFiles[index];
-          final isHighlighted = widget.highlightFileName == file.name;
-          return _buildListItem(file, isHighlighted: isHighlighted);
+          
+          return const SizedBox.shrink();
         },
+      ),
+    );
+  }
+  
+  /// 构建分组标题
+  Widget _buildGroupHeader(String title, int crossAxisCount) {
+    if (_groupMode == 'none' || title.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    // 网格视图：标题占满整行
+    if (_viewMode == 'grid' && crossAxisCount > 1) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        margin: const EdgeInsets.only(top: 8),
+        decoration: BoxDecoration(
+          color: Theme.of(context).primaryColor.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          title,
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Theme.of(context).primaryColor,
+          ),
+        ),
+      );
+    }
+    
+    // 列表视图：标准标题样式
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).primaryColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.bold,
+          color: Theme.of(context).primaryColor,
+        ),
       ),
     );
   }
@@ -2045,6 +2381,20 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         '${dateTime.day.toString().padLeft(2, '0')} '
         '${dateTime.hour.toString().padLeft(2, '0')}:'
         '${dateTime.minute.toString().padLeft(2, '0')}';
+  }
+
+  /// 获取分组模式对应的图标
+  IconData _getGroupModeIcon(String mode) {
+    switch (mode) {
+      case 'day':
+        return Icons.calendar_today;
+      case 'week':
+        return Icons.view_week;
+      case 'month':
+        return Icons.calendar_view_month;
+      default:
+        return Icons.view_list;
+    }
   }
 
 }
