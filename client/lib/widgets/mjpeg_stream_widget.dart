@@ -134,27 +134,14 @@ class _MjpegStreamWidgetState extends State<MjpegStreamWidget> {
                 textAlign: TextAlign.center,
               ),
             ),
-          const SizedBox(height: 8),
-          Text(
-            '已尝试重连 $_reconnectAttempts 次',
-            style: const TextStyle(color: Colors.grey, fontSize: 10),
-          ),
         ],
       );
     }
 
-    // 如果有错误但还在重连中，显示重连状态
+    // 如果有错误但还在重连中，只显示加载指示器
     if (_hasError && _reconnectTimer != null) {
-      return Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const CircularProgressIndicator(),
-          const SizedBox(height: 16),
-          Text(
-            '预览流断开，正在重连... ($_reconnectAttempts/$_maxReconnectAttempts)',
-            style: const TextStyle(color: Colors.white),
-          ),
-        ],
+      return const Center(
+        child: CircularProgressIndicator(),
       );
     }
 

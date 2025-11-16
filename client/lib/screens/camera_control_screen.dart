@@ -48,6 +48,8 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   // 连接状态管理
   bool _isConnected = true;
   bool _isReconnecting = false;
+  int _reconnectAttempts = 0; // 当前重连次数
+  int _previewStreamKey = 0; // 预览流key，用于强制重建
   Timer? _connectionCheckTimer;
   StreamSubscription? _webSocketSubscription; // WebSocket通知消息订阅
   RetryHelper? _reconnectHelper; // 重连助手
@@ -462,9 +464,13 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           setState(() {
             _isConnected = true;
             _isReconnecting = false;
+            _reconnectAttempts = 0; // 重置重连次数
+            _previewStreamKey++; // 更新key，强制重建预览流
           });
           _logger.log('连接已恢复', tag: 'CONNECTION');
           _refreshFileList();
+          // 重新加载预览流URL（确保URL是最新的）
+          _loadPreviewStreamUrl();
           // 重新初始化方向状态（确保方向信息是最新的）
           _initializeOrientationLock();
           // 重新连接WebSocket通知流
@@ -500,6 +506,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     if (mounted) {
       setState(() {
         _isReconnecting = true;
+        _reconnectAttempts = 0; // 重置重连次数
       });
     }
 
@@ -518,6 +525,12 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         if (!mounted) return false;
 
         try {
+          // 更新重连次数
+          if (mounted) {
+            setState(() {
+              _reconnectAttempts = _reconnectHelper!.attempts;
+            });
+          }
           _logger.log('尝试重连... (第${_reconnectHelper!.attempts}次)',
               tag: 'CONNECTION');
           final pingError = await widget.apiService.ping();
@@ -532,10 +545,14 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
               setState(() {
                 _isConnected = true;
                 _isReconnecting = false;
+                _reconnectAttempts = 0; // 重置重连次数
+                _previewStreamKey++; // 更新key，强制重建预览流
               });
             }
             _logger.log('重连成功', tag: 'CONNECTION');
             _refreshFileList();
+            // 重新加载预览流URL（确保URL是最新的）
+            _loadPreviewStreamUrl();
             // 重新初始化方向状态（确保方向信息是最新的）
             if (mounted) {
               _initializeOrientationLock();
@@ -579,6 +596,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         if (mounted) {
           setState(() {
             _isReconnecting = false;
+            _reconnectAttempts = 0; // 重置重连次数
           });
         }
       },
@@ -593,6 +611,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   Future<void> _manualReconnect() async {
     setState(() {
       _isReconnecting = true;
+      _reconnectAttempts = 0; // 重置重连次数
     });
 
     try {
@@ -605,8 +624,14 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
 
         if (pingError == null) {
           _isAuthFailure = false; // 重置认证失败标记
+          setState(() {
+            _reconnectAttempts = 0; // 重置重连次数
+            _previewStreamKey++; // 更新key，强制重建预览流
+          });
           _showSuccess('重连成功');
           _refreshFileList();
+          // 重新加载预览流URL（确保URL是最新的）
+          _loadPreviewStreamUrl();
           // 重新初始化方向状态（确保方向信息是最新的）
           _initializeOrientationLock();
           // 重新连接WebSocket通知流
@@ -1296,6 +1321,17 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                   color: _isConnected ? Colors.green : Colors.red,
                 ),
               ),
+              // 重连信息显示区域（在绿点右侧）
+              if (_isReconnecting && _reconnectAttempts > 0) ...[
+                const SizedBox(width: 12),
+                Text(
+                  '正在重连... ($_reconnectAttempts/20)',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+                  ),
+                ),
+              ],
               if (_isReconnecting) ...[
                 const SizedBox(width: 8),
                 const SizedBox(
@@ -1322,13 +1358,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                 icon: const Icon(Icons.refresh),
                 onPressed: _isReconnecting ? null : _manualReconnect,
                 tooltip: '重连',
-              ),
-            // 返回连接页面按钮
-            if (!_isConnected)
-              IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: _returnToConnectionScreen,
-                tooltip: '返回连接页面',
               ),
             IconButton(
               icon: const Icon(Icons.settings),
@@ -1480,6 +1509,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                                             angle:
                                                 rotationAngle * math.pi / 180,
                                             child: MjpegStreamWidget(
+                                              key: ValueKey('preview_$_previewStreamKey'),
                                               streamUrl: _previewStreamUrl!,
                                               previewWidth:
                                                   previewSize['width'],
