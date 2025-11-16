@@ -323,8 +323,10 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
 
   // 开始连接检查
   void _startConnectionCheck() {
-    _connectionCheckTimer =
-        Timer.periodic(const Duration(seconds: 5), (timer) async {
+    // 心跳间隔：1秒
+    const heartbeatIntervalSeconds = 1;
+    _connectionCheckTimer = Timer.periodic(
+        const Duration(seconds: heartbeatIntervalSeconds), (timer) async {
       if (!mounted) {
         timer.cancel();
         return;

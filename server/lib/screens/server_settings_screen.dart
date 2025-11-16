@@ -12,12 +12,12 @@ class ServerSettingsScreen extends StatefulWidget {
 class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   static const String _autoStartKey = 'auto_start_server';
   static const String _autoStopEnabledKey = 'auto_stop_enabled';
-  static const String _autoStopMinutesKey = 'auto_stop_minutes';
+  static const String _autoStopSecondsKey = 'auto_stop_seconds'; // 改为秒为单位存储
   
   final LoggerService _logger = LoggerService();
   bool _autoStartServer = false;
   bool _autoStopEnabled = false;
-  int _autoStopMinutes = 15;
+  int _autoStopMinutes = 15; // UI显示用分钟，内部转换为秒存储
   bool _debugMode = false;
   bool _isLoading = true;
 
@@ -32,7 +32,11 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     setState(() {
       _autoStartServer = prefs.getBool(_autoStartKey) ?? false;
       _autoStopEnabled = prefs.getBool(_autoStopEnabledKey) ?? false;
-      _autoStopMinutes = prefs.getInt(_autoStopMinutesKey) ?? 15;
+      // 从秒转换为分钟显示
+      // 默认20秒，显示为1分钟（向上取整）
+      // 0秒表示无限时间，显示为0分钟
+      final seconds = prefs.getInt(_autoStopSecondsKey) ?? 20;
+      _autoStopMinutes = seconds == 0 ? 0 : (seconds / 60).ceil(); // 向上取整到分钟
       _debugMode = _logger.debugEnabled;
       _isLoading = false;
     });
@@ -76,7 +80,10 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
 
   Future<void> _saveAutoStopMinutes(int minutes) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_autoStopMinutesKey, minutes);
+    // UI显示分钟，但存储时转换为秒
+    // 0分钟表示无限时间，保存为0秒
+    final seconds = minutes == 0 ? 0 : minutes * 60;
+    await prefs.setInt(_autoStopSecondsKey, seconds);
     setState(() {
       _autoStopMinutes = minutes;
     });
@@ -84,7 +91,9 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('自动停止时间已设置为${minutes}分钟'),
+          content: Text(minutes == 0 
+            ? '自动停止时间已设置为无限（不自动停止）'
+            : '自动停止时间已设置为${minutes}分钟（${seconds}秒）'),
         ),
       );
     }
@@ -301,7 +310,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
 class ServerSettings {
   static const String _autoStartKey = 'auto_start_server';
   static const String _autoStopEnabledKey = 'auto_stop_enabled';
-  static const String _autoStopMinutesKey = 'auto_stop_minutes';
+  static const String _autoStopSecondsKey = 'auto_stop_seconds'; // 改为秒为单位存储
   
   static Future<bool> getAutoStart() async {
     final prefs = await SharedPreferences.getInstance();
@@ -313,9 +322,17 @@ class ServerSettings {
     return prefs.getBool(_autoStopEnabledKey) ?? false;
   }
   
-  static Future<int> getAutoStopMinutes() async {
+  // 返回秒数（存储单位）
+  static Future<int> getAutoStopSeconds() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_autoStopMinutesKey) ?? 15;
+    return prefs.getInt(_autoStopSecondsKey) ?? 20; // 默认20秒
+  }
+  
+  // 兼容旧方法名（已废弃，保留用于迁移）
+  @Deprecated('使用 getAutoStopSeconds() 代替')
+  static Future<int> getAutoStopMinutes() async {
+    final seconds = await getAutoStopSeconds();
+    return (seconds / 60).ceil(); // 转换为分钟
   }
 }
 
