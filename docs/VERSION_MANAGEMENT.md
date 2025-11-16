@@ -181,8 +181,8 @@ final (isCompatible, reason) = await versionCompatibilityService.checkServerVers
 ### 服务端（Server）
 
 ```dart
-import 'package:remote_cam_server/services/version_service.dart';
-import 'package:remote_cam_server/services/version_compatibility_service.dart';
+import 'package:helloknightrcc_server/services/version_service.dart';
+import 'package:helloknightrcc_server/services/version_compatibility_service.dart';
 
 final versionService = VersionService();
 final versionCompatibilityService = VersionCompatibilityService();

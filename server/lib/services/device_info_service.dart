@@ -3,7 +3,7 @@ import 'logger_service.dart';
 
 /// 设备信息服务 - 获取Android设备信息
 class DeviceInfoService {
-  static const MethodChannel _methodChannel = MethodChannel('com.example.remote_cam_server/device_info');
+  static const MethodChannel _methodChannel = MethodChannel('com.firoyang.helloknightrcc_server/device_info');
   final LoggerService _logger = LoggerService();
   
   /// 获取设备信息

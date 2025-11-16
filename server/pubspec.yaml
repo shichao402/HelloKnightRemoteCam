@@ -1,4 +1,4 @@
-name: remote_cam_server
+name: helloknightrcc_server
 description: Remote camera server application
 publish_to: 'none'
 version: 1.0.2+1

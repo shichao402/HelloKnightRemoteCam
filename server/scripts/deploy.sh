@@ -40,7 +40,7 @@ echo "========================================"
 
 # 0. 终止旧的adb日志收集进程
 echo "步骤 0/5: 终止旧的adb日志收集进程..."
-PACKAGE_NAME="com.example.remote_cam_server"
+PACKAGE_NAME="com.firoyang.helloknightrcc_server"
 PID_FILE="$HOME/adb_logcat_${PACKAGE_NAME}.pid"
 
 # 方法1: 通过PID文件清理

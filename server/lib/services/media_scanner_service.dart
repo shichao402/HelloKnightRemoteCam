@@ -3,7 +3,7 @@ import 'logger_service.dart';
 
 /// MediaStore扫描服务：通知系统扫描新文件
 class MediaScannerService {
-  static const MethodChannel _channel = MethodChannel('com.example.remote_cam_server/media_scanner');
+  static const MethodChannel _channel = MethodChannel('com.firoyang.helloknightrcc_server/media_scanner');
   static final LoggerService _logger = LoggerService();
 
   /// 扫描文件，使其出现在相册中

@@ -4,7 +4,7 @@ import 'logger_service.dart';
 
 /// 设备方向监听服务 - 监听设备方向变化
 class OrientationService {
-  static const EventChannel _eventChannel = EventChannel('com.example.remote_cam_server/orientation');
+  static const EventChannel _eventChannel = EventChannel('com.firoyang.helloknightrcc_server/orientation');
   
   final LoggerService _logger = LoggerService();
   StreamSubscription<int>? _orientationSubscription;

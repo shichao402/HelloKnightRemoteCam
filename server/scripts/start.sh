@@ -4,8 +4,8 @@
 
 set -e
 
-PACKAGE_NAME="com.example.remote_cam_server"
-MAIN_ACTIVITY="com.example.remote_cam_server.MainActivity"
+PACKAGE_NAME="com.firoyang.helloknightrcc_server"
+MAIN_ACTIVITY="com.firoyang.helloknightrcc_server.MainActivity"
 
 echo "启动应用: $PACKAGE_NAME"
 

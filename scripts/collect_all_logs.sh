@@ -15,17 +15,17 @@ if adb devices | grep -q "device$"; then
     echo "✓ 检测到Android设备"
     
     # 确定日志目录路径（getApplicationSupportDirectory在Android上返回/files/，不是/app_flutter/）
-    LOG_DIR="/data/data/com.example.remote_cam_server/files/logs"
+    LOG_DIR="/data/data/com.firoyang.helloknightrcc_server/files/logs"
     
     # 如果新路径不存在，尝试旧路径（向后兼容）
-    if ! adb shell run-as com.example.remote_cam_server test -d "$LOG_DIR" 2>/dev/null; then
-        LOG_DIR="/data/data/com.example.remote_cam_server/app_flutter/logs"
+    if ! adb shell run-as com.firoyang.helloknightrcc_server test -d "$LOG_DIR" 2>/dev/null; then
+        LOG_DIR="/data/data/com.firoyang.helloknightrcc_server/app_flutter/logs"
     fi
     
     echo ""
     echo "手机端日志目录: $LOG_DIR"
     echo "手机端日志文件列表:"
-    adb shell run-as com.example.remote_cam_server ls -lat "$LOG_DIR/" 2>/dev/null | head -10 || echo "无法访问日志目录"
+    adb shell run-as com.firoyang.helloknightrcc_server ls -lat "$LOG_DIR/" 2>/dev/null | head -10 || echo "无法访问日志目录"
     
     echo ""
     echo "最新日志内容:"
@@ -33,7 +33,7 @@ if adb devices | grep -q "device$"; then
     
     # 直接读取日志文件：使用find命令查找所有日志文件，然后按修改时间排序
     # 只查找.log文件，排除其他文件
-    LOG_FILES=$(adb shell run-as com.example.remote_cam_server sh -c "find '$LOG_DIR' -name 'debug_*.log' -type f 2>/dev/null" 2>/dev/null | grep "\.log$" | tr '\r\n' '\n' | sort)
+    LOG_FILES=$(adb shell run-as com.firoyang.helloknightrcc_server sh -c "find '$LOG_DIR' -name 'debug_*.log' -type f 2>/dev/null" 2>/dev/null | grep "\.log$" | tr '\r\n' '\n' | sort)
     
     if [ -n "$LOG_FILES" ]; then
         # 获取最新的日志文件（按文件名排序，最新的ISO8601时间戳在最后）
@@ -43,14 +43,14 @@ if adb devices | grep -q "device$"; then
             LATEST_LOG_NAME=$(basename "$LATEST_LOG")
             echo "读取最新日志文件: $LATEST_LOG_NAME"
             echo ""
-            adb shell run-as com.example.remote_cam_server cat "$LATEST_LOG" 2>/dev/null || echo "无法读取日志文件: $LATEST_LOG"
+            adb shell run-as com.firoyang.helloknightrcc_server cat "$LATEST_LOG" 2>/dev/null || echo "无法读取日志文件: $LATEST_LOG"
         else
             echo "未找到有效的日志文件"
         fi
     else
         echo "未找到日志文件"
         echo "尝试检查日志目录..."
-        adb shell run-as com.example.remote_cam_server ls -la "$LOG_DIR/" 2>/dev/null | head -15 || echo "无法访问日志目录: $LOG_DIR"
+        adb shell run-as com.firoyang.helloknightrcc_server ls -la "$LOG_DIR/" 2>/dev/null | head -15 || echo "无法访问日志目录: $LOG_DIR"
     fi
     
     echo "========================================"

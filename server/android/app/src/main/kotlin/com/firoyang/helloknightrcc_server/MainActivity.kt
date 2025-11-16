@@ -1,4 +1,4 @@
-package com.example.remote_cam_server
+package com.firoyang.helloknightrcc_server
 
 import android.content.Context
 import android.content.Intent
@@ -22,12 +22,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class MainActivity: FlutterActivity() {
-    private val MEDIA_SCANNER_CHANNEL = "com.example.remote_cam_server/media_scanner"
-    private val CAMERA2_CHANNEL = "com.example.remote_cam_server/camera2"
-    private val PREVIEW_STREAM_CHANNEL = "com.example.remote_cam_server/preview_stream"
-    private val FOREGROUND_SERVICE_CHANNEL = "com.example.remote_cam_server/foreground_service"
-    private val DEVICE_INFO_CHANNEL = "com.example.remote_cam_server/device_info"
-    private val ORIENTATION_CHANNEL = "com.example.remote_cam_server/orientation"
+    private val MEDIA_SCANNER_CHANNEL = "com.firoyang.helloknightrcc_server/media_scanner"
+    private val CAMERA2_CHANNEL = "com.firoyang.helloknightrcc_server/camera2"
+    private val PREVIEW_STREAM_CHANNEL = "com.firoyang.helloknightrcc_server/preview_stream"
+    private val FOREGROUND_SERVICE_CHANNEL = "com.firoyang.helloknightrcc_server/foreground_service"
+    private val DEVICE_INFO_CHANNEL = "com.firoyang.helloknightrcc_server/device_info"
+    private val ORIENTATION_CHANNEL = "com.firoyang.helloknightrcc_server/orientation"
     
     private var camera2Manager: Camera2Manager? = null
     private var previewStreamHandler: PreviewStreamHandler? = null

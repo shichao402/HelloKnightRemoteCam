@@ -3,7 +3,7 @@
 # 持续收集adb logcat日志的脚本
 # 根据包名获取PID，然后过滤该PID的日志
 
-PACKAGE_NAME="com.example.remote_cam_server"
+PACKAGE_NAME="com.firoyang.helloknightrcc_server"
 LOG_FILE="$HOME/adb_logcat_${PACKAGE_NAME}.log"
 PID_FILE="$HOME/adb_logcat_${PACKAGE_NAME}.pid"
 

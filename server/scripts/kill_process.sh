@@ -4,7 +4,7 @@
 
 set -e
 
-PACKAGE_NAME="com.example.remote_cam_server"
+PACKAGE_NAME="com.firoyang.helloknightrcc_server"
 
 echo "检查并终止已有进程: $PACKAGE_NAME"
 

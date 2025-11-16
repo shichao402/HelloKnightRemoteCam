@@ -1,4 +1,4 @@
-package com.example.remote_cam_server
+package com.firoyang.helloknightrcc_server
 
 import android.app.*
 import android.content.Context

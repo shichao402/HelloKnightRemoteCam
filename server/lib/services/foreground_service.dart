@@ -3,7 +3,7 @@ import 'logger_service.dart';
 
 /// 前台服务控制 - 用于保持应用在后台运行时继续工作
 class ForegroundService {
-  static const MethodChannel _channel = MethodChannel('com.example.remote_cam_server/foreground_service');
+  static const MethodChannel _channel = MethodChannel('com.firoyang.helloknightrcc_server/foreground_service');
   final LoggerService _logger = LoggerService();
 
   /// 启动前台服务

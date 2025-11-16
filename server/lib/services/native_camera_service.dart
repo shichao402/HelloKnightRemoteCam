@@ -6,8 +6,8 @@ import 'logger_service.dart';
 
 /// 原生相机服务 - 使用Android Camera2 API实现同时录制和预览
 class NativeCameraService {
-  static const MethodChannel _methodChannel = MethodChannel('com.example.remote_cam_server/camera2');
-  static const EventChannel _eventChannel = EventChannel('com.example.remote_cam_server/preview_stream');
+  static const MethodChannel _methodChannel = MethodChannel('com.firoyang.helloknightrcc_server/camera2');
+  static const EventChannel _eventChannel = EventChannel('com.firoyang.helloknightrcc_server/preview_stream');
   
   final LoggerService _logger = LoggerService();
   

@@ -54,7 +54,7 @@ class LoggerService {
   // 初始化日志文件（每次启动都创建新文件）
   Future<void> _initLogFile() async {
     try {
-      // Android: 使用应用自己的目录 (/data/data/com.example.remote_cam_server/app_flutter/)
+      // Android: 使用应用自己的目录 (/data/data/com.firoyang.helloknightrcc_server/files/)
       // Mac/iOS: 使用应用沙盒目录
       final Directory appDir = await getApplicationSupportDirectory();
       
