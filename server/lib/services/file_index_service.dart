@@ -163,6 +163,7 @@ class FileIndexService {
           name: map['name'] as String,
           path: galleryPath, // 使用相册路径
           size: map['size'] as int,
+          createdTime: DateTime.fromMillisecondsSinceEpoch(map['created_time'] as int),
           modifiedTime: DateTime.fromMillisecondsSinceEpoch(map['modified_time'] as int),
         );
 
@@ -246,6 +247,7 @@ class FileIndexService {
         name: map['name'] as String,
         path: galleryPath,
         size: map['size'] as int,
+        createdTime: DateTime.fromMillisecondsSinceEpoch(map['created_time'] as int),
         modifiedTime: DateTime.fromMillisecondsSinceEpoch(map['modified_time'] as int),
       );
     } catch (e, stackTrace) {

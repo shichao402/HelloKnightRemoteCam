@@ -3,12 +3,14 @@ class FileInfo {
   final String name;          // 文件名
   final String path;          // 完整路径
   final int size;             // 文件大小（字节）
+  final DateTime createdTime; // 创建时间
   final DateTime modifiedTime; // 修改时间
 
   FileInfo({
     required this.name,
     required this.path,
     required this.size,
+    required this.createdTime,
     required this.modifiedTime,
   });
 
@@ -30,6 +32,7 @@ class FileInfo {
         'name': name,
         'path': path,
         'size': size,
+        'createdTime': createdTime.toIso8601String(),
         'modifiedTime': modifiedTime.toIso8601String(),
       };
 
@@ -39,6 +42,9 @@ class FileInfo {
       name: json['name'] as String,
       path: json['path'] as String,
       size: json['size'] as int,
+      createdTime: json['createdTime'] != null
+          ? DateTime.parse(json['createdTime'] as String)
+          : DateTime.parse(json['modifiedTime'] as String), // 兼容旧数据
       modifiedTime: DateTime.parse(json['modifiedTime'] as String),
     );
   }

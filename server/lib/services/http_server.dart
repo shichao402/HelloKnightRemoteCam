@@ -1450,10 +1450,15 @@ class HttpServerService {
               if (await file.exists()) {
                 final fileSize = await file.length();
                 final stat = await file.stat();
+                // 使用 changed 作为创建时间（如果可用），否则使用 modified
+                final createdTime = stat.changed.isBefore(stat.modified) 
+                    ? stat.changed 
+                    : stat.modified;
                 filesData.add({
                   'name': fileName,
                   'path': filePath,
                   'size': fileSize,
+                  'createdTime': createdTime.millisecondsSinceEpoch,
                   'modifiedTime': stat.modified.millisecondsSinceEpoch,
                 });
                 logger.log('从文件系统获取文件信息: $fileName', tag: 'WEBSOCKET');

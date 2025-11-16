@@ -473,13 +473,15 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     if (!mounted) return;
 
     // 查找文件列表中的对应文件
+    final now = DateTime.now();
     final file = [..._pictures, ..._videos].firstWhere(
       (f) => f.name == fileName,
       orElse: () => FileInfo(
         name: fileName,
         path: '',
         size: 0,
-        modifiedTime: DateTime.now(),
+        createdTime: now,
+        modifiedTime: now,
       ),
     );
 
@@ -2286,110 +2288,137 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
           ? Colors.yellow.shade100
           : (isSelected ? Colors.blue.shade50 : null),
       elevation: isHighlighted ? 4 : null,
-      child: Column(
-        children: [
-          ListTile(
-            leading: _isSelectionMode
-                ? Checkbox(
-                    value: isSelected,
-                    onChanged: (value) {
-                      setState(() {
-                        if (value == true) {
-                          _selectedFiles.add(file.name);
-                        } else {
-                          _selectedFiles.remove(file.name);
-                        }
-                      });
-                    },
-                  )
-                : CircleAvatar(
-                    backgroundColor: file.isVideo
-                        ? Colors.red.shade100
-                        : Colors.blue.shade100,
-                    child: Icon(
-                      file.isVideo ? Icons.videocam : Icons.image,
-                      color: file.isVideo ? Colors.red : Colors.blue,
+      child: GestureDetector(
+        onDoubleTap: !_isSelectionMode
+            ? () {
+                _logger.log('双击打开文件: ${file.name}', tag: 'FILE_MANAGER');
+                _openFile(file);
+              }
+            : null,
+        child: Column(
+          children: [
+            ListTile(
+              leading: _isSelectionMode
+                  ? Checkbox(
+                      value: isSelected,
+                      onChanged: (value) {
+                        setState(() {
+                          if (value == true) {
+                            _selectedFiles.add(file.name);
+                          } else {
+                            _selectedFiles.remove(file.name);
+                          }
+                        });
+                      },
+                    )
+                  : CircleAvatar(
+                      backgroundColor: file.isVideo
+                          ? Colors.red.shade100
+                          : Colors.blue.shade100,
+                      child: Icon(
+                        file.isVideo ? Icons.videocam : Icons.image,
+                        color: file.isVideo ? Colors.red : Colors.blue,
+                      ),
+                    ),
+              title: Row(
+                children: [
+                  Expanded(
+                    child: Text(file.name),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _formatDateTime(file.createdTime),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey,
+                      fontWeight: FontWeight.normal,
                     ),
                   ),
-            title: Text(file.name),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 文件类型标识
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: file.isVideo ? Colors.red : Colors.blue,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            file.isVideo ? Icons.videocam : Icons.image,
-                            size: 12,
-                            color: Colors.white,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            file.isVideo ? '视频' : '照片',
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(file.formattedSize),
-                Text(
-                  _formatDateTime(file.modifiedTime),
-                  style: const TextStyle(fontSize: 12),
-                ),
-                const SizedBox(height: 4),
-                // 显示服务端路径
-                Row(
-                  children: [
-                    const Icon(Icons.storage, size: 12, color: Colors.grey),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        file.path,
-                        style:
-                            const TextStyle(fontSize: 11, color: Colors.grey),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-                // 显示下载状态
-                if (isDownloaded)
+                ],
+              ),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 文件类型标识
                   Row(
                     children: [
-                      const Icon(Icons.check_circle,
-                          size: 12, color: Colors.green),
-                      const SizedBox(width: 4),
-                      Text(
-                        '已下载',
-                        style:
-                            const TextStyle(fontSize: 11, color: Colors.green),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: file.isVideo ? Colors.red : Colors.blue,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              file.isVideo ? Icons.videocam : Icons.image,
+                              size: 12,
+                              color: Colors.white,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              file.isVideo ? '视频' : '照片',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
-              ],
+                  const SizedBox(height: 4),
+                  Text(file.formattedSize),
+                  Text(
+                    '创建: ${_formatDateTime(file.createdTime)}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  Text(
+                    '修改: ${_formatDateTime(file.modifiedTime)}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 4),
+                  // 显示服务端路径
+                  Row(
+                    children: [
+                      const Icon(Icons.storage, size: 12, color: Colors.grey),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          file.path,
+                          style:
+                              const TextStyle(fontSize: 11, color: Colors.grey),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  // 显示下载状态
+                  if (isDownloaded)
+                    Row(
+                      children: [
+                        const Icon(Icons.check_circle,
+                            size: 12, color: Colors.green),
+                        const SizedBox(width: 4),
+                        Text(
+                          '已下载',
+                          style: const TextStyle(
+                              fontSize: 11, color: Colors.green),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
             ),
-          ),
-          // 操作按钮区域（直接显示，不折叠）
-          if (!_isSelectionMode) _buildFileActionButtons(file),
-        ],
+            // 操作按钮区域（直接显示，不折叠）
+            if (!_isSelectionMode) _buildFileActionButtons(file),
+          ],
+        ),
       ),
     );
   }
@@ -2416,6 +2445,12 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                     _selectedFiles.add(file.name);
                   }
                 });
+              }
+            : null,
+        onDoubleTap: !_isSelectionMode
+            ? () {
+                _logger.log('双击打开文件: ${file.name}', tag: 'FILE_MANAGER');
+                _openFile(file);
               }
             : null,
         child: Column(
@@ -2524,18 +2559,27 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                   ),
                   const SizedBox(height: 1),
                   Row(
+                    children: [
+                      Text(
+                        file.formattedSize,
+                        style: const TextStyle(fontSize: 9, color: Colors.grey),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        _formatDateTime(file.createdTime),
+                        style: const TextStyle(fontSize: 8, color: Colors.grey),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                  Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Flexible(
-                        child: Text(
-                          file.formattedSize,
-                          style:
-                              const TextStyle(fontSize: 9, color: Colors.grey),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
+                      const Spacer(),
                       // 按钮区域 - 紧贴在大小旁边
                       if (!_isSelectionMode)
                         _buildFileActionButtons(file, compact: true),
