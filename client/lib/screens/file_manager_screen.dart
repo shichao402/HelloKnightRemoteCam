@@ -1493,6 +1493,38 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             subtitle: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // 文件类型标识
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: file.isVideo ? Colors.red : Colors.blue,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            file.isVideo ? Icons.videocam : Icons.image,
+                            size: 12,
+                            color: Colors.white,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            file.isVideo ? '视频' : '照片',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
                 Text(file.formattedSize),
                 Text(
                   _formatDateTime(file.modifiedTime),
@@ -1576,10 +1608,48 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                     // 缩略图独立于本地文件存在性，只要服务器上有文件就显示
                     child: _buildThumbnail(file),
                   ),
+                  // 文件类型角标 - 左上角
+                  Positioned(
+                    top: 4,
+                    left: 4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: file.isVideo ? Colors.red.withOpacity(0.9) : Colors.blue.withOpacity(0.9),
+                        borderRadius: BorderRadius.circular(4),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.2),
+                            blurRadius: 2,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            file.isVideo ? Icons.videocam : Icons.image,
+                            size: 12,
+                            color: Colors.white,
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            file.isVideo ? '视频' : '照片',
+                            style: const TextStyle(
+                              fontSize: 10,
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                   if (_isSelectionMode)
                     Positioned(
                       top: 4,
-                      left: 4,
+                      right: 4,
                       child: Checkbox(
                         value: isSelected,
                         onChanged: (value) {
@@ -1593,7 +1663,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                         },
                       ),
                     ),
-                  if (isDownloaded)
+                  // 已下载图标（多选模式下不显示，避免与复选框重叠）
+                  if (isDownloaded && !_isSelectionMode)
                     const Positioned(
                       top: 4,
                       right: 4,
