@@ -3,7 +3,6 @@ import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import '../services/camera_service.dart';
 import '../services/settings_service.dart';
 import '../services/http_server.dart';
@@ -31,6 +30,7 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
   
   bool _isInitialized = false;
   bool _isServerRunning = false;
+  bool _isStopping = false; // 防止重复调用停止
   String? _ipAddress;
   final int _port = 8080;
   String? _errorMessage;
@@ -318,34 +318,61 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
   }
 
   Future<void> _stopServer() async {
-    _logger.log('正在停止服务器...', tag: 'SERVER');
-    
-    // 停止HTTP服务器（此时后台服务会自动停止）
-    await _httpServer.stop();
-    
-    // 停止相机服务（节省电量：服务器停止时不使用相机）
-    if (_cameraService.isInitialized) {
-      _logger.log('停止相机服务...', tag: 'SERVER');
-      await _cameraService.dispose();
-      _logger.log('相机服务已停止', tag: 'SERVER');
+    // 防止重复调用
+    if (_isStopping) {
+      _logger.log('停止操作已在进行中，忽略重复调用', tag: 'SERVER');
+      return;
     }
     
-    // 停止定时刷新
-    _stopRefreshTimer();
+    _isStopping = true;
     
+    // 立即更新UI状态，禁用按钮
     setState(() {
       _isServerRunning = false;
     });
     
-    _logger.log('服务器已停止', tag: 'SERVER');
+    _logger.log('正在停止服务器...', tag: 'SERVER');
     
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('服务器已停止'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+    try {
+      // 停止HTTP服务器（此时后台服务会自动停止）
+      await _httpServer.stop();
+      
+      // 停止相机服务（节省电量：服务器停止时不使用相机）
+      if (_cameraService.isInitialized) {
+        _logger.log('停止相机服务...', tag: 'SERVER');
+        await _cameraService.dispose();
+        _logger.log('相机服务已停止', tag: 'SERVER');
+      }
+      
+      // 停止定时刷新
+      _stopRefreshTimer();
+      
+      _logger.log('服务器已停止', tag: 'SERVER');
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('服务器已停止'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (e, stackTrace) {
+      _logger.logError('停止服务器时出错', error: e, stackTrace: stackTrace);
+      // 如果停止失败，恢复运行状态
+      setState(() {
+        _isServerRunning = true;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('停止服务器失败: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      _isStopping = false;
     }
   }
   
@@ -476,7 +503,7 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
                 const SizedBox(width: 16),
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: _isServerRunning ? _stopServer : null,
+                    onPressed: (_isServerRunning && !_isStopping) ? _stopServer : null,
                     icon: const Icon(Icons.stop),
                     label: const Text('停止服务器'),
                     style: ElevatedButton.styleFrom(

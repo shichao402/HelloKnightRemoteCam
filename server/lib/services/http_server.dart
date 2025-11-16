@@ -1656,20 +1656,29 @@ class HttpServerService {
     // 停止方向监听
     _orientationService.stopListening();
     
-    // 关闭所有预览流连接
+    // 关闭所有预览流连接（使用超时机制，避免阻塞）
     logger.log('关闭所有预览流连接，共 ${_previewStreamControllers.length} 个', tag: 'PREVIEW');
-    for (final entry in _previewStreamControllers.entries) {
+    final controllersToClose = <String, StreamController<List<int>>>{};
+    controllersToClose.addAll(_previewStreamControllers);
+    _previewStreamControllers.clear(); // 先清空映射，避免新的连接加入
+    
+    for (final entry in controllersToClose.entries) {
       try {
         final controller = entry.value;
         if (!controller.isClosed) {
-          await controller.close();
+          // 使用超时机制，避免等待客户端断开连接时阻塞
+          await controller.close().timeout(
+            const Duration(seconds: 2),
+            onTimeout: () {
+              logger.log('关闭预览流连接超时，强制关闭: ${entry.key}', tag: 'PREVIEW');
+            },
+          );
         }
         logger.log('已关闭预览流连接: ${entry.key}', tag: 'PREVIEW');
       } catch (e) {
         logger.log('关闭预览流连接时出错 ${entry.key}: $e', tag: 'PREVIEW');
       }
     }
-    _previewStreamControllers.clear();
     
     // 停止前台服务
     await _foregroundService.stop();
