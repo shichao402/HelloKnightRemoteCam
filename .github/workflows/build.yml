@@ -45,7 +45,7 @@ jobs:
         run: |
           cd client/build/macos/Build/Products/Release
           zip -r HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip HelloKnightRCC.app
-          mv HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip ../../../../../
+          mv HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip $GITHUB_WORKSPACE/client/
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
@@ -96,7 +96,7 @@ jobs:
           cd client/build/windows/x64/runner/Release
           $version = "${{ steps.get_version.outputs.FULL_VERSION }}"
           Compress-Archive -Path * -DestinationPath HelloKnightRCC_windows_${version}.zip -Force
-          Move-Item -Path HelloKnightRCC_windows_${version}.zip -Destination ../../../../../
+          Move-Item -Path HelloKnightRCC_windows_${version}.zip -Destination "$env:GITHUB_WORKSPACE/client/"
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -147,12 +147,13 @@ jobs:
         run: |
           cd server/build/app/outputs/flutter-apk
           mv app-release.apk remote_cam_server_android_${{ steps.get_version.outputs.FULL_VERSION }}.apk
+          mv remote_cam_server_android_${{ steps.get_version.outputs.FULL_VERSION }}.apk $GITHUB_WORKSPACE/server/
 
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: remote_cam_server_android
-          path: server/build/app/outputs/flutter-apk/remote_cam_server_android_${{ steps.get_version.outputs.FULL_VERSION }}.apk
+          path: server/remote_cam_server_android_${{ steps.get_version.outputs.FULL_VERSION }}.apk
           retention-days: 30
 
   create-release:
@@ -196,19 +197,28 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: HelloKnightRCC_macos
-          path: ./artifacts/macos
+          path: ./artifacts-temp
 
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
           name: HelloKnightRCC_windows
-          path: ./artifacts/windows
+          path: ./artifacts-temp
 
       - name: Download Android artifact
         uses: actions/download-artifact@v4
         with:
           name: remote_cam_server_android
-          path: ./artifacts/android
+          path: ./artifacts-temp
+
+      - name: Flatten artifacts structure
+        run: |
+          mkdir -p artifacts
+          # 查找并移动所有构建产物到统一的 artifacts 目录
+          find ./artifacts-temp -name "HelloKnightRCC_macos_*.zip" -exec mv {} ./artifacts/ \;
+          find ./artifacts-temp -name "HelloKnightRCC_windows_*.zip" -exec mv {} ./artifacts/ \;
+          find ./artifacts-temp -name "remote_cam_server_android_*.apk" -exec mv {} ./artifacts/ \;
+          rm -rf ./artifacts-temp
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -228,8 +238,8 @@ jobs:
             ### Changes
             - See commit history for details
           files: |
-            artifacts/macos/*
-            artifacts/windows/*
-            artifacts/android/*
+            artifacts/HelloKnightRCC_macos_*.zip
+            artifacts/HelloKnightRCC_windows_*.zip
+            artifacts/remote_cam_server_android_*.apk
           draft: false
           prerelease: false
