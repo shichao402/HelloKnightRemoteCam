@@ -69,6 +69,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   
   // WebSocket通知消息订阅（用于接收server的新文件通知）
   StreamSubscription? _webSocketSubscription;
+  // 自动下载监听订阅
+  StreamSubscription? _autoDownloadSubscription;
 
   @override
   void initState() {
@@ -98,6 +100,13 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     _gridScrollController.dispose();
     _downloadManager.dispose();
     _webSocketSubscription?.cancel();
+    _autoDownloadSubscription?.cancel();
+    _completionSubscription?.cancel();
+    // 取消所有超时定时器
+    for (var timer in _completionTimeouts.values) {
+      timer.cancel();
+    }
+    _completionTimeouts.clear();
     super.dispose();
   }
   
@@ -277,44 +286,114 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     }
   }
 
+  // 下载完成监听订阅
+  StreamSubscription<DownloadTask>? _completionSubscription;
+  // 下载完成超时保护映射：文件名 -> 超时定时器
+  final Map<String, Timer> _completionTimeouts = {};
+
   Future<void> _initializeDownloadManager() async {
     await _downloadManager.initialize();
     
-    // 监听下载任务变化
+    // 监听下载任务变化（用于更新下载进度）
     _downloadManager.tasksStream.listen((tasks) {
       if (!mounted) return;
       
-      // 更新下载状态缓存
-      bool hasNewCompleted = false;
-      for (var task in tasks) {
-        if (task.status == DownloadStatus.completed) {
-          final wasNotDownloaded = _downloadedStatusCache[task.fileName] != true;
-          if (wasNotDownloaded) {
-            hasNewCompleted = true;
+      // 只在有实际变化时更新UI
+      bool needsUpdate = false;
+      
+      // 检查下载任务列表是否有变化
+      if (_downloadTasks.length != tasks.length) {
+        needsUpdate = true;
+      } else {
+        // 检查任务状态是否有变化
+        for (var task in tasks) {
+          final oldTask = _downloadTasks.firstWhere(
+            (t) => t.id == task.id,
+            orElse: () => task,
+          );
+          if (oldTask.status != task.status || 
+              oldTask.downloadedBytes != task.downloadedBytes) {
+            needsUpdate = true;
+            break;
           }
-          // 先标记为已下载（乐观更新）
-          _downloadedStatusCache[task.fileName] = true;
         }
       }
       
-      // 更新UI
-      if (mounted) {
+      if (needsUpdate) {
         setState(() {
           _downloadTasks = tasks;
         });
-        
-        // 如果有新完成的下载，异步验证文件存在性并刷新UI
-        if (hasNewCompleted) {
-          _checkDownloadStatus([..._pictures, ..._videos]).then((_) {
-            if (mounted) {
-              setState(() {
-                // 强制刷新UI以更新按钮状态
-              });
-            }
-          });
-        }
       }
     });
+    
+    // 监听下载完成事件（使用回调机制）
+    _completionSubscription = _downloadManager.completionStream.listen((task) {
+      if (!mounted) return;
+      
+      print('[DOWNLOAD_MANAGER] 收到下载完成回调: ${task.fileName}');
+      
+      // 取消该文件的超时定时器（如果存在）
+      _completionTimeouts[task.fileName]?.cancel();
+      _completionTimeouts.remove(task.fileName);
+      
+      // 更新下载状态缓存
+      _downloadedStatusCache[task.fileName] = true;
+      
+      // 检查文件列表中的对应文件并更新UI
+      _updateFileDownloadStatus(task.fileName);
+      
+      // 设置超时保护：如果1秒后状态仍未更新，强制检查
+      _completionTimeouts[task.fileName] = Timer(const Duration(seconds: 1), () {
+        if (mounted) {
+          print('[DOWNLOAD_MANAGER] 超时保护触发，强制检查文件状态: ${task.fileName}');
+          _updateFileDownloadStatus(task.fileName, forceCheck: true);
+        }
+      });
+    });
+  }
+  
+  /// 更新文件的下载状态
+  Future<void> _updateFileDownloadStatus(String fileName, {bool forceCheck = false}) async {
+    if (!mounted) return;
+    
+    // 查找文件列表中的对应文件
+    final file = [..._pictures, ..._videos].firstWhere(
+      (f) => f.name == fileName,
+      orElse: () => FileInfo(
+        name: fileName,
+        path: '',
+        size: 0,
+        modifiedTime: DateTime.now(),
+      ),
+    );
+    
+    if (file.name == fileName && file.path.isNotEmpty) {
+      // 检查文件是否存在
+      await _checkDownloadStatus([file]);
+      
+      if (mounted) {
+        setState(() {
+          // 强制刷新UI以显示下载状态变化
+        });
+        print('[DOWNLOAD_MANAGER] 文件状态已更新: $fileName');
+      }
+    } else if (forceCheck) {
+      // 强制检查：即使文件不在列表中，也检查下载目录
+      final downloadDir = await _downloadSettings.getDownloadPath();
+      final localPath = path.join(downloadDir, fileName);
+      final localFile = File(localPath);
+      final exists = await localFile.exists();
+      
+      if (exists) {
+        _downloadedStatusCache[fileName] = true;
+        if (mounted) {
+          setState(() {
+            // 强制刷新UI
+          });
+          print('[DOWNLOAD_MANAGER] 强制检查完成，文件存在: $fileName');
+        }
+      }
+    }
   }
 
   /// 刷新文件列表（完整刷新，重置分页）
@@ -456,6 +535,34 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
           _videos = updatedVideos;
         });
         print('[FILE_NOTIFICATION] UI已更新');
+        print('[FILE_NOTIFICATION] 检查自动下载条件: fileType=$fileType, updatedPictures.length=${updatedPictures.length}, updatedVideos.length=${updatedVideos.length}');
+
+        // 自动下载最新照片/视频
+        if (fileType == 'image' && updatedPictures.isNotEmpty) {
+          final latestPicture = updatedPictures.first;
+          print('[FILE_NOTIFICATION] 准备自动下载照片: ${latestPicture.name}');
+          try {
+            await _autoDownloadFile(latestPicture);
+            print('[FILE_NOTIFICATION] 自动下载调用完成');
+          } catch (e, stackTrace) {
+            print('[FILE_NOTIFICATION] 自动下载调用失败: $e');
+            print('[FILE_NOTIFICATION] 堆栈: $stackTrace');
+          }
+        } else if (fileType == 'video' && updatedVideos.isNotEmpty) {
+          final latestVideo = updatedVideos.first;
+          print('[FILE_NOTIFICATION] 准备自动下载视频: ${latestVideo.name}');
+          try {
+            await _autoDownloadFile(latestVideo);
+            print('[FILE_NOTIFICATION] 自动下载调用完成');
+          } catch (e, stackTrace) {
+            print('[FILE_NOTIFICATION] 自动下载调用失败: $e');
+            print('[FILE_NOTIFICATION] 堆栈: $stackTrace');
+          }
+        } else {
+          print('[FILE_NOTIFICATION] 自动下载条件不满足: fileType=$fileType, picturesEmpty=${updatedPictures.isEmpty}, videosEmpty=${updatedVideos.isEmpty}');
+        }
+      } else {
+        print('[FILE_NOTIFICATION] Widget未挂载，跳过自动下载');
       }
     } catch (e) {
       print('处理新文件通知失败: $e');
@@ -595,10 +702,110 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   /// 批量检查文件下载状态
   Future<void> _checkDownloadStatus(List<FileInfo> files) async {
     final downloadDir = await _downloadSettings.getDownloadPath();
+    bool hasChanged = false;
     for (var file in files) {
       final localPath = path.join(downloadDir, file.name);
       final localFile = File(localPath);
-      _downloadedStatusCache[file.name] = await localFile.exists();
+      final exists = await localFile.exists();
+      final oldStatus = _downloadedStatusCache[file.name];
+      _downloadedStatusCache[file.name] = exists;
+      if (oldStatus != exists) {
+        hasChanged = true;
+        print('[DOWNLOAD_STATUS] 文件下载状态变化: ${file.name}, 旧状态=$oldStatus, 新状态=$exists');
+      }
+    }
+    // 如果状态有变化，触发UI更新
+    if (hasChanged && mounted) {
+      print('[DOWNLOAD_STATUS] 检测到状态变化，触发UI更新');
+      setState(() {
+        // 状态缓存已更新，这里只是触发UI刷新
+      });
+    }
+  }
+
+  /// 自动下载文件（收到新文件通知时自动下载）
+  Future<void> _autoDownloadFile(FileInfo file) async {
+    try {
+      // 检查是否已经在下载中或已完成
+      final existingTask = await _downloadManager.findTaskByFileName(file.name);
+
+      if (existingTask != null) {
+        if (existingTask.status == DownloadStatus.downloading ||
+            existingTask.status == DownloadStatus.pending) {
+          // 已经在下载中
+          print('[AUTO_DOWNLOAD] 文件已在下载中: ${file.name}');
+          return;
+        }
+
+        if (existingTask.status == DownloadStatus.completed) {
+          // 已经下载完成，更新状态缓存
+          final downloadDir = await _downloadSettings.getDownloadPath();
+          final localPath = path.join(downloadDir, file.name);
+          final localFile = File(localPath);
+          if (await localFile.exists()) {
+            _downloadedStatusCache[file.name] = true;
+            if (mounted) {
+              setState(() {
+                // 更新UI显示下载状态
+              });
+            }
+          }
+          print('[AUTO_DOWNLOAD] 文件已下载完成: ${file.name}');
+          return;
+        }
+      }
+
+      // 检查文件是否已存在
+      final downloadDir = await _downloadSettings.getDownloadPath();
+      final localPath = path.join(downloadDir, file.name);
+      final localFile = File(localPath);
+      if (await localFile.exists()) {
+        _downloadedStatusCache[file.name] = true;
+        if (mounted) {
+          setState(() {
+            // 更新UI显示下载状态
+          });
+        }
+        print('[AUTO_DOWNLOAD] 文件已存在: ${file.name}');
+        return;
+      }
+
+      // 添加下载任务
+      print('[AUTO_DOWNLOAD] 开始自动下载: ${file.name}');
+      final taskId = await _downloadManager.addDownload(
+        remoteFilePath: file.path,
+        fileName: file.name,
+      );
+
+      // 取消之前的订阅
+      _autoDownloadSubscription?.cancel();
+      
+      // 监听下载完成（只监听一次）
+      _autoDownloadSubscription = _downloadManager.tasksStream.listen((tasks) {
+        final task = tasks.firstWhere(
+          (t) => t.id == taskId,
+          orElse: () => tasks.first,
+        );
+
+        if (task.status == DownloadStatus.completed) {
+          _autoDownloadSubscription?.cancel();
+          _autoDownloadSubscription = null;
+          // 更新下载状态缓存
+          _downloadedStatusCache[task.fileName] = true;
+          if (mounted) {
+            setState(() {
+              // 更新UI显示下载状态
+            });
+          }
+          print('[AUTO_DOWNLOAD] 自动下载完成: ${task.fileName}');
+        } else if (task.status == DownloadStatus.failed) {
+          _autoDownloadSubscription?.cancel();
+          _autoDownloadSubscription = null;
+          print('[AUTO_DOWNLOAD] 自动下载失败: ${task.fileName}, 错误: ${task.errorMessage}');
+        }
+      });
+    } catch (e) {
+      print('[AUTO_DOWNLOAD] 自动下载失败: ${file.name}, 错误: $e');
     }
   }
 

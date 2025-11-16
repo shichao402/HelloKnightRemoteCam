@@ -23,12 +23,19 @@ class DownloadManager {
   
   final StreamController<List<DownloadTask>> _tasksController =
       StreamController<List<DownloadTask>>.broadcast();
+  
+  // 下载完成回调流（通知下载完成事件）
+  final StreamController<DownloadTask> _completionController =
+      StreamController<DownloadTask>.broadcast();
 
   DownloadManager({
     required this.baseUrl,
   });
 
   Stream<List<DownloadTask>> get tasksStream => _tasksController.stream;
+  
+  // 下载完成事件流
+  Stream<DownloadTask> get completionStream => _completionController.stream;
 
   // 获取所有任务（包括等待、下载中）
   List<DownloadTask> getTasks() {
@@ -213,16 +220,37 @@ class DownloadManager {
         deleteOnError: false, // 保留部分下载的文件
       );
 
-      // 下载成功
+      // 下载成功 - 验证文件已写入
       task.status = DownloadStatus.completed;
       task.endTime = DateTime.now();
       await _updateTask(task);
-      _onComplete(task);
+      
+      // 验证文件确实存在（确保文件已完全写入）
+      final file = File(task.localFilePath);
+      int retryCount = 0;
+      const maxRetries = 10; // 最多重试10次
+      const retryDelay = Duration(milliseconds: 100);
+      
+      while (!await file.exists() && retryCount < maxRetries) {
+        await Future.delayed(retryDelay);
+        retryCount++;
+      }
+      
+      if (await file.exists()) {
+        // 文件已确认存在，触发完成回调
+        _onComplete(task);
+      } else {
+        // 文件不存在，标记为失败
+        task.status = DownloadStatus.failed;
+        task.errorMessage = '文件下载完成但文件不存在';
+        await _updateTask(task);
+        _onComplete(task);
+      }
     } catch (e) {
       // 下载失败
       task.errorMessage = e.toString();
       
-      if (task.retryCount < maxRetries && !cancelToken.isCancelled) {
+      if (task.retryCount < DownloadManager.maxRetries && !cancelToken.isCancelled) {
         // 重试
         task.retryCount++;
         task.status = DownloadStatus.pending;
@@ -251,6 +279,12 @@ class DownloadManager {
   void _onComplete(DownloadTask task) {
     _activeDownloads.remove(task);
     _notifyTasksChanged();
+    
+    // 如果下载成功，发送完成事件
+    if (task.status == DownloadStatus.completed) {
+      _completionController.add(task);
+    }
+    
     _tryStartNext(); // 启动下一个
   }
 
@@ -447,6 +481,7 @@ class DownloadManager {
       token.cancel('DownloadManager disposed');
     }
     await _tasksController.close();
+    await _completionController.close();
     await _database?.close();
   }
 }
