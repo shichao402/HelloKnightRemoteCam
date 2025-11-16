@@ -512,38 +512,114 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         existingFileNames.add(file.name);
       }
 
-      final updatedPictures = <FileInfo>[..._pictures];
-      final updatedVideos = <FileInfo>[..._videos];
+      // 检查是否有真正的新文件
+      final List<FileInfo> trulyNewFiles = [];
+      final List<FileInfo> updatedExistingFiles = [];
 
       for (var file in newFiles) {
         if (!existingFileNames.contains(file.name)) {
-          // 根据文件类型添加到对应列表
-          if (fileType == 'image' || file.isImage) {
-            updatedPictures.add(file);
-          } else if (fileType == 'video' || file.isVideo) {
-            updatedVideos.add(file);
-          }
-          existingFileNames.add(file.name);
+          trulyNewFiles.add(file);
         } else {
-          // 更新已存在的文件
-          if (fileType == 'image' || file.isImage) {
-            final index =
-                updatedPictures.indexWhere((f) => f.name == file.name);
-            if (index >= 0) {
-              updatedPictures[index] = file;
-            }
-          } else if (fileType == 'video' || file.isVideo) {
-            final index = updatedVideos.indexWhere((f) => f.name == file.name);
-            if (index >= 0) {
-              updatedVideos[index] = file;
-            }
+          updatedExistingFiles.add(file);
+        }
+      }
+
+      // 如果没有新文件且没有需要更新的文件，直接返回
+      if (trulyNewFiles.isEmpty && updatedExistingFiles.isEmpty) {
+        print('[FILE_NOTIFICATION] 没有新文件或更新，跳过UI更新');
+        return;
+      }
+
+      final updatedPictures = <FileInfo>[..._pictures];
+      final updatedVideos = <FileInfo>[..._videos];
+      bool needsSort = false;
+
+      // 处理新文件：插入到列表开头（因为新文件时间戳最大）
+      for (var file in trulyNewFiles) {
+        if (fileType == 'image' || file.isImage) {
+          updatedPictures.insert(0, file);
+          needsSort = true;
+        } else if (fileType == 'video' || file.isVideo) {
+          updatedVideos.insert(0, file);
+          needsSort = true;
+        }
+      }
+
+      // 处理更新的文件：只更新已存在的文件，不改变位置
+      for (var file in updatedExistingFiles) {
+        if (fileType == 'image' || file.isImage) {
+          final index = updatedPictures.indexWhere((f) => f.name == file.name);
+          if (index >= 0) {
+            updatedPictures[index] = file;
+          }
+        } else if (fileType == 'video' || file.isVideo) {
+          final index = updatedVideos.indexWhere((f) => f.name == file.name);
+          if (index >= 0) {
+            updatedVideos[index] = file;
           }
         }
       }
 
-      // 按修改时间排序
-      updatedPictures.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
-      updatedVideos.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+      // 只在有新文件时才排序
+      // 由于新文件的时间戳应该是最新的，插入到开头后，只需要对新文件部分排序
+      // 如果新文件的时间戳确实比现有文件都新，就不需要全量排序
+      if (needsSort && trulyNewFiles.isNotEmpty) {
+        // 获取新文件的最大时间戳
+        final newFilesMaxTime = trulyNewFiles
+            .map((f) => f.modifiedTime)
+            .reduce((a, b) => a.isAfter(b) ? a : b);
+
+        // 处理照片列表
+        final newPicturesCount =
+            trulyNewFiles.where((f) => fileType == 'image' || f.isImage).length;
+        if (newPicturesCount > 0 && updatedPictures.length > newPicturesCount) {
+          // 检查新文件是否确实比现有文件都新
+          final oldestExistingTime =
+              updatedPictures[newPicturesCount].modifiedTime;
+          if (newFilesMaxTime.isAfter(oldestExistingTime) ||
+              newFilesMaxTime.isAtSameMomentAs(oldestExistingTime)) {
+            // 新文件都在前面，只对新文件部分排序
+            final newPictures = updatedPictures.sublist(0, newPicturesCount);
+            newPictures
+                .sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+            updatedPictures.replaceRange(0, newPicturesCount, newPictures);
+          } else {
+            // 需要全量排序
+            updatedPictures
+                .sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+          }
+        } else {
+          // 只有新文件或列表为空，直接排序
+          updatedPictures
+              .sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+        }
+
+        // 处理视频列表
+        final newVideosCount =
+            trulyNewFiles.where((f) => fileType == 'video' || f.isVideo).length;
+        if (newVideosCount > 0 && updatedVideos.length > newVideosCount) {
+          final oldestExistingTime = updatedVideos[newVideosCount].modifiedTime;
+          final newVideosMaxTime = trulyNewFiles
+              .where((f) => fileType == 'video' || f.isVideo)
+              .map((f) => f.modifiedTime)
+              .reduce((a, b) => a.isAfter(b) ? a : b);
+          if (newVideosMaxTime.isAfter(oldestExistingTime) ||
+              newVideosMaxTime.isAtSameMomentAs(oldestExistingTime)) {
+            // 新文件都在前面，只对新文件部分排序
+            final newVideos = updatedVideos.sublist(0, newVideosCount);
+            newVideos.sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+            updatedVideos.replaceRange(0, newVideosCount, newVideos);
+          } else {
+            // 需要全量排序
+            updatedVideos
+                .sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+          }
+        } else {
+          // 只有新文件或列表为空，直接排序
+          updatedVideos
+              .sort((a, b) => b.modifiedTime.compareTo(a.modifiedTime));
+        }
+      }
 
       // 更新最后更新时间
       if (updatedPictures.isNotEmpty || updatedVideos.isNotEmpty) {
@@ -1873,6 +1949,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                             return const SizedBox.shrink();
                           },
                           childCount: files.length,
+                          addAutomaticKeepAlives: true, // 保持列表项状态，避免不必要的重建
+                          addRepaintBoundaries: true, // 添加重绘边界，优化性能
                         ),
                       ),
                     ),
@@ -1914,6 +1992,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       onRefresh: _refreshFileList,
       child: ListView.builder(
         controller: _scrollController,
+        addAutomaticKeepAlives: true, // 保持列表项状态，避免不必要的重建
+        addRepaintBoundaries: true, // 添加重绘边界，优化性能
         itemCount: totalItemCount,
         itemBuilder: (context, index) {
           // 遍历分组和文件，构建项目
@@ -2043,6 +2123,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             return GridView.builder(
               controller: _gridScrollController,
               padding: const EdgeInsets.all(8),
+              addAutomaticKeepAlives: true, // 保持列表项状态，避免不必要的重建
+              addRepaintBoundaries: true, // 添加重绘边界，优化性能
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: crossAxisCount,
                 crossAxisSpacing: spacing,
@@ -2076,6 +2158,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       onRefresh: _refreshFileList,
       child: ListView.builder(
         controller: _scrollController,
+        addAutomaticKeepAlives: true, // 保持列表项状态，避免不必要的重建
+        addRepaintBoundaries: true, // 添加重绘边界，优化性能
         itemCount: files.length,
         itemBuilder: (context, index) {
           final file = files[index];
@@ -2367,8 +2451,36 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   Widget _buildThumbnail(FileInfo file) {
     try {
       _logger.log('构建缩略图 Widget: ${file.name}', tag: 'THUMBNAIL_REFRESH');
-      // 直接获取缩略图，不检查本地文件是否存在
-      // 缩略图独立于本地文件，只要服务器上有文件就应该显示
+
+      // 如果缩略图路径已经在缓存中，直接显示，避免使用 FutureBuilder 导致的闪烁
+      if (_thumbnailCache.containsKey(file.name)) {
+        final cachedPath = _thumbnailCache[file.name]!;
+        _logger.log('使用缓存的缩略图路径直接显示: ${file.name}, path=$cachedPath',
+            tag: 'THUMBNAIL_REFRESH');
+        return RepaintBoundary(
+          key: ValueKey('thumbnail_${file.name}'),
+          child: Image.file(
+            File(cachedPath),
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) {
+              _logger.log('缓存的缩略图加载失败: ${file.name}, error=$error',
+                  tag: 'THUMBNAIL_REFRESH');
+              // 如果缓存的路径失效，清除缓存并使用 FutureBuilder 重新加载
+              _thumbnailCache.remove(file.name);
+              _thumbnailFutureCache.remove(file.name);
+              return Center(
+                child: Icon(
+                  file.isVideo ? Icons.videocam : Icons.image,
+                  size: 48,
+                  color: file.isVideo ? Colors.red : Colors.blue,
+                ),
+              );
+            },
+          ),
+        );
+      }
+
+      // 如果缓存中没有路径，使用 FutureBuilder 异步加载
       // 使用稳定的 key 和 RepaintBoundary 来避免不必要的重建
       return RepaintBoundary(
         key: ValueKey('thumbnail_${file.name}'),
