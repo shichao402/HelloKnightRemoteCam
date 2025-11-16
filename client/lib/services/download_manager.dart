@@ -6,6 +6,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as path;
 import '../models/download_task.dart';
 import 'download_settings_service.dart';
+import 'logger_service.dart';
 
 class DownloadManager {
   static const int maxConcurrent = 2; // 最大并发下载数
@@ -16,6 +17,7 @@ class DownloadManager {
   Database? _database;
   final Dio _dio = Dio();
   final DownloadSettingsService _settingsService = DownloadSettingsService();
+  final ClientLoggerService _logger = ClientLoggerService();
   
   final Queue<DownloadTask> _waitingQueue = Queue();
   final List<DownloadTask> _activeDownloads = [];
@@ -137,6 +139,7 @@ class DownloadManager {
     required String remoteFilePath,
     required String fileName,
   }) async {
+    _logger.logDownload('添加下载任务', details: fileName);
     // 生成任务ID
     final taskId = DateTime.now().millisecondsSinceEpoch.toString();
 
@@ -144,17 +147,66 @@ class DownloadManager {
     final downloadDir = await _settingsService.getDownloadPath();
     await Directory(downloadDir).create(recursive: true);
     final localPath = path.join(downloadDir, fileName);
+    _logger.log('下载路径: $localPath', tag: 'DOWNLOAD');
 
     // 获取文件大小
     int totalBytes = 0;
     try {
+      _logger.log('发送HEAD请求获取文件大小: $remoteFilePath', tag: 'DOWNLOAD');
       final response = await _dio.head(
         '$baseUrl/file/download?path=${Uri.encodeComponent(remoteFilePath)}',
         options: Options(),
       );
-      totalBytes = int.parse(response.headers['content-length']?[0] ?? '0');
-    } catch (e) {
-      print('获取文件大小失败: $e');
+      
+      // 记录响应状态码和所有响应头
+      _logger.log('HEAD响应状态码: ${response.statusCode}', tag: 'DOWNLOAD');
+      _logger.log('HEAD响应头: ${response.headers.map}', tag: 'DOWNLOAD');
+      
+      // 尝试多种方式获取Content-Length
+      String? contentLengthStr;
+      
+      // 方式1: 使用value方法（推荐）
+      try {
+        contentLengthStr = response.headers.value('content-length');
+        _logger.log('方式1获取Content-Length: $contentLengthStr', tag: 'DOWNLOAD');
+      } catch (e) {
+        _logger.log('方式1失败: $e', tag: 'DOWNLOAD');
+      }
+      
+      // 方式2: 使用map访问（大小写不敏感）
+      if (contentLengthStr == null || contentLengthStr.isEmpty) {
+        try {
+          final headerList = response.headers['content-length'];
+          if (headerList != null && headerList.isNotEmpty) {
+            contentLengthStr = headerList[0];
+            _logger.log('方式2获取Content-Length: $contentLengthStr', tag: 'DOWNLOAD');
+          }
+        } catch (e) {
+          _logger.log('方式2失败: $e', tag: 'DOWNLOAD');
+        }
+      }
+      
+      // 方式3: 尝试不同的大小写
+      if (contentLengthStr == null || contentLengthStr.isEmpty) {
+        try {
+          contentLengthStr = response.headers.value('Content-Length');
+          _logger.log('方式3获取Content-Length: $contentLengthStr', tag: 'DOWNLOAD');
+        } catch (e) {
+          _logger.log('方式3失败: $e', tag: 'DOWNLOAD');
+        }
+      }
+      
+      if (contentLengthStr != null && contentLengthStr.isNotEmpty) {
+        totalBytes = int.tryParse(contentLengthStr) ?? 0;
+        _logger.log('解析后的文件大小: $totalBytes 字节', tag: 'DOWNLOAD');
+      } else {
+        _logger.log('警告: 无法从响应头获取Content-Length，使用默认值0', tag: 'DOWNLOAD');
+        totalBytes = 0;
+      }
+      
+      _logger.log('最终文件大小: $totalBytes 字节', tag: 'DOWNLOAD');
+    } catch (e, stackTrace) {
+      _logger.logError('获取文件大小失败', error: e, stackTrace: stackTrace);
     }
 
     // 创建任务
@@ -168,10 +220,12 @@ class DownloadManager {
 
     // 保存到数据库
     await _saveTask(task);
+    _logger.log('任务已保存到数据库: $taskId', tag: 'DOWNLOAD');
 
     // 添加到队列
     _waitingQueue.add(task);
     _notifyTasksChanged();
+    _logger.log('任务已添加到队列，等待队列长度: ${_waitingQueue.length}', tag: 'DOWNLOAD');
 
     // 尝试开始下载
     _tryStartNext();
@@ -184,16 +238,19 @@ class DownloadManager {
     while (_activeDownloads.length < maxConcurrent && _waitingQueue.isNotEmpty) {
       final task = _waitingQueue.removeFirst();
       _activeDownloads.add(task);
+      _logger.log('启动下载任务: ${task.fileName}, 当前活跃下载数: ${_activeDownloads.length}', tag: 'DOWNLOAD');
       _startDownload(task);
     }
   }
 
   // 开始下载
   Future<void> _startDownload(DownloadTask task) async {
+    _logger.logDownload('开始下载', details: '${task.fileName}, 总大小: ${task.totalBytes} 字节');
     task.status = DownloadStatus.downloading;
     task.startTime = DateTime.now();
     await _updateTask(task);
-    _notifyTasksChanged();
+    _notifyTasksChanged(); // 立即通知，确保UI显示下载状态
+    _logger.log('已通知UI下载开始: ${task.fileName}', tag: 'DOWNLOAD');
 
     final cancelToken = CancelToken();
     _cancelTokens[task.id] = cancelToken;
@@ -201,14 +258,48 @@ class DownloadManager {
     try {
       final url = '$baseUrl/file/download?path=${Uri.encodeComponent(task.remoteFilePath)}';
       
+      // 记录上次更新的进度，用于控制更新频率
+      int lastNotifiedBytes = 0;
+      DateTime lastNotifyTime = DateTime.now();
+      bool hasNotifiedProgress = false; // 标记是否已经通知过进度
+      
       await _dio.download(
         url,
         task.localFilePath,
         onReceiveProgress: (received, total) {
+          final now = DateTime.now();
+          final timeDiff = now.difference(lastNotifyTime);
+          
+          // 更新任务数据
           task.downloadedBytes = received;
+          // 如果之前 totalBytes 为 0，现在有正确的 total 值，立即更新并通知UI
+          final totalBytesChanged = task.totalBytes == 0 && total > 0;
           task.totalBytes = total;
-          _updateTask(task);
-          _notifyTasksChanged();
+          
+          // 每500ms更新一次，或者下载完成时更新，或者 totalBytes 从0变为正确值时立即更新
+          final shouldNotify = timeDiff.inMilliseconds >= 500 || 
+                               received == total ||
+                               !hasNotifiedProgress ||
+                               totalBytesChanged;
+          
+          if (shouldNotify) {
+            final progressPercent = total > 0 ? (received * 100 / total).round() : 0;
+            // 优化：只在调试模式下记录详细日志，减少日志开销
+            if (totalBytesChanged) {
+              _logger.log('进度更新(总大小已更新): ${task.fileName}, $received/$total 字节 ($progressPercent%), 时间差: ${timeDiff.inMilliseconds}ms', tag: 'DOWNLOAD');
+            } else {
+              // 只在进度变化较大时记录日志（减少日志量）
+              final progressDiff = (received - lastNotifiedBytes) * 100 / total;
+              if (progressDiff >= 5 || received == total) {
+                _logger.log('进度更新: ${task.fileName}, $received/$total 字节 ($progressPercent%), 时间差: ${timeDiff.inMilliseconds}ms', tag: 'DOWNLOAD');
+              }
+            }
+            _updateTask(task);
+            _notifyTasksChanged(); // 通知UI更新
+            lastNotifiedBytes = received;
+            lastNotifyTime = now;
+            hasNotifiedProgress = true;
+          }
         },
         options: Options(
           headers: {
@@ -220,10 +311,14 @@ class DownloadManager {
         deleteOnError: false, // 保留部分下载的文件
       );
 
-      // 下载成功 - 验证文件已写入
+      // 下载成功 - 确保进度显示为100%
+      _logger.logDownload('下载完成', details: '${task.fileName}, 最终大小: ${task.downloadedBytes}/${task.totalBytes}');
+      task.downloadedBytes = task.totalBytes; // 确保进度为100%
       task.status = DownloadStatus.completed;
       task.endTime = DateTime.now();
       await _updateTask(task);
+      _notifyTasksChanged(); // 通知UI更新，显示100%进度
+      _logger.log('已通知UI下载完成(100%): ${task.fileName}', tag: 'DOWNLOAD');
       
       // 验证文件确实存在（确保文件已完全写入）
       final file = File(task.localFilePath);
@@ -238,12 +333,15 @@ class DownloadManager {
       
       if (await file.exists()) {
         // 文件已确认存在，触发完成回调
+        _logger.log('文件验证成功: ${task.fileName}', tag: 'DOWNLOAD');
         _onComplete(task);
       } else {
         // 文件不存在，标记为失败
+        _logger.logError('文件验证失败: ${task.fileName}', error: '文件下载完成但文件不存在');
         task.status = DownloadStatus.failed;
         task.errorMessage = '文件下载完成但文件不存在';
         await _updateTask(task);
+        _notifyTasksChanged(); // 通知UI更新失败状态
         _onComplete(task);
       }
     } catch (e) {
@@ -337,7 +435,7 @@ class DownloadManager {
           await file.delete();
         }
       } catch (e) {
-        print('删除文件失败: $e');
+        _logger.logError('删除文件失败', error: e);
       }
 
       // 从数据库删除
@@ -382,7 +480,7 @@ class DownloadManager {
       
       return maps.map((map) => DownloadTask.fromJson(map)).toList();
     } catch (e) {
-      print('获取已完成任务失败: $e');
+      _logger.logError('获取已完成任务失败', error: e);
       return [];
     }
   }
@@ -403,7 +501,7 @@ class DownloadManager {
       
       return deletedCount;
     } catch (e) {
-      print('删除旧任务失败: $e');
+      _logger.logError('删除旧任务失败', error: e);
       return 0;
     }
   }
@@ -421,7 +519,7 @@ class DownloadManager {
       
       return deletedCount > 0;
     } catch (e) {
-      print('删除任务失败: $e');
+      _logger.logError('删除任务失败', error: e);
       return false;
     }
   }

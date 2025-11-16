@@ -2,6 +2,29 @@
 
 ## 日志规则 - 最高优先级
 
+### 0. 统一日志服务（强制 - 最高优先级）
+**严格禁止使用 `print()` 语句，必须使用项目统一的日志服务。**
+
+**客户端（Client）：**
+- 使用 `ClientLoggerService` 单例
+- 普通日志：`logger.log('消息', tag: 'TAG')`
+- 下载日志：`logger.logDownload('操作', details: '详情')`
+- 错误日志：`logger.logError('错误', error: e, stackTrace: stackTrace)`
+- API日志：`logger.logApiCall()` / `logger.logApiResponse()`
+- 指令日志：`logger.logCommand()` / `logger.logCommandResponse()`
+
+**手机端（Server）：**
+- 使用 `LoggerService` 单例
+- 普通日志：`logger.log('消息', tag: 'TAG')`
+- 错误日志：`logger.logError('错误', error: e, stackTrace: stackTrace)`
+
+**禁止行为：**
+- ❌ 禁止使用 `print()` 语句
+- ❌ 禁止使用 `debugPrint()` 语句
+- ❌ 禁止使用任何其他日志输出方式
+- ✅ 必须使用统一的日志服务
+- ✅ 所有日志必须包含有意义的 tag
+
 ### 1. 独立日志文件（强制）
 所有组件必须将日志写入独立的日志文件，不依赖系统日志。
 

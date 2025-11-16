@@ -320,39 +320,126 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     _downloadManager.tasksStream.listen((tasks) {
       if (!mounted) return;
 
-      // 只在有实际变化时更新UI
+      // 检查是否有变化
       bool needsUpdate = false;
+      String updateReason = '';
 
-      // 检查下载任务列表是否有变化
+      // 检查下载任务列表长度是否有变化
       if (_downloadTasks.length != tasks.length) {
         needsUpdate = true;
+        updateReason = '任务列表长度变化: ${_downloadTasks.length} -> ${tasks.length}';
+        _logger.log('检测到任务列表长度变化: ${_downloadTasks.length} -> ${tasks.length}',
+            tag: 'FILE_MANAGER');
       } else {
-        // 检查任务状态是否有变化
+        // 检查任务状态或进度是否有变化
+        // 注意：由于 tasks 中的对象可能是同一个引用，我们需要比较值而不是引用
+        // 优化：使用 Map 提高查找效率（如果任务数量较多）
+        final oldTasksMap = <String, DownloadTask>{};
+        for (var oldTask in _downloadTasks) {
+          oldTasksMap[oldTask.id] = oldTask;
+        }
+
         for (var task in tasks) {
-          final oldTask = _downloadTasks.firstWhere(
-            (t) => t.id == task.id,
-            orElse: () => task,
-          );
-          if (oldTask.status != task.status ||
-              oldTask.downloadedBytes != task.downloadedBytes) {
+          // 查找对应的旧任务
+          final oldTask = oldTasksMap[task.id];
+          if (oldTask == null) {
+            // 新任务，需要更新
             needsUpdate = true;
+            updateReason = '新任务: ${task.fileName}';
+            _logger.log('检测到新任务: ${task.fileName}', tag: 'FILE_MANAGER');
             break;
+          }
+
+          // 如果任务状态变化，需要更新
+          if (oldTask.status != task.status) {
+            needsUpdate = true;
+            updateReason =
+                '状态变化: ${task.fileName}, ${oldTask.status} -> ${task.status}';
+            _logger.log(
+                '检测到状态变化: ${task.fileName}, ${oldTask.status} -> ${task.status}',
+                tag: 'FILE_MANAGER');
+            break;
+          }
+
+          // 如果正在下载，检查进度变化
+          if (task.status == DownloadStatus.downloading ||
+              task.status == DownloadStatus.pending) {
+            // 对于正在下载的任务，检查进度是否有变化
+            // 注意：即使百分比相同，只要字节数变化就更新UI，确保进度条能平滑更新
+            // 使用值比较，避免引用问题
+            final oldBytes = oldTask.downloadedBytes;
+            final newBytes = task.downloadedBytes;
+            final oldTotal = oldTask.totalBytes;
+            final newTotal = task.totalBytes;
+
+            if (oldBytes != newBytes || oldTotal != newTotal) {
+              final oldProgress =
+                  oldTotal > 0 ? (oldBytes * 100 / oldTotal).round() : 0;
+              final newProgress =
+                  newTotal > 0 ? (newBytes * 100 / newTotal).round() : 0;
+              // 即使百分比相同，只要字节数变化就更新UI（确保进度条能平滑更新）
+              needsUpdate = true;
+              updateReason =
+                  '进度变化: ${task.fileName}, $oldProgress% -> $newProgress% ($oldBytes/$oldTotal -> $newBytes/$newTotal)';
+              _logger.log(
+                  '检测到进度变化: ${task.fileName}, $oldProgress% -> $newProgress% ($oldBytes/$oldTotal -> $newBytes/$newTotal)',
+                  tag: 'FILE_MANAGER');
+              break;
+            }
+          } else {
+            // 对于其他状态的任务，检查下载字节数是否有变化
+            if (oldTask.downloadedBytes != task.downloadedBytes) {
+              needsUpdate = true;
+              updateReason =
+                  '字节数变化: ${task.fileName}, ${oldTask.downloadedBytes} -> ${task.downloadedBytes}';
+              _logger.log(
+                  '检测到字节数变化: ${task.fileName}, ${oldTask.downloadedBytes} -> ${task.downloadedBytes}',
+                  tag: 'FILE_MANAGER');
+              break;
+            }
           }
         }
       }
 
+      // 如果有变化，立即更新UI
       if (needsUpdate) {
+        _logger.log('UI更新下载进度: $updateReason', tag: 'FILE_MANAGER');
+        // 优化：预先构建旧任务Map，避免在setState中重复查找
+        final oldTasksMap = <String, DownloadTask>{};
+        for (var oldTask in _downloadTasks) {
+          oldTasksMap[oldTask.id] = oldTask;
+        }
+
         setState(() {
-          _downloadTasks = tasks;
+          // 创建新列表，避免引用问题
+          // 优化：只对实际变化的任务使用 copyWith，减少不必要的对象创建
+          _downloadTasks = tasks.map((task) {
+            final oldTask = oldTasksMap[task.id];
+            // 如果对象引用相同或值完全相同，直接使用原对象
+            if (oldTask != null &&
+                (identical(oldTask, task) ||
+                    (oldTask.downloadedBytes == task.downloadedBytes &&
+                        oldTask.totalBytes == task.totalBytes &&
+                        oldTask.status == task.status))) {
+              return oldTask; // 复用原对象
+            }
+            // 需要创建新对象
+            return task.copyWith(
+              totalBytes: task.totalBytes,
+              downloadedBytes: task.downloadedBytes,
+              status: task.status,
+            );
+          }).toList();
         });
       }
+      // 移除调试日志（生产环境不需要）
     });
 
     // 监听下载完成事件（使用回调机制）
     _completionSubscription = _downloadManager.completionStream.listen((task) {
       if (!mounted) return;
 
-      print('[DOWNLOAD_MANAGER] 收到下载完成回调: ${task.fileName}');
+      _logger.log('收到下载完成回调: ${task.fileName}', tag: 'DOWNLOAD_MANAGER');
 
       // 取消该文件的超时定时器（如果存在）
       _completionTimeouts[task.fileName]?.cancel();
@@ -368,7 +455,8 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       _completionTimeouts[task.fileName] =
           Timer(const Duration(seconds: 1), () {
         if (mounted) {
-          print('[DOWNLOAD_MANAGER] 超时保护触发，强制检查文件状态: ${task.fileName}');
+          _logger.log('超时保护触发，强制检查文件状态: ${task.fileName}',
+              tag: 'DOWNLOAD_MANAGER');
           _updateFileDownloadStatus(task.fileName, forceCheck: true);
         }
       });
@@ -397,7 +485,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
 
       // 使用防抖机制，避免频繁刷新
       // _checkDownloadStatus 内部已经会触发防抖更新，这里不需要再次调用 setState
-      print('[DOWNLOAD_MANAGER] 文件状态已更新: $fileName');
+      _logger.log('文件状态已更新: $fileName', tag: 'DOWNLOAD_MANAGER');
     } else if (forceCheck) {
       // 强制检查：即使文件不在列表中，也检查下载目录
       final downloadDir = await _downloadSettings.getDownloadPath();
@@ -410,7 +498,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         if (mounted) {
           // 使用防抖机制，避免频繁刷新
           _debouncedSetState(reason: '强制检查文件存在: $fileName');
-          print('[DOWNLOAD_MANAGER] 强制检查完成，文件存在: $fileName');
+          _logger.log('强制检查完成，文件存在: $fileName', tag: 'DOWNLOAD_MANAGER');
         }
       }
     }
@@ -1342,10 +1430,12 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   }
 
   Future<void> _downloadFile(FileInfo file) async {
+    _logger.log('用户点击下载按钮: ${file.name}', tag: 'FILE_MANAGER');
     try {
       // 检查是否已下载
       final isDownloaded = _downloadedStatusCache[file.name] == true;
       if (isDownloaded) {
+        _logger.log('文件已下载，跳过: ${file.name}', tag: 'FILE_MANAGER');
         _showInfo('文件已下载');
         return;
       }
@@ -1355,18 +1445,23 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       if (existingTask != null &&
           (existingTask.status == DownloadStatus.downloading ||
               existingTask.status == DownloadStatus.pending)) {
+        _logger.log('文件正在下载中，跳过: ${file.name}, 状态=${existingTask.status}',
+            tag: 'FILE_MANAGER');
         _showInfo('文件正在下载中');
         return;
       }
 
-      await _downloadManager.addDownload(
+      _logger.log('调用下载管理器添加下载: ${file.name}', tag: 'FILE_MANAGER');
+      final taskId = await _downloadManager.addDownload(
         remoteFilePath: file.path,
         fileName: file.name,
       );
+      _logger.log('下载任务已添加，任务ID: $taskId', tag: 'FILE_MANAGER');
 
       final downloadDir = await _downloadSettings.getDownloadPath();
       _showSuccess('已添加到下载队列\n保存位置: $downloadDir');
     } catch (e) {
+      _logger.logError('添加下载失败: ${file.name}', error: e);
       _showError('添加下载失败: $e');
     }
   }
@@ -2615,24 +2710,63 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   Widget _buildFileActionButtons(FileInfo file, {bool compact = false}) {
     final isDownloaded = _downloadedStatusCache[file.name] == true;
 
+    // 查找该文件的下载任务
+    final downloadTask = _downloadTasks.firstWhere(
+      (task) => task.fileName == file.name,
+      orElse: () => DownloadTask(
+        id: '',
+        remoteFilePath: '',
+        localFilePath: '',
+        fileName: '',
+        totalBytes: 0,
+      ),
+    );
+
+    // 检查是否正在下载（包括下载中和等待中）
+    final isDownloading = downloadTask.fileName == file.name &&
+        (downloadTask.status == DownloadStatus.downloading ||
+            downloadTask.status == DownloadStatus.pending);
+
+    // 调试日志：记录按钮构建时的状态
+    if (isDownloading) {
+      final progress = downloadTask.totalBytes > 0
+          ? (downloadTask.downloadedBytes * 100 / downloadTask.totalBytes)
+              .round()
+          : 0;
+      _logger.log(
+          '构建下载按钮: ${file.name}, 状态=${downloadTask.status}, 进度=$progress% (${downloadTask.downloadedBytes}/${downloadTask.totalBytes})',
+          tag: 'FILE_MANAGER');
+    }
+
     if (compact) {
       // 紧凑模式（网格视图）- 紧凑排列
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            icon: const Icon(Icons.download, size: 16),
-            onPressed: isDownloaded ? null : () => _downloadFile(file),
-            tooltip: '下载',
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(
-              minWidth: 24,
-              minHeight: 24,
-              maxWidth: 24,
-              maxHeight: 24,
-            ),
-            iconSize: 16,
-          ),
+          // 如果正在下载，显示圆形进度条；否则显示下载按钮
+          isDownloading
+              ? SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    value: downloadTask.progress,
+                    strokeWidth: 2.5,
+                    backgroundColor: Colors.grey.shade300,
+                  ),
+                )
+              : IconButton(
+                  icon: const Icon(Icons.download, size: 16),
+                  onPressed: isDownloaded ? null : () => _downloadFile(file),
+                  tooltip: '下载',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 24,
+                    minHeight: 24,
+                    maxWidth: 24,
+                    maxHeight: 24,
+                  ),
+                  iconSize: 16,
+                ),
           IconButton(
             icon: const Icon(Icons.folder_open, size: 16),
             onPressed: isDownloaded ? () => _openInFileManager(file) : null,
@@ -2684,11 +2818,34 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
           Expanded(
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.download, size: 16),
-              label: const Text('下载', style: TextStyle(fontSize: 12)),
-              onPressed: isDownloaded ? null : () => _downloadFile(file),
-            ),
+            child: isDownloading
+                ? Container(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            value: downloadTask.progress,
+                            strokeWidth: 2.5,
+                            backgroundColor: Colors.grey.shade300,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${downloadTask.progressPercent}%',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  )
+                : OutlinedButton.icon(
+                    icon: const Icon(Icons.download, size: 16),
+                    label: const Text('下载', style: TextStyle(fontSize: 12)),
+                    onPressed: isDownloaded ? null : () => _downloadFile(file),
+                  ),
           ),
           const SizedBox(width: 4),
           Expanded(

@@ -621,6 +621,41 @@ class HttpServerService {
       }
     });
 
+    // HEAD请求处理：获取文件信息（文件大小等）
+    apiRouter.add('HEAD', '/file/download', (Request request) async {
+      try {
+        final filePath = request.url.queryParameters['path'];
+        if (filePath == null) {
+          return Response.badRequest(
+            body: json.encode({'success': false, 'error': '缺少文件路径参数'}),
+            headers: {'Content-Type': 'application/json'},
+          );
+        }
+
+        final file = await cameraService.getFile(filePath);
+        final fileSize = await file.length();
+        final filename = file.path.split('/').last;
+        
+        logger.log('HEAD请求: 文件路径=$filePath, 文件大小=$fileSize', tag: 'HTTP');
+        
+        return Response.ok(
+          '',
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'Content-Disposition': 'attachment; filename="$filename"',
+            'Content-Length': fileSize.toString(),
+            'Accept-Ranges': 'bytes',
+          },
+        );
+      } catch (e, stackTrace) {
+        logger.logError('HEAD请求处理失败', error: e, stackTrace: stackTrace);
+        return Response.internalServerError(
+          body: json.encode({'success': false, 'error': e.toString()}),
+          headers: {'Content-Type': 'application/json'},
+        );
+      }
+    });
+
     // 下载文件（支持Range请求用于断点续传）
     apiRouter.get('/file/download', (Request request) async {
       String? clientIp;
@@ -649,19 +684,6 @@ class HttpServerService {
         final rangeHeader = request.headers['range'];
         final isRangeRequest = rangeHeader != null && rangeHeader.startsWith('bytes=');
         final isFullDownload = request.method == 'GET' && !isRangeRequest;
-        
-        // HEAD 请求：只返回 headers，不返回 body（不记录操作日志）
-        if (request.method == 'HEAD') {
-          return Response.ok(
-            '',
-            headers: {
-              'Content-Type': 'application/octet-stream',
-              'Content-Disposition': 'attachment; filename="$filename"',
-              'Content-Length': fileSize.toString(),
-              'Accept-Ranges': 'bytes',
-            },
-          );
-        }
 
         // Range 请求：处理断点续传（不记录操作日志）
         if (isRangeRequest) {
