@@ -915,6 +915,9 @@ class HttpServerService {
             case 'deleteFile':
               result = await _handleDeleteFileRequest(params);
               break;
+            case 'toggleStarred':
+              result = await _handleToggleStarredRequest(params);
+              break;
             case 'getSettings':
               result = await _handleGetSettingsRequest();
               break;
@@ -1135,8 +1138,27 @@ class HttpServerService {
       return {'success': false, 'error': '缺少文件路径参数'};
     }
     
-    await cameraService.deleteFile(filePath);
-    return {'success': true};
+    try {
+      await cameraService.deleteFile(filePath);
+      return {'success': true};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+  
+  /// 处理切换星标请求
+  Future<Map<String, dynamic>> _handleToggleStarredRequest(Map<String, dynamic> params) async {
+    final filePath = params['path'] as String?;
+    if (filePath == null) {
+      return {'success': false, 'error': '缺少文件路径参数'};
+    }
+    
+    try {
+      final newStarred = await cameraService.toggleStarred(filePath);
+      return {'success': true, 'isStarred': newStarred};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
   }
   
   /// 处理获取设置请求

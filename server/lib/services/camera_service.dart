@@ -516,9 +516,27 @@ class CameraService {
     return await _fileIndex.getFileByName(fileName);
   }
 
+  // 切换文件星标状态
+  Future<bool> toggleStarred(String galleryPath) async {
+    try {
+      final newStarred = await _fileIndex.toggleStarred(galleryPath);
+      _logger.logCamera('文件星标状态已切换', details: '$galleryPath, starred=$newStarred');
+      return newStarred;
+    } catch (e, stackTrace) {
+      _logger.logError('切换文件星标状态失败', error: e, stackTrace: stackTrace);
+      throw Exception('切换文件星标状态失败: $e');
+    }
+  }
+
   // 删除文件（从相册和索引中删除）
   Future<void> deleteFile(String galleryPath) async {
     try {
+      // 检查是否已标记星标
+      final isStarred = await _fileIndex.getStarred(galleryPath);
+      if (isStarred) {
+        throw Exception('无法删除已标记星标的文件');
+      }
+
       // 从相册删除文件
       final file = File(galleryPath);
       if (await file.exists()) {

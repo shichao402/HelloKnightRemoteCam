@@ -5,6 +5,7 @@ class FileInfo {
   final int size;             // 文件大小（字节）
   final DateTime createdTime; // 创建时间
   final DateTime modifiedTime; // 修改时间
+  final bool isStarred;       // 是否已标记星标
 
   FileInfo({
     required this.name,
@@ -12,6 +13,7 @@ class FileInfo {
     required this.size,
     required this.createdTime,
     required this.modifiedTime,
+    this.isStarred = false,   // 默认为false
   });
 
   // 格式化文件大小
@@ -46,6 +48,7 @@ class FileInfo {
         'size': size,
         'createdTime': createdTime.toIso8601String(),
         'modifiedTime': modifiedTime.toIso8601String(),
+        'isStarred': isStarred,
       };
 
   // JSON 反序列化
@@ -58,6 +61,26 @@ class FileInfo {
           ? DateTime.parse(json['createdTime'] as String)
           : DateTime.parse(json['modifiedTime'] as String), // 兼容旧数据
       modifiedTime: DateTime.parse(json['modifiedTime'] as String),
+      isStarred: json['isStarred'] as bool? ?? false, // 兼容旧数据，默认为false
+    );
+  }
+
+  // 复制并更新字段
+  FileInfo copyWith({
+    String? name,
+    String? path,
+    int? size,
+    DateTime? createdTime,
+    DateTime? modifiedTime,
+    bool? isStarred,
+  }) {
+    return FileInfo(
+      name: name ?? this.name,
+      path: path ?? this.path,
+      size: size ?? this.size,
+      createdTime: createdTime ?? this.createdTime,
+      modifiedTime: modifiedTime ?? this.modifiedTime,
+      isStarred: isStarred ?? this.isStarred,
     );
   }
 }

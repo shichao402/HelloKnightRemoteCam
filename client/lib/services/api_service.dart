@@ -441,6 +441,21 @@ class ApiService {
     }
   }
 
+  // 切换文件星标状态（完全使用WebSocket）
+  Future<Map<String, dynamic>> toggleStarred(String remotePath) async {
+    try {
+      logger.logCommand('toggleStarred', params: {'path': remotePath}, details: '切换文件星标状态');
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'toggleStarred', 'path': remotePath});
+      final result = await _sendWebSocketRequest('toggleStarred', {'path': remotePath});
+      logger.logCommandResponse('toggleStarred', success: result['success'] == true, result: result, error: result['error']);
+      return result;
+    } catch (e, stackTrace) {
+      logger.logError('切换文件星标状态失败', error: e, stackTrace: stackTrace);
+      logger.logCommandResponse('toggleStarred', success: false, error: e.toString());
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
   // 获取设置状态（完全使用WebSocket）
   Future<Map<String, dynamic>> getSettingsStatus() async {
     try {

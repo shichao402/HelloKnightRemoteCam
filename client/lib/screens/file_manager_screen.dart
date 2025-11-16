@@ -940,7 +940,56 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
     }
   }
 
+  /// 统一更新文件列表中的文件状态（避免刷新整个列表）
+  /// 使用 copyWith 更新文件对象，只更新变化的文件，不影响其他文件
+  /// 这样可以避免缩略图重新加载，提升性能
+  void _updateFileInList({
+    required String filePath,
+    required FileInfo Function(FileInfo) updateFn,
+    String? reason,
+  }) {
+    if (!mounted) return;
+
+    bool hasUpdate = false;
+
+    // 更新照片列表中的文件
+    final pictureIndex = _pictures.indexWhere((f) => f.path == filePath);
+    if (pictureIndex != -1) {
+      final oldFile = _pictures[pictureIndex];
+      final newFile = updateFn(oldFile);
+      if (oldFile != newFile) {
+        _pictures[pictureIndex] = newFile;
+        hasUpdate = true;
+        _logger.log('更新照片列表中的文件: ${oldFile.name}, reason=$reason',
+            tag: 'FILE_UPDATE');
+      }
+    }
+
+    // 更新视频列表中的文件
+    final videoIndex = _videos.indexWhere((f) => f.path == filePath);
+    if (videoIndex != -1) {
+      final oldFile = _videos[videoIndex];
+      final newFile = updateFn(oldFile);
+      if (oldFile != newFile) {
+        _videos[videoIndex] = newFile;
+        hasUpdate = true;
+        _logger.log('更新视频列表中的文件: ${oldFile.name}, reason=$reason',
+            tag: 'FILE_UPDATE');
+      }
+    }
+
+    // 只有当文件确实存在且状态有变化时才更新UI
+    if (hasUpdate) {
+      setState(() {
+        // 文件对象已更新，Flutter 会通过 ValueKey 识别哪些项需要重建
+        // 由于使用了稳定的 key（file.name），只有对应的项会更新
+      });
+    }
+  }
+
   /// 防抖的 setState：合并短时间内的多次更新
+  /// 注意：这个方法会触发整个列表重建，应该尽量避免使用
+  /// 优先使用 _updateFileInList 来更新单个文件的状态
   void _debouncedSetState({String? reason}) {
     _pendingStateUpdate = true;
     _debounceTimer?.cancel();
@@ -1342,6 +1391,12 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
 
   /// 删除本地文件
   Future<void> _deleteLocalFile(FileInfo file) async {
+    // 检查是否已标记星标
+    if (file.isStarred) {
+      _showError('无法删除已标记星标的文件，请先取消星标');
+      return;
+    }
+
     try {
       final downloadDir = await _downloadSettings.getDownloadPath();
       final localPath = path.join(downloadDir, file.name);
@@ -1384,6 +1439,12 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
   }
 
   Future<void> _deleteFile(FileInfo file) async {
+    // 检查是否已标记星标
+    if (file.isStarred) {
+      _showError('无法删除已标记星标的文件，请先取消星标');
+      return;
+    }
+
     // 确认对话框
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1416,6 +1477,29 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
       }
     } catch (e) {
       _showError('删除失败: $e');
+    }
+  }
+
+  Future<void> _toggleStarred(FileInfo file) async {
+    try {
+      _logger.log('切换文件星标状态: ${file.name}', tag: 'FILE_MANAGER');
+      final result = await widget.apiService.toggleStarred(file.path);
+      if (result['success']) {
+        final newStarred = result['isStarred'] as bool? ?? false;
+        _showSuccess(newStarred ? '已标记星标' : '已取消星标');
+
+        // 使用统一的更新方法，只更新当前文件的状态，不刷新整个列表
+        _updateFileInList(
+          filePath: file.path,
+          updateFn: (f) => f.copyWith(isStarred: newStarred),
+          reason: '切换星标状态',
+        );
+      } else {
+        _showError(result['error'] ?? '操作失败');
+      }
+    } catch (e, stackTrace) {
+      _logger.logError('切换文件星标状态失败', error: e, stackTrace: stackTrace);
+      _showError('操作失败: $e');
     }
   }
 
@@ -2326,6 +2410,17 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                     child: Text(file.name),
                   ),
                   const SizedBox(width: 8),
+                  // 星标按钮
+                  if (!_isSelectionMode)
+                    GestureDetector(
+                      onTap: () => _toggleStarred(file),
+                      child: Icon(
+                        file.isStarred ? Icons.star : Icons.star_border,
+                        color: file.isStarred ? Colors.amber : Colors.grey,
+                        size: 20,
+                      ),
+                    ),
+                  if (!_isSelectionMode) const SizedBox(width: 8),
                   Text(
                     _formatDateTime(file.createdTime),
                     style: const TextStyle(
@@ -2532,6 +2627,7 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
                       ),
                     ),
                   // 已下载图标（多选模式下不显示，避免与复选框重叠）
+                  // 如果已下载，显示在右上角
                   if (isDownloaded && !_isSelectionMode)
                     const Positioned(
                       top: 4,
@@ -2846,10 +2942,27 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
             iconSize: 16,
           ),
           IconButton(
+            icon:
+                Icon(file.isStarred ? Icons.star : Icons.star_border, size: 16),
+            color: file.isStarred ? Colors.amber : Colors.grey,
+            onPressed: () => _toggleStarred(file),
+            tooltip: file.isStarred ? '取消星标' : '标记星标',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(
+              minWidth: 24,
+              minHeight: 24,
+              maxWidth: 24,
+              maxHeight: 24,
+            ),
+            iconSize: 16,
+          ),
+          IconButton(
             icon: const Icon(Icons.delete_forever, size: 16),
             color: Colors.red,
-            onPressed: isDownloaded ? () => _deleteLocalFile(file) : null,
-            tooltip: '删除本地文件',
+            onPressed: (isDownloaded && !file.isStarred)
+                ? () => _deleteLocalFile(file)
+                : null,
+            tooltip: file.isStarred ? '无法删除已标记星标的文件' : '删除本地文件',
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(
               minWidth: 24,
@@ -2918,10 +3031,25 @@ class _FileManagerScreenState extends State<FileManagerScreen> {
           const SizedBox(width: 4),
           Expanded(
             child: OutlinedButton.icon(
+              icon: Icon(file.isStarred ? Icons.star : Icons.star_border,
+                  size: 16),
+              label: Text(file.isStarred ? '取消星标' : '星标',
+                  style: const TextStyle(fontSize: 12)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: file.isStarred ? Colors.amber : Colors.grey,
+              ),
+              onPressed: () => _toggleStarred(file),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: OutlinedButton.icon(
               icon: const Icon(Icons.delete_forever, size: 16),
               label: const Text('删除', style: TextStyle(fontSize: 12)),
               style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-              onPressed: isDownloaded ? () => _deleteLocalFile(file) : null,
+              onPressed: (isDownloaded && !file.isStarred)
+                  ? () => _deleteLocalFile(file)
+                  : null,
             ),
           ),
         ],

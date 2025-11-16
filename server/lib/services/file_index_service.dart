@@ -9,7 +9,7 @@ import 'logger_service.dart';
 class FileIndexService {
   static const String _dbName = 'file_index.db';
   static const String _tableName = 'files';
-  static const int _dbVersion = 1;
+  static const int _dbVersion = 2;
   
   Database? _database;
   final LoggerService _logger = LoggerService();
@@ -48,6 +48,7 @@ class FileIndexService {
         size INTEGER NOT NULL,
         created_time INTEGER NOT NULL,
         modified_time INTEGER NOT NULL,
+        starred INTEGER NOT NULL DEFAULT 0,
         UNIQUE(gallery_path)
       )
     ''');
@@ -56,7 +57,13 @@ class FileIndexService {
 
   /// 数据库升级
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    // 未来版本升级逻辑
+    if (oldVersion < 2) {
+      // 从版本1升级到版本2：添加starred字段
+      await db.execute('''
+        ALTER TABLE $_tableName ADD COLUMN starred INTEGER NOT NULL DEFAULT 0
+      ''');
+      _logger.log('数据库已升级到版本2：添加starred字段', tag: 'FILE_INDEX');
+    }
   }
 
   /// 添加文件索引
@@ -67,6 +74,7 @@ class FileIndexService {
     required int size,
     required DateTime createdTime,
     required DateTime modifiedTime,
+    bool isStarred = false,
   }) async {
     if (_database == null) {
       await initialize();
@@ -82,6 +90,7 @@ class FileIndexService {
           'size': size,
           'created_time': createdTime.millisecondsSinceEpoch,
           'modified_time': modifiedTime.millisecondsSinceEpoch,
+          'starred': isStarred ? 1 : 0,
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
@@ -165,6 +174,7 @@ class FileIndexService {
           size: map['size'] as int,
           createdTime: DateTime.fromMillisecondsSinceEpoch(map['created_time'] as int),
           modifiedTime: DateTime.fromMillisecondsSinceEpoch(map['modified_time'] as int),
+          isStarred: (map['starred'] as int? ?? 0) == 1,
         );
 
         if (map['file_type'] == 'image') {
@@ -249,10 +259,76 @@ class FileIndexService {
         size: map['size'] as int,
         createdTime: DateTime.fromMillisecondsSinceEpoch(map['created_time'] as int),
         modifiedTime: DateTime.fromMillisecondsSinceEpoch(map['modified_time'] as int),
+        isStarred: (map['starred'] as int? ?? 0) == 1,
       );
     } catch (e, stackTrace) {
       _logger.logError('根据文件名获取文件信息失败', error: e, stackTrace: stackTrace);
       return null;
+    }
+  }
+
+  /// 切换文件星标状态
+  Future<bool> toggleStarred(String galleryPath) async {
+    if (_database == null) {
+      await initialize();
+    }
+
+    try {
+      // 先获取当前状态
+      final maps = await _database!.query(
+        _tableName,
+        where: 'gallery_path = ?',
+        whereArgs: [galleryPath],
+        limit: 1,
+      );
+
+      if (maps.isEmpty) {
+        _logger.log('文件不存在: $galleryPath', tag: 'FILE_INDEX');
+        return false;
+      }
+
+      final currentStarred = (maps.first['starred'] as int? ?? 0) == 1;
+      final newStarred = !currentStarred;
+
+      // 更新状态
+      await _database!.update(
+        _tableName,
+        {'starred': newStarred ? 1 : 0},
+        where: 'gallery_path = ?',
+        whereArgs: [galleryPath],
+      );
+
+      _logger.log('文件星标状态已切换: $galleryPath, starred=$newStarred', tag: 'FILE_INDEX');
+      return newStarred;
+    } catch (e, stackTrace) {
+      _logger.logError('切换文件星标状态失败', error: e, stackTrace: stackTrace);
+      rethrow;
+    }
+  }
+
+  /// 获取文件星标状态
+  Future<bool> getStarred(String galleryPath) async {
+    if (_database == null) {
+      await initialize();
+    }
+
+    try {
+      final maps = await _database!.query(
+        _tableName,
+        columns: ['starred'],
+        where: 'gallery_path = ?',
+        whereArgs: [galleryPath],
+        limit: 1,
+      );
+
+      if (maps.isEmpty) {
+        return false;
+      }
+
+      return (maps.first['starred'] as int? ?? 0) == 1;
+    } catch (e, stackTrace) {
+      _logger.logError('获取文件星标状态失败', error: e, stackTrace: stackTrace);
+      return false;
     }
   }
 
@@ -263,6 +339,12 @@ class FileIndexService {
     }
 
     try {
+      // 检查是否已标记星标
+      final isStarred = await getStarred(galleryPath);
+      if (isStarred) {
+        throw Exception('无法删除已标记星标的文件');
+      }
+
       await _database!.delete(
         _tableName,
         where: 'gallery_path = ?',
@@ -271,6 +353,7 @@ class FileIndexService {
       _logger.log('文件索引已删除: $galleryPath', tag: 'FILE_INDEX');
     } catch (e, stackTrace) {
       _logger.logError('删除文件索引失败', error: e, stackTrace: stackTrace);
+      rethrow;
     }
   }
 
