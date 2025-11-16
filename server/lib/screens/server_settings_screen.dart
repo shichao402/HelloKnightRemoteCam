@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/logger_service.dart';
+import '../services/version_service.dart';
 
 class ServerSettingsScreen extends StatefulWidget {
   const ServerSettingsScreen({Key? key}) : super(key: key);
@@ -15,11 +17,13 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   static const String _autoStopSecondsKey = 'auto_stop_seconds'; // 改为秒为单位存储
   
   final LoggerService _logger = LoggerService();
+  final VersionService _versionService = VersionService();
   bool _autoStartServer = false;
   bool _autoStopEnabled = false;
   int _autoStopMinutes = 15; // UI显示用分钟，内部转换为秒存储
   bool _debugMode = false;
   bool _isLoading = true;
+  String _version = '加载中...';
   
   // 临时状态（未保存的修改）
   bool _tempAutoStartServer = false;
@@ -36,6 +40,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
 
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
+    final version = await _versionService.getVersion();
     setState(() {
       _autoStartServer = prefs.getBool(_autoStartKey) ?? false;
       _autoStopEnabled = prefs.getBool(_autoStopEnabledKey) ?? false;
@@ -45,6 +50,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
       final seconds = prefs.getInt(_autoStopSecondsKey) ?? 20;
       _autoStopMinutes = seconds == 0 ? 0 : (seconds / 60).ceil(); // 向上取整到分钟
       _debugMode = _logger.debugEnabled;
+      _version = version;
       
       // 同步临时状态
       _tempAutoStartServer = _autoStartServer;
@@ -373,6 +379,41 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
               ),
             ),
           ),
+          const Divider(),
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text(
+              '关于',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('版本号'),
+            subtitle: Text(
+              _version,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            trailing: IconButton(
+              icon: const Icon(Icons.copy),
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: _version));
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('版本号已复制到剪贴板')),
+                  );
+                }
+              },
+              tooltip: '复制版本号',
+            ),
+          ),
+          const SizedBox(height: 16),
         ],
       ),
     );

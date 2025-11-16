@@ -47,6 +47,17 @@ fi
 
 echo "使用 Flutter: $FLUTTER"
 
+# 同步版本号（只同步服务器）
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+VERSION_SCRIPT="$PROJECT_ROOT/scripts/version.sh"
+if [ -f "$VERSION_SCRIPT" ]; then
+    echo "同步服务器版本号到 pubspec.yaml..."
+    bash "$VERSION_SCRIPT" sync server
+else
+    echo "警告: 版本号同步脚本未找到，跳过版本号同步"
+fi
+
 # 获取依赖
 echo "获取依赖..."
 $FLUTTER pub get

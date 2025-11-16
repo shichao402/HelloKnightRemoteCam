@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'dart:io';
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
+import '../services/version_service.dart';
 import 'package:file_picker/file_picker.dart';
 
 class ClientSettingsScreen extends StatefulWidget {
@@ -15,9 +16,11 @@ class ClientSettingsScreen extends StatefulWidget {
 class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   final ClientLoggerService _logger = ClientLoggerService();
   final DownloadSettingsService _downloadSettings = DownloadSettingsService();
+  final VersionService _versionService = VersionService();
   bool _debugMode = false;
   bool _isLoading = true;
   String _downloadPath = '';
+  String _version = '加载中...';
 
   @override
   void initState() {
@@ -27,9 +30,11 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
 
   Future<void> _loadSettings() async {
     final downloadPath = await _downloadSettings.getDownloadPath();
+    final version = await _versionService.getVersion();
     setState(() {
       _debugMode = _logger.debugEnabled;
       _downloadPath = downloadPath;
+      _version = version;
       _isLoading = false;
     });
   }
@@ -447,6 +452,41 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                     ),
                   ),
                 ),
+                const Divider(),
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                    '关于',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: const Text('版本号'),
+                  subtitle: Text(
+                    _version,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.copy),
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: _version));
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('版本号已复制到剪贴板')),
+                        );
+                      }
+                    },
+                    tooltip: '复制版本号',
+                  ),
+                ),
+                const SizedBox(height: 16),
               ],
             ),
     );

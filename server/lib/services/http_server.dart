@@ -18,6 +18,7 @@ import 'operation_log_service.dart';
 import 'foreground_service.dart';
 import 'media_scanner_service.dart';
 import 'orientation_service.dart';
+import 'version_compatibility_service.dart';
 import '../models/camera_settings.dart';
 import '../models/camera_capabilities.dart';
 import '../models/camera_status.dart';
@@ -78,6 +79,7 @@ class HttpServerService {
   final ForegroundService _foregroundService = ForegroundService();
   final DeviceInfoService _deviceInfoService = DeviceInfoService();
   final OrientationService _orientationService = OrientationService();
+  final VersionCompatibilityService _versionCompatibilityService = VersionCompatibilityService();
   
   HttpServer? _server;
   String? _ipAddress;
@@ -500,7 +502,7 @@ class HttpServerService {
       final clientIpForChannel = clientIp != 'unknown' ? clientIp : null;
       
       // 调用webSocketHandler，并在回调中使用捕获的IP地址
-      return webSocketHandler((WebSocketChannel channel, String? protocol) {
+      return webSocketHandler((WebSocketChannel channel, String? protocol) async {
         
         // 检查是否已有独占客户端连接
         if (_exclusiveWebSocketChannel != null && _exclusiveWebSocketChannel != channel) {
@@ -537,8 +539,9 @@ class HttpServerService {
         
         logger.log('客户端已连接WebSocket，当前连接数: ${_webSocketChannels.length}', tag: 'WEBSOCKET');
         
-        // 发送初始连接确认（包含预览尺寸）
+        // 发送初始连接确认（包含预览尺寸和服务器版本）
         final previewSize = cameraService.getPreviewSize();
+        final serverVersion = await _versionCompatibilityService.getServerVersion();
         channel.sink.add(json.encode({
           'type': 'notification',
           'event': 'connected',
@@ -546,6 +549,7 @@ class HttpServerService {
             'status': 'connected',
             'exclusive': _exclusiveWebSocketChannel == channel,
             'previewSize': previewSize, // 包含预览尺寸
+            'serverVersion': serverVersion, // 服务器版本号
             'timestamp': DateTime.now().millisecondsSinceEpoch,
           },
         }));
@@ -1412,15 +1416,39 @@ class HttpServerService {
   Future<Map<String, dynamic>> _handleRegisterDeviceRequest(Map<String, dynamic> params, WebSocketChannel channel) async {
     try {
       final deviceModel = params['deviceModel'] as String?;
+      final clientVersion = params['clientVersion'] as String?;
       
       if (deviceModel == null || deviceModel.isEmpty) {
         return {'success': false, 'error': '缺少deviceModel参数'};
       }
       
+      // 检查客户端版本兼容性
+      if (clientVersion != null && clientVersion.isNotEmpty) {
+        final (isCompatible, reason) = await _versionCompatibilityService.checkClientVersion(clientVersion);
+        if (!isCompatible) {
+          logger.log('拒绝客户端连接：版本不兼容 - $reason', tag: 'VERSION_COMPAT');
+          // 发送版本不兼容通知并关闭连接
+          channel.sink.add(json.encode({
+            'type': 'notification',
+            'event': 'version_incompatible',
+            'data': {
+              'reason': 'version_incompatible',
+              'message': reason ?? '客户端版本不兼容',
+              'clientVersion': clientVersion,
+              'minRequiredVersion': await _versionCompatibilityService.getMinClientVersion(),
+            },
+          }));
+          Future.delayed(const Duration(milliseconds: 500), () {
+            channel.sink.close();
+          });
+          return {'success': false, 'error': reason ?? '客户端版本不兼容'};
+        }
+      }
+      
       // 检查是否是当前独占连接的客户端
       if (_exclusiveWebSocketChannel == channel) {
         _exclusiveClientDeviceModel = deviceModel;
-        logger.log('注册独占连接设备: $deviceModel', tag: 'WEBSOCKET');
+        logger.log('注册独占连接设备: $deviceModel (客户端版本: ${clientVersion ?? "未知"})', tag: 'WEBSOCKET');
         return {
           'success': true,
           'message': '设备注册成功',

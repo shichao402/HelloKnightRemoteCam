@@ -6,12 +6,16 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/camera_settings.dart';
 import '../models/file_info.dart';
 import 'logger_service.dart';
+import 'version_service.dart';
+import 'version_compatibility_service.dart';
 
 class ApiService {
   final String baseUrl;
   final String host;
   final int port;
   final ClientLoggerService logger = ClientLoggerService();
+  final VersionService _versionService = VersionService();
+  final VersionCompatibilityService _versionCompatibilityService = VersionCompatibilityService();
   late final HttpClient _httpClient;
   
   // WebSocket连接管理
@@ -162,16 +166,62 @@ class ApiService {
           }
         }
       } else if (messageType == 'notification') {
-        // 处理通知消息（如new_files）
-        // 广播通知消息给所有监听者
-        logger.log('收到WebSocket通知: $data', tag: 'WEBSOCKET');
-        _notificationController?.add(data);
+        // 处理通知消息（如new_files、connected、version_incompatible）
+        final event = data['event'] as String?;
+        
+        if (event == 'version_incompatible') {
+          // 版本不兼容通知
+          final notificationData = data['data'] as Map<String, dynamic>?;
+          final message = notificationData?['message'] as String? ?? '版本不兼容';
+          logger.log('版本不兼容: $message', tag: 'VERSION_COMPAT');
+          // 广播版本不兼容通知
+          _notificationController?.add(data);
+        } else if (event == 'connected') {
+          // 连接成功通知，检查服务器版本
+          final notificationData = data['data'] as Map<String, dynamic>?;
+          final serverVersion = notificationData?['serverVersion'] as String?;
+          if (serverVersion != null) {
+            _checkServerVersion(serverVersion);
+          }
+          // 广播连接通知
+          _notificationController?.add(data);
+        } else {
+          // 其他通知消息
+          logger.log('收到WebSocket通知: $data', tag: 'WEBSOCKET');
+          _notificationController?.add(data);
+        }
       }
     } catch (e) {
       logger.logError('解析WebSocket消息失败', error: e);
     }
   }
   
+  // 检查服务器版本兼容性
+  Future<void> _checkServerVersion(String serverVersion) async {
+    try {
+      final (isCompatible, reason) = await _versionCompatibilityService.checkServerVersion(serverVersion);
+      if (!isCompatible) {
+        logger.log('服务器版本不兼容: $reason', tag: 'VERSION_COMPAT');
+        // 发送版本不兼容通知
+        _notificationController?.add({
+          'type': 'notification',
+          'event': 'server_version_incompatible',
+          'data': {
+            'reason': 'server_version_incompatible',
+            'message': reason ?? '服务器版本不兼容',
+            'serverVersion': serverVersion,
+          },
+        });
+        // 断开连接
+        disconnectWebSocket();
+      } else {
+        logger.log('服务器版本兼容: $serverVersion', tag: 'VERSION_COMPAT');
+      }
+    } catch (e, stackTrace) {
+      logger.logError('检查服务器版本失败', error: e, stackTrace: stackTrace);
+    }
+  }
+
   // 转换Map类型（从Map<Object?, Object?>转换为Map<String, dynamic>）
   Map<String, dynamic> _convertMap(Map map) {
     return Map<String, dynamic>.fromEntries(
@@ -592,12 +642,18 @@ class ApiService {
     }
   }
 
-  // 注册设备（完全使用WebSocket）
+  // 注册设备（完全使用WebSocket，包含客户端版本信息）
   Future<Map<String, dynamic>> registerDevice(String deviceModel) async {
     try {
-      logger.logCommand('registerDevice', params: {'deviceModel': deviceModel}, details: '注册设备');
-      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'registerDevice', 'deviceModel': deviceModel});
-      final result = await _sendWebSocketRequest('registerDevice', {'deviceModel': deviceModel});
+      // 获取客户端版本号
+      final clientVersion = await _versionService.getVersion();
+      
+      logger.logCommand('registerDevice', params: {'deviceModel': deviceModel, 'clientVersion': clientVersion}, details: '注册设备');
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'registerDevice', 'deviceModel': deviceModel, 'clientVersion': clientVersion});
+      final result = await _sendWebSocketRequest('registerDevice', {
+        'deviceModel': deviceModel,
+        'clientVersion': clientVersion,
+      });
       logger.logCommandResponse('registerDevice', success: result['success'] == true, result: result, error: result['error']);
       return result;
     } catch (e, stackTrace) {

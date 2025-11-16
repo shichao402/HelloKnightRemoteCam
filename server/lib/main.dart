@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'screens/server_home_page.dart';
 import 'services/logger_service.dart';
+import 'services/version_compatibility_service.dart';
 
 List<CameraDescription> cameras = [];
 
@@ -10,6 +11,10 @@ void main() async {
   
   final logger = LoggerService();
   await logger.initialize();
+  
+  // 初始化版本兼容性服务
+  final versionCompatibilityService = VersionCompatibilityService();
+  await versionCompatibilityService.initialize();
   
   try {
     cameras = await availableCameras();
