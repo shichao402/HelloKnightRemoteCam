@@ -431,94 +431,55 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   void _showUpdateDialog(UpdateInfo updateInfo) {
     showDialog(
       context: context,
-      barrierDismissible: false,
-      builder: (context) => UpdateDialog(
-        updateInfo: updateInfo,
-        onDownload: () => _downloadAndInstallUpdate(updateInfo),
-      ),
-    );
-  }
-
-  Future<void> _downloadAndInstallUpdate(UpdateInfo updateInfo) async {
-    // 关闭更新对话框
-    if (mounted) {
-      Navigator.of(context).pop();
-    }
-
-    // 显示下载进度对话框
-    if (!mounted) return;
-    
-    final progressKey = GlobalKey<_UpdateDownloadDialogState>();
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => UpdateDownloadDialog(
-        key: progressKey,
-        updateInfo: updateInfo,
-      ),
-    );
-
-    try {
-      String? downloadedPath;
-      await _updateService.downloadUpdate(
-        updateInfo,
-        (received, total) {
-          if (mounted && progressKey.currentState != null) {
-            progressKey.currentState!.updateProgress(received, total);
-          }
-        },
-      ).then((path) {
-        downloadedPath = path;
-      });
-
-      if (!mounted) return;
-
-      // 关闭下载对话框
-      Navigator.of(context).pop();
-
-      if (downloadedPath != null) {
-        // 询问是否立即安装
-        final install = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('下载完成'),
-            content: Text('更新文件已下载到: $downloadedPath\n\n是否立即安装？'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('稍后'),
+      builder: (context) => AlertDialog(
+        title: const Text('发现新版本'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('新版本: ${updateInfo.version}'),
+            const SizedBox(height: 8),
+            if (updateInfo.releaseNotes != null) ...[
+              const Text(
+                '更新内容:',
+                style: TextStyle(fontWeight: FontWeight.bold),
               ),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('立即安装'),
+              const SizedBox(height: 4),
+              Text(
+                updateInfo.releaseNotes!,
+                style: const TextStyle(fontSize: 12),
               ),
+              const SizedBox(height: 8),
             ],
+            Text(
+              '文件: ${updateInfo.fileName}',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('稍后'),
           ),
-        );
-
-        if (install == true && downloadedPath != null) {
-          await _updateService.installUpdate(downloadedPath!);
-        }
-      } else {
-        // 下载失败
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('下载失败，请稍后重试'),
-            duration: Duration(seconds: 3),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              final success = await _updateService.openDownloadUrl(updateInfo.downloadUrl);
+              if (mounted && !success) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('无法打开下载链接'),
+                    duration: Duration(seconds: 3),
+                  ),
+                );
+              }
+            },
+            child: const Text('前往下载'),
           ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('下载失败: $e'),
-            duration: const Duration(seconds: 3),
-          ),
-        );
-      }
-    }
+        ],
+      ),
+    );
   }
 
   @override
@@ -686,123 +647,4 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   }
 }
 
-/// 更新对话框
-class UpdateDialog extends StatelessWidget {
-  final UpdateInfo updateInfo;
-  final VoidCallback onDownload;
-
-  const UpdateDialog({
-    Key? key,
-    required this.updateInfo,
-    required this.onDownload,
-  }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('发现新版本'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('当前版本: ${updateInfo.version}'),
-          const SizedBox(height: 8),
-          if (updateInfo.releaseNotes != null) ...[
-            const Text(
-              '更新内容:',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              updateInfo.releaseNotes!,
-              style: const TextStyle(fontSize: 12),
-            ),
-            const SizedBox(height: 8),
-          ],
-          Text(
-            '文件大小: ${updateInfo.fileName}',
-            style: const TextStyle(fontSize: 12, color: Colors.grey),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('稍后'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            Navigator.of(context).pop();
-            onDownload();
-          },
-          child: const Text('立即更新'),
-        ),
-      ],
-    );
-  }
-}
-
-/// 更新下载进度对话框
-class UpdateDownloadDialog extends StatefulWidget {
-  final UpdateInfo updateInfo;
-
-  const UpdateDownloadDialog({
-    Key? key,
-    required this.updateInfo,
-  }) : super(key: key);
-
-  @override
-  State<UpdateDownloadDialog> createState() => _UpdateDownloadDialogState();
-}
-
-class _UpdateDownloadDialogState extends State<UpdateDownloadDialog> {
-  int _received = 0;
-  int _total = 0;
-
-  void updateProgress(int received, int total) {
-    if (mounted) {
-      setState(() {
-        _received = received;
-        _total = total;
-      });
-    }
-  }
-
-  String _formatBytes(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final progress = _total > 0 ? _received / _total : 0.0;
-
-    return AlertDialog(
-      title: const Text('正在下载更新'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          LinearProgressIndicator(value: progress),
-          const SizedBox(height: 16),
-          Text(
-            '${_formatBytes(_received)} / ${_formatBytes(_total)}',
-            style: const TextStyle(fontSize: 12),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '${(progress * 100).toStringAsFixed(1)}%',
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
-        ),
-      ],
-    );
-  }
-}
 

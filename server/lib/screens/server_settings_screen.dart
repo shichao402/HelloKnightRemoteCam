@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/logger_service.dart';
 import '../services/version_service.dart';
+import '../services/update_service.dart';
+import '../services/update_settings_service.dart';
 
 class ServerSettingsScreen extends StatefulWidget {
   const ServerSettingsScreen({Key? key}) : super(key: key);
@@ -18,12 +20,15 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   
   final LoggerService _logger = LoggerService();
   final VersionService _versionService = VersionService();
+  final UpdateService _updateService = UpdateService();
+  final UpdateSettingsService _updateSettings = UpdateSettingsService();
   bool _autoStartServer = false;
   bool _autoStopEnabled = false;
   int _autoStopMinutes = 15; // UI显示用分钟，内部转换为秒存储
   bool _debugMode = false;
   bool _isLoading = true;
   String _version = '加载中...';
+  bool _isCheckingUpdate = false;
   
   // 临时状态（未保存的修改）
   bool _tempAutoStartServer = false;
@@ -41,6 +46,13 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final version = await _versionService.getVersion();
+    final updateCheckUrl = await _updateSettings.getUpdateCheckUrl();
+    
+    // 设置更新检查URL
+    if (updateCheckUrl.isNotEmpty) {
+      _updateService.setUpdateCheckUrl(updateCheckUrl);
+    }
+    
     setState(() {
       _autoStartServer = prefs.getBool(_autoStartKey) ?? false;
       _autoStopEnabled = prefs.getBool(_autoStopEnabledKey) ?? false;
@@ -229,6 +241,124 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     }
   }
 
+  Future<void> _checkForUpdate() async {
+    // 检查是否设置了更新检查URL
+    final updateCheckUrl = await _updateSettings.getUpdateCheckUrl();
+    if (updateCheckUrl.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('更新检查URL未设置，请在配置中设置'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() {
+      _isCheckingUpdate = true;
+    });
+
+    try {
+      final result = await _updateService.checkForUpdate();
+
+      if (!mounted) return;
+
+      setState(() {
+        _isCheckingUpdate = false;
+      });
+
+      if (result.error != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('检查更新失败: ${result.error}'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+
+      if (result.hasUpdate && result.updateInfo != null) {
+        // 显示更新对话框
+        _showUpdateDialog(result.updateInfo!);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('当前已是最新版本'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isCheckingUpdate = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('检查更新失败: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  void _showUpdateDialog(UpdateInfo updateInfo) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('发现新版本'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('新版本: ${updateInfo.version}'),
+            const SizedBox(height: 8),
+            if (updateInfo.releaseNotes != null) ...[
+              const Text(
+                '更新内容:',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                updateInfo.releaseNotes!,
+                style: const TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+            ],
+            Text(
+              '文件: ${updateInfo.fileName}',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('稍后'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              final success = await _updateService.openDownloadUrl(updateInfo.downloadUrl);
+              if (mounted && !success) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('无法打开下载链接'),
+                    duration: Duration(seconds: 3),
+                  ),
+                );
+              }
+            },
+            child: const Text('前往下载'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -383,6 +513,30 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
           const Padding(
             padding: EdgeInsets.all(16),
             child: Text(
+              '更新',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.system_update),
+            title: const Text('检查更新'),
+            subtitle: const Text('检查是否有新版本可用'),
+            trailing: _isCheckingUpdate
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.chevron_right),
+            onTap: _isCheckingUpdate ? null : _checkForUpdate,
+          ),
+          const Divider(),
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text(
               '关于',
               style: TextStyle(
                 fontSize: 18,
@@ -419,6 +573,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     );
   }
 }
+
 
 // 静态方法：获取服务器设置
 class ServerSettings {

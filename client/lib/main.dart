@@ -2,13 +2,30 @@ import 'package:flutter/material.dart';
 import 'screens/device_connection_screen.dart';
 import 'services/logger_service.dart';
 import 'services/api_service_manager.dart';
+import 'services/update_service.dart';
+import 'services/update_settings_service.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   // 初始化日志服务
   final logger = ClientLoggerService();
-  logger.initialize();
+  await logger.initialize();
+  
+  // 初始化更新服务
+  final updateService = UpdateService();
+  final updateSettings = UpdateSettingsService();
+  
+  // 设置更新检查URL（如果未设置）
+  final updateCheckUrl = await updateSettings.getUpdateCheckUrl();
+  if (updateCheckUrl.isEmpty) {
+    // 设置默认更新检查URL
+    const defaultUrl = 'https://jihulab.com/api/v4/projects/298216/repository/files/update_config.json/raw?ref=main';
+    await updateSettings.setUpdateCheckUrl(defaultUrl);
+    updateService.setUpdateCheckUrl(defaultUrl);
+  } else {
+    updateService.setUpdateCheckUrl(updateCheckUrl);
+  }
   
   runApp(const RemoteCamClientApp());
 }

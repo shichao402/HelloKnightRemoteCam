@@ -5,9 +5,9 @@ import '../services/api_service_manager.dart';
 import '../services/connection_settings_service.dart';
 import '../services/device_config_service.dart';
 import '../services/logger_service.dart';
-import '../models/camera_settings.dart';
 import '../models/connection_error.dart';
 import 'camera_control_screen.dart';
+import 'client_settings_screen.dart';
 
 class DeviceConnectionScreen extends StatefulWidget {
   const DeviceConnectionScreen({Key? key}) : super(key: key);
@@ -355,6 +355,19 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('连接设备'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const ClientSettingsScreen(),
+                ),
+              );
+            },
+            tooltip: '应用设置',
+          ),
+        ],
       ),
       body: Center(
         child: SingleChildScrollView(

@@ -1,0 +1,250 @@
+stages:
+  - build
+  - release
+
+variables:
+  FLUTTER_VERSION: "3.24.0"
+  FLUTTER_CHANNEL: "stable"
+
+# 构建 macOS 客户端
+# 注意：需要配置 macOS runner，如果没有 macOS runner，此 job 将失败
+# 可以设置 allow_failure: true 使其失败不影响整个 pipeline
+build-client-macos:
+  stage: build
+  image: cirrusci/flutter:${FLUTTER_VERSION}
+  tags:
+    - macos  # 需要 macOS runner，如果没有可以注释掉此 job 或设置 allow_failure: true
+  before_script:
+    - mkdir -p ${CI_PROJECT_DIR}/artifacts
+  script:
+    - cd client
+    - flutter pub get
+    - flutter build macos --release
+    - cd build/macos/Build/Products/Release
+    - zip -r HelloKnightRCC_macos_${CI_COMMIT_TAG#v}+${CI_PIPELINE_ID}.zip HelloKnightRCC.app
+    - mv HelloKnightRCC_macos_${CI_COMMIT_TAG#v}+${CI_PIPELINE_ID}.zip ${CI_PROJECT_DIR}/artifacts/
+  artifacts:
+    paths:
+      - artifacts/HelloKnightRCC_macos_*.zip
+    expire_in: 1 week
+  only:
+    - tags
+    - /^v.*$/
+  # allow_failure: true  # 如果没有 macOS runner，取消注释此行
+
+# 构建 Windows 客户端
+# 注意：需要配置 Windows runner，如果没有 Windows runner，此 job 将失败
+# 可以设置 allow_failure: true 使其失败不影响整个 pipeline
+build-client-windows:
+  stage: build
+  image: cirrusci/flutter:${FLUTTER_VERSION}
+  tags:
+    - windows  # 需要 Windows runner，如果没有可以注释掉此 job 或设置 allow_failure: true
+  before_script:
+    - mkdir -p ${CI_PROJECT_DIR}/artifacts
+  script:
+    - cd client
+    - flutter pub get
+    - flutter build windows --release
+    - cd build/windows/x64/runner/Release
+    - powershell Compress-Archive -Path * -DestinationPath HelloKnightRCC_windows_${CI_COMMIT_TAG#v}+${CI_PIPELINE_ID}.zip -Force
+    - mv HelloKnightRCC_windows_${CI_COMMIT_TAG#v}+${CI_PIPELINE_ID}.zip ${CI_PROJECT_DIR}/artifacts/
+  artifacts:
+    paths:
+      - artifacts/HelloKnightRCC_windows_*.zip
+    expire_in: 1 week
+  only:
+    - tags
+    - /^v.*$/
+  # allow_failure: true  # 如果没有 Windows runner，取消注释此行
+
+# 构建 Android 服务器
+build-server-android:
+  stage: build
+  image: cirrusci/flutter:${FLUTTER_VERSION}
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq openjdk-17-jdk
+    - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+    - mkdir -p ${CI_PROJECT_DIR}/artifacts
+  script:
+    - cd server
+    - flutter pub get
+    - flutter build apk --release
+    - mv build/app/outputs/flutter-apk/app-release.apk ${CI_PROJECT_DIR}/artifacts/helloknightrcc_server_android_${CI_COMMIT_TAG#v}+${CI_PIPELINE_ID}.apk
+  artifacts:
+    paths:
+      - artifacts/helloknightrcc_server_android_*.apk
+    expire_in: 1 week
+  only:
+    - tags
+    - /^v.*$/
+
+# 创建发布（上传到 GitLab Package Registry 并生成更新配置）
+# 注意：此 job 依赖于构建 job，如果某些构建 job 失败（但设置了 allow_failure: true），
+# 此 job 仍然会运行，但可能缺少某些平台的构建产物
+create-release:
+  stage: release
+  image: alpine:latest
+  dependencies:
+    - build-client-macos
+    - build-client-windows
+    - build-server-android
+  before_script:
+    - apk add --no-cache curl git bash
+    - mkdir -p artifacts
+  script:
+    - |
+      set -e
+      
+      # 提取版本号
+      TAG_VERSION=${CI_COMMIT_TAG}
+      VERSION=${TAG_VERSION#v}
+      
+      # 从 pubspec.yaml 提取构建号
+      CLIENT_BUILD=$(grep '^version:' client/pubspec.yaml | sed 's/.*+//')
+      SERVER_BUILD=$(grep '^version:' server/pubspec.yaml | sed 's/.*+//')
+      
+      CLIENT_VERSION="${VERSION}+${CLIENT_BUILD}"
+      SERVER_VERSION="${VERSION}+${SERVER_BUILD}"
+      
+      echo "客户端版本: ${CLIENT_VERSION}"
+      echo "服务器版本: ${SERVER_VERSION}"
+      
+      # 上传到 GitLab Package Registry
+      echo "开始上传到 GitLab Package Registry..."
+      
+      # 上传 macOS 客户端（如果存在）
+      MACOS_ZIP=$(find artifacts -name "HelloKnightRCC_macos_*.zip" | head -1)
+      if [ -f "$MACOS_ZIP" ]; then
+        echo "上传 macOS 客户端: $MACOS_ZIP"
+        HTTP_CODE=$(curl -s -w "\n%{http_code}" \
+          --request PUT \
+          --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "$MACOS_ZIP" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/helloknightrcc-client/${VERSION}/HelloKnightRCC-${VERSION}-macos.zip" | tail -n1)
+        if [ "$HTTP_CODE" -eq 201 ] || [ "$HTTP_CODE" -eq 200 ]; then
+          echo "✓ macOS 客户端上传成功 (HTTP $HTTP_CODE)"
+        else
+          echo "✗ macOS 客户端上传失败 (HTTP $HTTP_CODE)"
+          exit 1
+        fi
+      fi
+      
+      # 上传 Windows 客户端（如果存在）
+      WINDOWS_ZIP=$(find artifacts -name "HelloKnightRCC_windows_*.zip" | head -1)
+      if [ -f "$WINDOWS_ZIP" ]; then
+        echo "上传 Windows 客户端: $WINDOWS_ZIP"
+        HTTP_CODE=$(curl -s -w "\n%{http_code}" \
+          --request PUT \
+          --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "$WINDOWS_ZIP" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/helloknightrcc-client/${VERSION}/HelloKnightRCC-${VERSION}-windows.zip" | tail -n1)
+        if [ "$HTTP_CODE" -eq 201 ] || [ "$HTTP_CODE" -eq 200 ]; then
+          echo "✓ Windows 客户端上传成功 (HTTP $HTTP_CODE)"
+        else
+          echo "✗ Windows 客户端上传失败 (HTTP $HTTP_CODE)"
+          exit 1
+        fi
+      fi
+      
+      # 上传 Android 服务器（必须存在）
+      ANDROID_APK=$(find artifacts -name "helloknightrcc_server_android_*.apk" | head -1)
+      if [ ! -f "$ANDROID_APK" ]; then
+        echo "错误: 未找到 Android 服务器构建产物"
+        exit 1
+      fi
+      if [ -f "$ANDROID_APK" ]; then
+        echo "上传 Android 服务器: $ANDROID_APK"
+        HTTP_CODE=$(curl -s -w "\n%{http_code}" \
+          --request PUT \
+          --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "$ANDROID_APK" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/helloknightrcc-server/${VERSION}/HelloKnightRCC-Server-${VERSION}.apk" | tail -n1)
+        if [ "$HTTP_CODE" -eq 201 ] || [ "$HTTP_CODE" -eq 200 ]; then
+          echo "✓ Android 服务器上传成功 (HTTP $HTTP_CODE)"
+        else
+          echo "✗ Android 服务器上传失败 (HTTP $HTTP_CODE)"
+          exit 1
+        fi
+      fi
+      
+      echo "所有文件上传完成！"
+      
+      # 生成更新配置文件
+      BASE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic"
+      
+      # 检查文件是否存在
+      MACOS_AVAILABLE="false"
+      WINDOWS_AVAILABLE="false"
+      if [ -f "$MACOS_ZIP" ]; then
+        MACOS_AVAILABLE="true"
+      fi
+      if [ -f "$WINDOWS_ZIP" ]; then
+        WINDOWS_AVAILABLE="true"
+      fi
+      
+      cat > update_config.json <<EOF
+      {
+        "client": {
+          "version": "${CLIENT_VERSION}",
+          "versionNumber": "${VERSION}",
+          "platforms": {
+            "macos": {
+              "version": "${CLIENT_VERSION}",
+              "versionNumber": "${VERSION}",
+              "downloadUrl": "${BASE_URL}/helloknightrcc-client/${VERSION}/HelloKnightRCC-${VERSION}-macos.zip",
+              "fileName": "HelloKnightRCC-${VERSION}-macos.zip",
+              "fileType": "zip",
+              "platform": "macos",
+              "available": ${MACOS_AVAILABLE}
+            },
+            "windows": {
+              "version": "${CLIENT_VERSION}",
+              "versionNumber": "${VERSION}",
+              "downloadUrl": "${BASE_URL}/helloknightrcc-client/${VERSION}/HelloKnightRCC-${VERSION}-windows.zip",
+              "fileName": "HelloKnightRCC-${VERSION}-windows.zip",
+              "fileType": "zip",
+              "platform": "windows",
+              "available": ${WINDOWS_AVAILABLE}
+            }
+          }
+        },
+        "server": {
+          "version": "${SERVER_VERSION}",
+          "versionNumber": "${VERSION}",
+          "platforms": {
+            "android": {
+              "version": "${SERVER_VERSION}",
+              "versionNumber": "${VERSION}",
+              "downloadUrl": "${BASE_URL}/helloknightrcc-server/${VERSION}/HelloKnightRCC-Server-${VERSION}.apk",
+              "fileName": "HelloKnightRCC-Server-${VERSION}.apk",
+              "fileType": "apk",
+              "platform": "android"
+            }
+          }
+        },
+        "updateCheckUrl": "${CI_PROJECT_URL}/-/raw/main/update_config.json",
+        "lastUpdated": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+      }
+      EOF
+      
+      echo "更新配置文件已生成:"
+      cat update_config.json
+      
+      # 提交并推送更新配置文件
+      git config --global user.name "GitLab CI"
+      git config --global user.email "ci@gitlab.com"
+      git config --global credential.helper store
+      echo "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}" > ~/.git-credentials
+      
+      git add update_config.json
+      if git diff --staged --quiet; then
+        echo "没有更改，跳过提交"
+      else
+        git commit -m "发布版本 ${TAG_VERSION} - 更新自动更新配置"
+        git push https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git HEAD:${CI_COMMIT_REF_NAME} || echo "推送失败，可能已是最新版本"
+      fi
+  only:
+    - tags
+    - /^v.*$/
+

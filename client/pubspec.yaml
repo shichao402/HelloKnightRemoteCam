@@ -50,6 +50,7 @@ dependencies:
   mjpeg_stream: ^1.0.1
   open_file: ^3.3.2
   file_picker: ^6.1.1
+  url_launcher: ^6.2.5
 
   # Version info
   package_info_plus: ^8.0.0

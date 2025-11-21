@@ -265,97 +265,25 @@ jobs:
           draft: false
           prerelease: false
 
-      # 上传到 GitLab Package Registry 并更新配置
-      - name: Upload to GitLab Package Registry
-        env:
-          GITLAB_URL: ${{ secrets.GITLAB_URL }}
-          GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-        run: |
-          set -e  # 遇到错误立即退出
-          
-          echo "开始上传到 GitLab Package Registry..."
-          echo "客户端版本: ${{ steps.get_client_version.outputs.VERSION }}"
-          echo "服务器版本: ${{ steps.get_server_version.outputs.VERSION }}"
-          
-          # 上传 macOS 客户端
-          MACOS_ZIP=$(find artifacts -name "HelloKnightRCC_macos_*.zip" | head -1)
-          if [ -f "$MACOS_ZIP" ]; then
-            MACOS_VERSION=${{ steps.get_client_version.outputs.VERSION }}
-            echo "上传 macOS 客户端: $MACOS_ZIP"
-            echo "目标URL: ${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/packages/generic/helloknightrcc-client/${MACOS_VERSION}/HelloKnightRCC-${MACOS_VERSION}-macos.zip"
-            HTTP_CODE=$(curl -s -w "\n%{http_code}" \
-              --request PUT \
-              --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-              --upload-file "$MACOS_ZIP" \
-              "${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/packages/generic/helloknightrcc-client/${MACOS_VERSION}/HelloKnightRCC-${MACOS_VERSION}-macos.zip" | tail -n1)
-            if [ "$HTTP_CODE" -eq 201 ] || [ "$HTTP_CODE" -eq 200 ]; then
-              echo "✓ macOS 客户端上传成功 (HTTP $HTTP_CODE)"
-            else
-              echo "✗ macOS 客户端上传失败 (HTTP $HTTP_CODE)"
-              exit 1
-            fi
-          else
-            echo "警告: 未找到 macOS 客户端文件"
-          fi
-
-          # 上传 Windows 客户端
-          WINDOWS_ZIP=$(find artifacts -name "HelloKnightRCC_windows_*.zip" | head -1)
-          if [ -f "$WINDOWS_ZIP" ]; then
-            WINDOWS_VERSION=${{ steps.get_client_version.outputs.VERSION }}
-            echo "上传 Windows 客户端: $WINDOWS_ZIP"
-            echo "目标URL: ${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/packages/generic/helloknightrcc-client/${WINDOWS_VERSION}/HelloKnightRCC-${WINDOWS_VERSION}-windows.zip"
-            HTTP_CODE=$(curl -s -w "\n%{http_code}" \
-              --request PUT \
-              --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-              --upload-file "$WINDOWS_ZIP" \
-              "${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/packages/generic/helloknightrcc-client/${WINDOWS_VERSION}/HelloKnightRCC-${WINDOWS_VERSION}-windows.zip" | tail -n1)
-            if [ "$HTTP_CODE" -eq 201 ] || [ "$HTTP_CODE" -eq 200 ]; then
-              echo "✓ Windows 客户端上传成功 (HTTP $HTTP_CODE)"
-            else
-              echo "✗ Windows 客户端上传失败 (HTTP $HTTP_CODE)"
-              exit 1
-            fi
-          else
-            echo "警告: 未找到 Windows 客户端文件"
-          fi
-
-          # 上传 Android 服务器
-          ANDROID_APK=$(find artifacts -name "helloknightrcc_server_android_*.apk" | head -1)
-          if [ -f "$ANDROID_APK" ]; then
-            ANDROID_VERSION=${{ steps.get_server_version.outputs.VERSION }}
-            echo "上传 Android 服务器: $ANDROID_APK"
-            echo "目标URL: ${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/packages/generic/helloknightrcc-server/${ANDROID_VERSION}/HelloKnightRCC-Server-${ANDROID_VERSION}.apk"
-            HTTP_CODE=$(curl -s -w "\n%{http_code}" \
-              --request PUT \
-              --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-              --upload-file "$ANDROID_APK" \
-              "${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/packages/generic/helloknightrcc-server/${ANDROID_VERSION}/HelloKnightRCC-Server-${ANDROID_VERSION}.apk" | tail -n1)
-            if [ "$HTTP_CODE" -eq 201 ] || [ "$HTTP_CODE" -eq 200 ]; then
-              echo "✓ Android 服务器上传成功 (HTTP $HTTP_CODE)"
-            else
-              echo "✗ Android 服务器上传失败 (HTTP $HTTP_CODE)"
-              exit 1
-            fi
-          else
-            echo "警告: 未找到 Android 服务器文件"
-          fi
-          
-          echo "所有文件上传完成！"
-
-      - name: Generate Update Config
-        env:
-          GITLAB_URL: ${{ secrets.GITLAB_URL }}
-          GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+      # 生成 GitHub 更新配置文件
+      - name: Generate GitHub Update Config
         run: |
           CLIENT_VERSION=${{ steps.get_client_version.outputs.FULL_VERSION }}
           CLIENT_VERSION_NUMBER=${{ steps.get_client_version.outputs.VERSION }}
           SERVER_VERSION=${{ steps.get_server_version.outputs.FULL_VERSION }}
           SERVER_VERSION_NUMBER=${{ steps.get_server_version.outputs.VERSION }}
+          TAG_VERSION=${{ steps.get_tag_version.outputs.TAG_VERSION }}
           
-          BASE_URL="${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/packages/generic"
+          # GitHub Releases 下载链接格式
+          GITHUB_REPO="shichao402/HelloKnightRemoteCam"
+          BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${TAG_VERSION}"
           
-          cat > update_config.json <<EOF
+          # 获取实际的文件名（从 artifacts 目录）
+          MACOS_FILE=$(find artifacts -name "HelloKnightRCC_macos_*.zip" -exec basename {} \; | head -1)
+          WINDOWS_FILE=$(find artifacts -name "HelloKnightRCC_windows_*.zip" -exec basename {} \; | head -1)
+          ANDROID_FILE=$(find artifacts -name "helloknightrcc_server_android_*.apk" -exec basename {} \; | head -1)
+          
+          cat > update_config_github.json <<EOF
           {
             "client": {
               "version": "${CLIENT_VERSION}",
@@ -364,16 +292,16 @@ jobs:
                 "macos": {
                   "version": "${CLIENT_VERSION}",
                   "versionNumber": "${CLIENT_VERSION_NUMBER}",
-                  "downloadUrl": "${BASE_URL}/helloknightrcc-client/${CLIENT_VERSION_NUMBER}/HelloKnightRCC-${CLIENT_VERSION_NUMBER}-macos.zip",
-                  "fileName": "HelloKnightRCC-${CLIENT_VERSION_NUMBER}-macos.zip",
+                  "downloadUrl": "${BASE_URL}/${MACOS_FILE}",
+                  "fileName": "${MACOS_FILE}",
                   "fileType": "zip",
                   "platform": "macos"
                 },
                 "windows": {
                   "version": "${CLIENT_VERSION}",
                   "versionNumber": "${CLIENT_VERSION_NUMBER}",
-                  "downloadUrl": "${BASE_URL}/helloknightrcc-client/${CLIENT_VERSION_NUMBER}/HelloKnightRCC-${CLIENT_VERSION_NUMBER}-windows.zip",
-                  "fileName": "HelloKnightRCC-${CLIENT_VERSION_NUMBER}-windows.zip",
+                  "downloadUrl": "${BASE_URL}/${WINDOWS_FILE}",
+                  "fileName": "${WINDOWS_FILE}",
                   "fileType": "zip",
                   "platform": "windows"
                 }
@@ -386,173 +314,32 @@ jobs:
                 "android": {
                   "version": "${SERVER_VERSION}",
                   "versionNumber": "${SERVER_VERSION_NUMBER}",
-                  "downloadUrl": "${BASE_URL}/helloknightrcc-server/${SERVER_VERSION_NUMBER}/HelloKnightRCC-Server-${SERVER_VERSION_NUMBER}.apk",
-                  "fileName": "HelloKnightRCC-Server-${SERVER_VERSION_NUMBER}.apk",
+                  "downloadUrl": "${BASE_URL}/${ANDROID_FILE}",
+                  "fileName": "${ANDROID_FILE}",
                   "fileType": "apk",
                   "platform": "android"
                 }
               }
             },
-            "updateCheckUrl": "${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/repository/files/update_config.json/raw?ref=main",
+            "updateCheckUrl": "https://raw.githubusercontent.com/${GITHUB_REPO}/main/update_config_github.json",
             "lastUpdated": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           }
           EOF
           
-          echo "更新配置文件已生成:"
-          cat update_config.json
+          echo "GitHub 更新配置文件已生成:"
+          cat update_config_github.json
 
-      - name: Commit and Push Update Config to GitLab
-        env:
-          GITLAB_URL: ${{ secrets.GITLAB_URL }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+      - name: Commit and Push GitHub Update Config
         run: |
           # 配置 Git
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           
-          # 提取 GitLab 主机名（去掉 https://）
-          GITLAB_HOST=${GITLAB_URL#https://}
-          
-          # 添加 GitLab 远程仓库（如果不存在）
-          if ! git remote | grep -q gitlab; then
-            git remote add gitlab https://oauth2:${GITLAB_TOKEN}@${GITLAB_HOST}/shichao402/HelloKnightRemoteCam.git
-          else
-            git remote set-url gitlab https://oauth2:${GITLAB_TOKEN}@${GITLAB_HOST}/shichao402/HelloKnightRemoteCam.git
-          fi
-          
           # 添加并提交更新配置文件
-          git add update_config.json
+          git add update_config_github.json
           if git diff --staged --quiet; then
             echo "没有更改，跳过提交"
           else
-            git commit -m "发布版本 ${{ steps.get_tag_version.outputs.VERSION }} - 更新自动更新配置"
-            git push gitlab main || echo "推送失败，可能已是最新版本"
-          fi
-
-      # 上传到 GitLab Package Registry 并更新配置
-      - name: Upload to GitLab Package Registry
-        env:
-          GITLAB_URL: ${{ secrets.GITLAB_URL }}
-          GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-        run: |
-          # 上传 macOS 客户端
-          MACOS_ZIP=$(find artifacts -name "HelloKnightRCC_macos_*.zip" | head -1)
-          if [ -f "$MACOS_ZIP" ]; then
-            MACOS_FILENAME=$(basename "$MACOS_ZIP")
-            MACOS_VERSION=${{ steps.get_client_version.outputs.VERSION }}
-            echo "上传 macOS 客户端: $MACOS_ZIP"
-            curl --request PUT \
-              --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-              --upload-file "$MACOS_ZIP" \
-              "${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/packages/generic/helloknightrcc-client/${MACOS_VERSION}/HelloKnightRCC-${MACOS_VERSION}-macos.zip"
-          fi
-
-          # 上传 Windows 客户端
-          WINDOWS_ZIP=$(find artifacts -name "HelloKnightRCC_windows_*.zip" | head -1)
-          if [ -f "$WINDOWS_ZIP" ]; then
-            WINDOWS_FILENAME=$(basename "$WINDOWS_ZIP")
-            WINDOWS_VERSION=${{ steps.get_client_version.outputs.VERSION }}
-            echo "上传 Windows 客户端: $WINDOWS_ZIP"
-            curl --request PUT \
-              --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-              --upload-file "$WINDOWS_ZIP" \
-              "${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/packages/generic/helloknightrcc-client/${WINDOWS_VERSION}/HelloKnightRCC-${WINDOWS_VERSION}-windows.zip"
-          fi
-
-          # 上传 Android 服务器
-          ANDROID_APK=$(find artifacts -name "helloknightrcc_server_android_*.apk" | head -1)
-          if [ -f "$ANDROID_APK" ]; then
-            ANDROID_VERSION=${{ steps.get_server_version.outputs.VERSION }}
-            echo "上传 Android 服务器: $ANDROID_APK"
-            curl --request PUT \
-              --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-              --upload-file "$ANDROID_APK" \
-              "${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/packages/generic/helloknightrcc-server/${ANDROID_VERSION}/HelloKnightRCC-Server-${ANDROID_VERSION}.apk"
-          fi
-
-      - name: Generate Update Config
-        env:
-          GITLAB_URL: ${{ secrets.GITLAB_URL }}
-          GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
-        run: |
-          CLIENT_VERSION=${{ steps.get_client_version.outputs.FULL_VERSION }}
-          CLIENT_VERSION_NUMBER=${{ steps.get_client_version.outputs.VERSION }}
-          SERVER_VERSION=${{ steps.get_server_version.outputs.FULL_VERSION }}
-          SERVER_VERSION_NUMBER=${{ steps.get_server_version.outputs.VERSION }}
-          
-          BASE_URL="${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/packages/generic"
-          
-          cat > update_config.json <<EOF
-          {
-            "client": {
-              "version": "${CLIENT_VERSION}",
-              "versionNumber": "${CLIENT_VERSION_NUMBER}",
-              "platforms": {
-                "macos": {
-                  "version": "${CLIENT_VERSION}",
-                  "versionNumber": "${CLIENT_VERSION_NUMBER}",
-                  "downloadUrl": "${BASE_URL}/helloknightrcc-client/${CLIENT_VERSION_NUMBER}/HelloKnightRCC-${CLIENT_VERSION_NUMBER}-macos.zip",
-                  "fileName": "HelloKnightRCC-${CLIENT_VERSION_NUMBER}-macos.zip",
-                  "fileType": "zip",
-                  "platform": "macos"
-                },
-                "windows": {
-                  "version": "${CLIENT_VERSION}",
-                  "versionNumber": "${CLIENT_VERSION_NUMBER}",
-                  "downloadUrl": "${BASE_URL}/helloknightrcc-client/${CLIENT_VERSION_NUMBER}/HelloKnightRCC-${CLIENT_VERSION_NUMBER}-windows.zip",
-                  "fileName": "HelloKnightRCC-${CLIENT_VERSION_NUMBER}-windows.zip",
-                  "fileType": "zip",
-                  "platform": "windows"
-                }
-              }
-            },
-            "server": {
-              "version": "${SERVER_VERSION}",
-              "versionNumber": "${SERVER_VERSION_NUMBER}",
-              "platforms": {
-                "android": {
-                  "version": "${SERVER_VERSION}",
-                  "versionNumber": "${SERVER_VERSION_NUMBER}",
-                  "downloadUrl": "${BASE_URL}/helloknightrcc-server/${SERVER_VERSION_NUMBER}/HelloKnightRCC-Server-${SERVER_VERSION_NUMBER}.apk",
-                  "fileName": "HelloKnightRCC-Server-${SERVER_VERSION_NUMBER}.apk",
-                  "fileType": "apk",
-                  "platform": "android"
-                }
-              }
-            },
-            "updateCheckUrl": "${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/repository/files/update_config.json/raw?ref=main",
-            "lastUpdated": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-          }
-          EOF
-          
-          echo "更新配置文件已生成:"
-          cat update_config.json
-
-      - name: Commit and Push Update Config to GitLab
-        env:
-          GITLAB_URL: ${{ secrets.GITLAB_URL }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-        run: |
-          # 配置 Git
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          
-          # 提取 GitLab 主机名（去掉 https://）
-          GITLAB_HOST=${GITLAB_URL#https://}
-          
-          # 添加 GitLab 远程仓库（如果不存在）
-          if ! git remote | grep -q gitlab; then
-            git remote add gitlab https://oauth2:${GITLAB_TOKEN}@${GITLAB_HOST}/shichao402/HelloKnightRemoteCam.git
-          else
-            git remote set-url gitlab https://oauth2:${GITLAB_TOKEN}@${GITLAB_HOST}/shichao402/HelloKnightRemoteCam.git
-          fi
-          
-          # 添加并提交更新配置文件
-          git add update_config.json
-          if git diff --staged --quiet; then
-            echo "没有更改，跳过提交"
-          else
-            git commit -m "发布版本 ${{ steps.get_tag_version.outputs.VERSION }} - 更新自动更新配置"
-            git push gitlab main || echo "推送失败，可能已是最新版本"
+            git commit -m "发布版本 ${{ steps.get_tag_version.outputs.VERSION }} - 更新 GitHub 自动更新配置"
+            git push origin main || echo "推送失败，可能已是最新版本"
           fi

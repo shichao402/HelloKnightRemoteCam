@@ -50,14 +50,14 @@ class UpdateCheckResult {
   });
 }
 
-/// 更新服务
+/// 更新服务（服务端）
 /// 负责检查更新、下载更新文件
 class UpdateService {
   static final UpdateService _instance = UpdateService._internal();
   factory UpdateService() => _instance;
   UpdateService._internal();
 
-  final ClientLoggerService _logger = ClientLoggerService();
+  final LoggerService _logger = LoggerService();
   final VersionService _versionService = VersionService();
   final Dio _dio = Dio();
 
@@ -72,16 +72,10 @@ class UpdateService {
 
   /// 获取当前平台标识
   String _getCurrentPlatform() {
-    if (Platform.isMacOS) {
-      return 'macos';
-    } else if (Platform.isWindows) {
-      return 'windows';
-    } else if (Platform.isAndroid) {
+    if (Platform.isAndroid) {
       return 'android';
     } else if (Platform.isIOS) {
       return 'ios';
-    } else if (Platform.isLinux) {
-      return 'linux';
     } else {
       return 'unknown';
     }
@@ -152,18 +146,18 @@ class UpdateService {
       final platform = _getCurrentPlatform();
       _logger.log('当前平台: $platform', tag: 'UPDATE');
 
-      // 从配置中获取客户端更新信息
-      final clientConfig = config['client'] as Map<String, dynamic>?;
-      if (clientConfig == null) {
-        _logger.log('配置中未找到客户端信息', tag: 'UPDATE');
+      // 从配置中获取服务器更新信息
+      final serverConfig = config['server'] as Map<String, dynamic>?;
+      if (serverConfig == null) {
+        _logger.log('配置中未找到服务器信息', tag: 'UPDATE');
         return UpdateCheckResult(
           hasUpdate: false,
-          error: '配置中未找到客户端信息',
+          error: '配置中未找到服务器信息',
         );
       }
 
       // 获取平台特定的更新信息
-      final platforms = clientConfig['platforms'] as Map<String, dynamic>?;
+      final platforms = serverConfig['platforms'] as Map<String, dynamic>?;
       if (platforms == null) {
         _logger.log('配置中未找到平台信息', tag: 'UPDATE');
         return UpdateCheckResult(

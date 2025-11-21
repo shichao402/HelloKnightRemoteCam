@@ -3,6 +3,8 @@ import 'package:camera/camera.dart';
 import 'screens/server_home_page.dart';
 import 'services/logger_service.dart';
 import 'services/version_compatibility_service.dart';
+import 'services/update_service.dart';
+import 'services/update_settings_service.dart';
 
 List<CameraDescription> cameras = [];
 
@@ -15,6 +17,21 @@ void main() async {
   // 初始化版本兼容性服务
   final versionCompatibilityService = VersionCompatibilityService();
   await versionCompatibilityService.initialize();
+  
+  // 初始化更新服务
+  final updateService = UpdateService();
+  final updateSettings = UpdateSettingsService();
+  
+  // 设置更新检查URL（如果未设置）
+  final updateCheckUrl = await updateSettings.getUpdateCheckUrl();
+  if (updateCheckUrl.isEmpty) {
+    // 设置默认更新检查URL
+    const defaultUrl = 'https://jihulab.com/api/v4/projects/298216/repository/files/update_config.json/raw?ref=main';
+    await updateSettings.setUpdateCheckUrl(defaultUrl);
+    updateService.setUpdateCheckUrl(defaultUrl);
+  } else {
+    updateService.setUpdateCheckUrl(updateCheckUrl);
+  }
   
   try {
     cameras = await availableCameras();
