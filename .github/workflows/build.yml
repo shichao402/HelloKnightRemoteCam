@@ -41,17 +41,33 @@ jobs:
           cd client
           ./scripts/build.sh --release --macos
 
-      - name: Archive macOS app
+      - name: Create macOS DMG
         run: |
           cd client/build/macos/Build/Products/Release
-          zip -r HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip HelloKnightRCC.app
-          mv HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip $GITHUB_WORKSPACE/client/
+          APP_NAME="HelloKnightRCC.app"
+          DMG_NAME="HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.dmg"
+          VOLUME_NAME="HelloKnightRCC"
+          
+          # 创建临时目录用于DMG内容
+          mkdir -p dmg_temp
+          cp -R "$APP_NAME" dmg_temp/
+          
+          # 创建DMG
+          hdiutil create -volname "$VOLUME_NAME" -srcfolder dmg_temp -ov -format UDZO "$DMG_NAME"
+          
+          # 移动到工作区根目录
+          mv "$DMG_NAME" $GITHUB_WORKSPACE/client/
+          
+          # 清理临时目录
+          rm -rf dmg_temp
+          
+          echo "DMG created: $DMG_NAME"
 
-      - name: Upload macOS artifact
+      - name: Upload macOS DMG artifact
         uses: actions/upload-artifact@v4
         with:
           name: HelloKnightRCC_macos
-          path: client/HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip
+          path: client/HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.dmg
           retention-days: 30
 
   build-client-windows:
@@ -90,19 +106,65 @@ jobs:
           cd client
           bash scripts/build.sh --release --windows
 
-      - name: Archive Windows app
+      - name: Install Inno Setup
         shell: powershell
         run: |
-          cd client/build/windows/x64/runner/Release
-          $version = "${{ steps.get_version.outputs.FULL_VERSION }}"
-          Compress-Archive -Path * -DestinationPath HelloKnightRCC_windows_${version}.zip -Force
-          Move-Item -Path HelloKnightRCC_windows_${version}.zip -Destination "$env:GITHUB_WORKSPACE/client/"
+          # 下载并安装 Inno Setup
+          $innosetupUrl = "https://jrsoftware.org/download.php/is.exe"
+          $innosetupPath = "$env:TEMP\innosetup.exe"
+          Invoke-WebRequest -Uri $innosetupUrl -OutFile $innosetupPath
+          Start-Process -FilePath $innosetupPath -ArgumentList "/SILENT /DIR=C:\Program Files (x86)\Inno Setup 6" -Wait
+          echo "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" >> $env:GITHUB_PATH
 
-      - name: Upload Windows artifact
+      - name: Create Inno Setup script
+        shell: powershell
+        run: |
+          $version = "${{ steps.get_version.outputs.FULL_VERSION }}"
+          $scriptContent = @"
+[Setup]
+AppName=HelloKnightRCC
+AppVersion=$version
+DefaultDirName={autopf}\HelloKnightRCC
+DefaultGroupName=HelloKnightRCC
+OutputDir=installer
+OutputBaseFilename=HelloKnightRCC_windows_${version}_setup
+Compression=lzma
+SolidCompression=yes
+PrivilegesRequired=admin
+
+[Files]
+Source: "client\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+
+[Icons]
+Name: "{group}\HelloKnightRCC"; Filename: "{app}\HelloKnightRCC.exe"
+Name: "{autodesktop}\HelloKnightRCC"; Filename: "{app}\HelloKnightRCC.exe"; Tasks: desktopicon
+
+[Tasks]
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
+"@
+          New-Item -ItemType Directory -Force -Path "installer" | Out-Null
+          $scriptContent | Out-File -FilePath "installer\setup.iss" -Encoding UTF8
+
+      - name: Build Windows installer
+        shell: powershell
+        run: |
+          $version = "${{ steps.get_version.outputs.FULL_VERSION }}"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\setup.iss
+          $installerName = "HelloKnightRCC_windows_${version}_setup.exe"
+          if (Test-Path "installer\$installerName") {
+            Move-Item -Path "installer\$installerName" -Destination "$env:GITHUB_WORKSPACE\client\$installerName"
+            Write-Host "Installer created: $installerName"
+          } else {
+            Write-Host "Error: Installer not found"
+            Get-ChildItem -Path "installer" | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+
+      - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: HelloKnightRCC_windows
-          path: client/HelloKnightRCC_windows_${{ steps.get_version.outputs.FULL_VERSION }}.zip
+          path: client/HelloKnightRCC_windows_${{ steps.get_version.outputs.FULL_VERSION }}_setup.exe
           retention-days: 30
 
   build-server-android:
@@ -239,8 +301,8 @@ jobs:
         run: |
           mkdir -p artifacts
           # 查找并移动所有构建产物到统一的 artifacts 目录
-          find ./artifacts-temp -name "HelloKnightRCC_macos_*.zip" -exec mv {} ./artifacts/ \;
-          find ./artifacts-temp -name "HelloKnightRCC_windows_*.zip" -exec mv {} ./artifacts/ \;
+          find ./artifacts-temp -name "HelloKnightRCC_macos_*.dmg" -exec mv {} ./artifacts/ \;
+          find ./artifacts-temp -name "HelloKnightRCC_windows_*_setup.exe" -exec mv {} ./artifacts/ \;
           find ./artifacts-temp -name "helloknightrcc_server_android_*.apk" -exec mv {} ./artifacts/ \;
           rm -rf ./artifacts-temp
 
@@ -253,8 +315,8 @@ jobs:
             ## Release ${{ steps.get_tag_version.outputs.VERSION }}
 
             ### Client
-            - **macOS**: HelloKnightRCC_macos_${{ steps.get_client_version.outputs.FULL_VERSION }}.zip
-            - **Windows**: HelloKnightRCC_windows_${{ steps.get_client_version.outputs.FULL_VERSION }}.zip
+            - **macOS**: HelloKnightRCC_macos_${{ steps.get_client_version.outputs.FULL_VERSION }}.dmg
+            - **Windows**: HelloKnightRCC_windows_${{ steps.get_client_version.outputs.FULL_VERSION }}_setup.exe
 
             ### Server
             - **Android**: helloknightrcc_server_android_${{ steps.get_server_version.outputs.FULL_VERSION }}.apk
@@ -262,8 +324,8 @@ jobs:
             ### Changes
             - See commit history for details
           files: |
-            artifacts/HelloKnightRCC_macos_*.zip
-            artifacts/HelloKnightRCC_windows_*.zip
+            artifacts/HelloKnightRCC_macos_*.dmg
+            artifacts/HelloKnightRCC_windows_*_setup.exe
             artifacts/helloknightrcc_server_android_*.apk
           draft: false
           prerelease: false
@@ -282,8 +344,8 @@ jobs:
           BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${TAG_VERSION}"
           
           # 获取实际的文件名（从 artifacts 目录）
-          MACOS_FILE=$(find artifacts -name "HelloKnightRCC_macos_*.zip" -exec basename {} \; | head -1)
-          WINDOWS_FILE=$(find artifacts -name "HelloKnightRCC_windows_*.zip" -exec basename {} \; | head -1)
+          MACOS_FILE=$(find artifacts -name "HelloKnightRCC_macos_*.dmg" -exec basename {} \; | head -1)
+          WINDOWS_FILE=$(find artifacts -name "HelloKnightRCC_windows_*_setup.exe" -exec basename {} \; | head -1)
           ANDROID_FILE=$(find artifacts -name "helloknightrcc_server_android_*.apk" -exec basename {} \; | head -1)
           
           cat > update_config_github.json <<EOF
@@ -297,7 +359,7 @@ jobs:
                   "versionNumber": "${CLIENT_VERSION_NUMBER}",
                   "downloadUrl": "${BASE_URL}/${MACOS_FILE}",
                   "fileName": "${MACOS_FILE}",
-                  "fileType": "zip",
+                  "fileType": "dmg",
                   "platform": "macos"
                 },
                 "windows": {
@@ -305,7 +367,7 @@ jobs:
                   "versionNumber": "${CLIENT_VERSION_NUMBER}",
                   "downloadUrl": "${BASE_URL}/${WINDOWS_FILE}",
                   "fileName": "${WINDOWS_FILE}",
-                  "fileType": "zip",
+                  "fileType": "exe",
                   "platform": "windows"
                 }
               }
