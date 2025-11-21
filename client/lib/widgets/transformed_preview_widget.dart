@@ -6,9 +6,11 @@ import '../services/logger_service.dart';
 /// 使用mjpeg_stream包显示MJPEG流，确保预览流始终以原始比例撑满预览窗口
 /// 
 /// 实现思路：
-/// 1. 外层fit：根据容器和旋转后内容的宽高比匹配情况选择fit
-/// 2. Transform.rotate：旋转整个内容
-/// 3. 内层fit：根据旋转后内容方向选择fit
+/// 1. 计算旋转后内容占用的边界框尺寸
+/// 2. 使用contain逻辑手动计算缩放比例（选择较小的缩放，确保不裁剪）
+/// 3. Transform.scale：应用缩放
+/// 4. Transform.rotate：旋转内容
+/// 5. FittedBox：内层fit根据旋转后内容方向选择
 class TransformedPreviewWidget extends StatefulWidget {
   final String streamUrl;
   final int rotationAngle; // 旋转角度（0, 90, 180, 270）

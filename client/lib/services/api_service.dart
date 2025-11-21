@@ -25,7 +25,7 @@ class ApiService {
   StreamSubscription? _webSocketSubscription;
   final Map<String, Completer<Map<String, dynamic>>> _pendingRequests = {};
   int _messageIdCounter = 0;
-  bool _useWebSocket = true; // 是否使用WebSocket（默认true）
+  bool _useWebSocket = true; // 是否使用WebSocket（默认true，保留用于状态标记）
 
   // 存储最后一次连接错误
   ConnectionError? _lastConnectionError;
@@ -645,68 +645,6 @@ class ApiService {
     }
   }
 
-  Map<String, String> get _headers => {
-        'Content-Type': 'application/json',
-      };
-
-  // 发送HTTP请求的通用方法
-  Future<Map<String, dynamic>> _sendRequest({
-    required String method,
-    required String path,
-    Map<String, String>? headers,
-    String? body,
-  }) async {
-    try {
-      final uri = Uri.parse('$baseUrl$path');
-      logger.log('尝试连接到: $uri', tag: 'CONNECTION');
-
-      // 强制使用IPv4解析
-      final addresses =
-          await InternetAddress.lookup(host, type: InternetAddressType.IPv4);
-      if (addresses.isEmpty) {
-        throw Exception('无法解析主机地址: $host');
-      }
-
-      final request = await _httpClient.openUrl(method, uri);
-      request.headers.set('Content-Type', 'application/json');
-      if (headers != null) {
-        headers.forEach((key, value) {
-          request.headers.set(key, value);
-        });
-      }
-
-      if (body != null) {
-        request.write(body);
-      }
-
-      final response = await request.close();
-      final responseBody = await response.transform(utf8.decoder).join();
-
-      logger.log('响应状态码: ${response.statusCode}', tag: 'CONNECTION');
-
-      if (response.statusCode == 200 || response.statusCode == 206) {
-        try {
-          return json.decode(responseBody) as Map<String, dynamic>;
-        } catch (e) {
-          return {'success': true, 'data': responseBody};
-        }
-      } else {
-        try {
-          return json.decode(responseBody) as Map<String, dynamic>;
-        } catch (e) {
-          return {
-            'success': false,
-            'error': 'HTTP ${response.statusCode}: ${response.reasonPhrase}'
-          };
-        }
-      }
-    } catch (e, stackTrace) {
-      logger.logError('请求失败: $method $path', error: e, stackTrace: stackTrace);
-      logger.log('连接错误详情: $e', tag: 'CONNECTION');
-      return {'success': false, 'error': e.toString()};
-    }
-  }
-
   // 测试连接（完全使用WebSocket）
   /// 返回null表示成功，返回ConnectionError表示失败
   Future<ConnectionError?> ping() async {
@@ -1056,92 +994,6 @@ class ApiService {
       logger.logError('获取预览流URL失败', error: e);
       // 即使失败也返回基本URL（向后兼容）
       return '$baseUrl/preview/stream';
-    }
-  }
-
-  // 获取单帧预览（用于初始化预览窗口）
-  Future<Uint8List?> getSinglePreviewFrame() async {
-    try {
-      logger.logApiCall('HTTP', '/preview/stream');
-      final clientVersion = await _versionService.getVersion();
-      final url = '$baseUrl/preview/stream?clientVersion=$clientVersion';
-
-      final request = await _httpClient.getUrl(Uri.parse(url));
-      request.headers.set(
-          'User-Agent', 'HelloKnightRCC/${await _versionService.getVersion()}');
-
-      final response = await request.close();
-
-      if (response.statusCode != 200) {
-        logger.logError('获取单帧预览失败: HTTP ${response.statusCode}');
-        return null;
-      }
-
-      // 读取纯JPEG流的第一帧
-      // JPEG格式：以0xFF 0xD8开始，以0xFF 0xD9结束
-      final List<int> buffer = [];
-      bool foundStart = false;
-      int maxBytesToRead = 5 * 1024 * 1024; // 最多读取5MB
-      int totalBytesRead = 0;
-
-      await for (final chunk in response) {
-        buffer.addAll(chunk);
-        totalBytesRead += chunk.length;
-
-        // 限制读取大小
-        if (totalBytesRead > maxBytesToRead) {
-          logger.logError('获取单帧预览失败: 读取数据过多 (${totalBytesRead} 字节)');
-          return null;
-        }
-
-        // 查找JPEG开始标记（0xFF 0xD8）
-        if (!foundStart) {
-          for (int i = 0; i < buffer.length - 1; i++) {
-            if (buffer[i] == 0xFF && buffer[i + 1] == 0xD8) {
-              foundStart = true;
-              // 移除开始标记之前的数据
-              if (i > 0) {
-                buffer.removeRange(0, i);
-              }
-              logger.log('找到JPEG开始标记', tag: 'PREVIEW');
-              break;
-            }
-          }
-          if (!foundStart) {
-            // 如果缓冲区超过10KB还没找到开始标记，可能格式不对
-            if (buffer.length > 10 * 1024) {
-              logger
-                  .logError('获取单帧预览失败: 未找到JPEG开始标记 (已读取 ${buffer.length} 字节)');
-              return null;
-            }
-            continue;
-          }
-        }
-
-        // 已找到开始标记，查找结束标记（0xFF 0xD9）
-        if (foundStart && buffer.length >= 2) {
-          for (int i = buffer.length - 2; i >= 0; i--) {
-            if (buffer[i] == 0xFF && buffer[i + 1] == 0xD9) {
-              // 找到完整的JPEG帧
-              final jpegData = Uint8List.fromList(buffer.sublist(0, i + 2));
-              logger.log('成功获取单帧预览，大小: ${jpegData.length} 字节', tag: 'PREVIEW');
-              return jpegData;
-            }
-          }
-        }
-
-        // 如果缓冲区太大但还没找到完整帧，可能有问题
-        if (buffer.length > 2 * 1024 * 1024) {
-          logger.logError('获取单帧预览失败: 缓冲区过大但未找到完整帧 (${buffer.length} 字节)');
-          return null;
-        }
-      }
-
-      logger.logError('获取单帧预览失败: 流结束但未找到完整JPEG帧 (已读取 ${buffer.length} 字节)');
-      return null;
-    } catch (e, stackTrace) {
-      logger.logError('获取单帧预览失败', error: e, stackTrace: stackTrace);
-      return null;
     }
   }
 

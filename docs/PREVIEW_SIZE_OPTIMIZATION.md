@@ -70,8 +70,16 @@ HttpServerService
   ↓ _updatePreviewSize() (统一处理)
 _previewSizeNotifier (ValueNotifier)
   ↓
+TransformedPreviewWidget
+  ↓ 计算转置后尺寸
+  ↓ 计算缩放比例（contain逻辑）
+  ↓ Transform.scale + Transform.rotate
+  ↓ MJPEGStreamScreen (mjpeg_stream包)
+  ↓
 UI更新
 ```
+
+**注意**: 客户端现在使用 `mjpeg_stream` 包显示MJPEG流，并通过 `TransformedPreviewWidget` 处理旋转和缩放。详细实现请参考 [预览旋转实现文档](PREVIEW_ROTATION.md)。
 
 ## 关键改进点
 
