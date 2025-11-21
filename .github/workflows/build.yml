@@ -41,6 +41,12 @@ jobs:
           cd client
           ./scripts/build.sh --release --macos
 
+      - name: Archive macOS app (zip)
+        run: |
+          cd client/build/macos/Build/Products/Release
+          zip -r HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip HelloKnightRCC.app
+          mv HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip $GITHUB_WORKSPACE/client/
+
       - name: Create macOS DMG
         run: |
           cd client/build/macos/Build/Products/Release
@@ -63,11 +69,13 @@ jobs:
           
           echo "DMG created: $DMG_NAME"
 
-      - name: Upload macOS DMG artifact
+      - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: HelloKnightRCC_macos
-          path: client/HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.dmg
+          path: |
+            client/HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip
+            client/HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.dmg
           retention-days: 30
 
   build-client-windows:
@@ -316,6 +324,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
         run: |
           mkdir -p artifacts
           # 查找并移动所有构建产物到统一的 artifacts 目录
+          find ./artifacts-temp -name "HelloKnightRCC_macos_*.zip" -exec mv {} ./artifacts/ \;
           find ./artifacts-temp -name "HelloKnightRCC_macos_*.dmg" -exec mv {} ./artifacts/ \;
           find ./artifacts-temp -name "HelloKnightRCC_windows_*_setup.exe" -exec mv {} ./artifacts/ \;
           find ./artifacts-temp -name "helloknightrcc_server_android_*.apk" -exec mv {} ./artifacts/ \;
@@ -330,7 +339,9 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
             ## Release ${{ steps.get_tag_version.outputs.VERSION }}
 
             ### Client
-            - **macOS**: HelloKnightRCC_macos_${{ steps.get_client_version.outputs.FULL_VERSION }}.dmg
+            - **macOS**: 
+              - DMG: HelloKnightRCC_macos_${{ steps.get_client_version.outputs.FULL_VERSION }}.dmg (推荐)
+              - ZIP: HelloKnightRCC_macos_${{ steps.get_client_version.outputs.FULL_VERSION }}.zip
             - **Windows**: HelloKnightRCC_windows_${{ steps.get_client_version.outputs.FULL_VERSION }}_setup.exe
 
             ### Server
@@ -339,6 +350,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
             ### Changes
             - See commit history for details
           files: |
+            artifacts/HelloKnightRCC_macos_*.zip
             artifacts/HelloKnightRCC_macos_*.dmg
             artifacts/HelloKnightRCC_windows_*_setup.exe
             artifacts/helloknightrcc_server_android_*.apk
