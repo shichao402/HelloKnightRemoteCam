@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'logger_service.dart';
@@ -155,7 +156,20 @@ class UpdateService {
         );
       }
 
-      final config = response.data as Map<String, dynamic>;
+      // 处理响应数据：可能是 Map 或 String
+      Map<String, dynamic> config;
+      if (response.data is Map) {
+        config = response.data as Map<String, dynamic>;
+      } else if (response.data is String) {
+        // 如果是字符串，需要手动解析 JSON
+        config = jsonDecode(response.data as String) as Map<String, dynamic>;
+      } else {
+        _logger.logError('更新检查失败', error: '响应数据格式不正确: ${response.data.runtimeType}');
+        return UpdateCheckResult(
+          hasUpdate: false,
+          error: '响应数据格式不正确',
+        );
+      }
       
       // 获取当前版本
       final currentVersion = await _versionService.getVersion();
