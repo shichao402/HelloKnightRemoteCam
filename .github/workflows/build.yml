@@ -109,12 +109,27 @@ jobs:
       - name: Install Inno Setup
         shell: powershell
         run: |
-          # 下载并安装 Inno Setup
-          $innosetupUrl = "https://jrsoftware.org/download.php/is.exe"
-          $innosetupPath = "$env:TEMP\innosetup.exe"
-          Invoke-WebRequest -Uri $innosetupUrl -OutFile $innosetupPath
-          Start-Process -FilePath $innosetupPath -ArgumentList "/SILENT /DIR=C:\Program Files (x86)\Inno Setup 6" -Wait
-          echo "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" >> $env:GITHUB_PATH
+          # 使用 Chocolatey 安装 Inno Setup（如果可用），否则直接下载安装
+          if (Get-Command choco -ErrorAction SilentlyContinue) {
+            choco install innosetup -y
+          } else {
+            # 下载并安装 Inno Setup
+            $innosetupUrl = "https://files.jrsoftware.org/is/6/innosetup-6.2.2.exe"
+            $innosetupPath = "$env:TEMP\innosetup.exe"
+            Write-Host "Downloading Inno Setup..."
+            Invoke-WebRequest -Uri $innosetupUrl -OutFile $innosetupPath
+            Write-Host "Installing Inno Setup..."
+            Start-Process -FilePath $innosetupPath -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /DIR=C:\Program Files (x86)\Inno Setup 6" -Wait
+          }
+          # 验证安装
+          $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (Test-Path $isccPath) {
+            Write-Host "Inno Setup installed successfully at: $isccPath"
+            echo "$isccPath" >> $env:GITHUB_PATH
+          } else {
+            Write-Host "Error: Inno Setup not found at expected path"
+            exit 1
+          }
 
       - name: Create Inno Setup script
         shell: powershell
