@@ -332,14 +332,8 @@ class HttpServerService {
           logger.log('广播预览帧 #$_globalFrameCount 给 ${_previewStreamControllers.length} 个客户端，大小: ${frameData.length} 字节', tag: 'PREVIEW');
         }
         
-        // 准备MJPEG格式的数据
-        const boundary = 'frame';
-        final boundaryHeader = utf8.encode('--$boundary\r\n');
-        final contentType = utf8.encode('Content-Type: image/jpeg\r\n');
-        final contentLength = utf8.encode('Content-Length: ${frameData.length}\r\n\r\n');
-        final boundaryFooter = utf8.encode('\r\n--$boundary\r\n');
-        
-        // 广播给所有活跃的客户端连接
+        // 直接发送纯JPEG数据（不包含multipart格式的边界和头部）
+        // 这样客户端可以直接使用mjpeg_stream等包来解析
         final clientsToRemove = <String>[];
         for (final entry in _previewStreamControllers.entries) {
           final clientIp = entry.key;
@@ -352,12 +346,8 @@ class HttpServerService {
           }
           
           try {
-            // 发送预览帧数据
-            controller.add(boundaryHeader);
-            controller.add(contentType);
-            controller.add(contentLength);
+            // 直接发送JPEG数据（纯流格式）
             controller.add(frameData);
-            controller.add(boundaryFooter);
           } catch (e) {
             // 发送失败，可能是连接已断开
             logger.log('向客户端 $clientIp 发送预览帧失败: $e', tag: 'PREVIEW');
@@ -879,10 +869,6 @@ class HttpServerService {
       final controller = StreamController<List<int>>();
       _previewStreamControllers[clientIp] = controller;
       
-      // 发送初始边界标记
-      const boundary = 'frame';
-      controller.add(utf8.encode('--$boundary\r\n'));
-      
       logger.log('客户端 $clientIp 已加入预览流广播，当前客户端数: ${_previewStreamControllers.length}', tag: 'PREVIEW');
       
       // 监听控制器关闭事件，清理连接
@@ -897,7 +883,7 @@ class HttpServerService {
       return Response.ok(
         controller.stream,
         headers: {
-          'Content-Type': 'multipart/x-mixed-replace; boundary=$boundary',
+          'Content-Type': 'image/jpeg', // 纯JPEG流，不使用multipart格式
           'Cache-Control': 'no-cache',
           'Connection': 'keep-alive',
         },

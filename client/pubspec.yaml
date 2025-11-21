@@ -47,7 +47,7 @@ dependencies:
   shared_preferences: ^2.2.2
 
   # Media
-  flutter_mjpeg: ^2.0.4
+  mjpeg_stream: ^1.0.1
   open_file: ^3.3.2
   file_picker: ^6.1.1
 

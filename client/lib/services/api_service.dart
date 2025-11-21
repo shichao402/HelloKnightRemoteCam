@@ -1059,6 +1059,92 @@ class ApiService {
     }
   }
 
+  // 获取单帧预览（用于初始化预览窗口）
+  Future<Uint8List?> getSinglePreviewFrame() async {
+    try {
+      logger.logApiCall('HTTP', '/preview/stream');
+      final clientVersion = await _versionService.getVersion();
+      final url = '$baseUrl/preview/stream?clientVersion=$clientVersion';
+
+      final request = await _httpClient.getUrl(Uri.parse(url));
+      request.headers.set(
+          'User-Agent', 'HelloKnightRCC/${await _versionService.getVersion()}');
+
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        logger.logError('获取单帧预览失败: HTTP ${response.statusCode}');
+        return null;
+      }
+
+      // 读取纯JPEG流的第一帧
+      // JPEG格式：以0xFF 0xD8开始，以0xFF 0xD9结束
+      final List<int> buffer = [];
+      bool foundStart = false;
+      int maxBytesToRead = 5 * 1024 * 1024; // 最多读取5MB
+      int totalBytesRead = 0;
+
+      await for (final chunk in response) {
+        buffer.addAll(chunk);
+        totalBytesRead += chunk.length;
+
+        // 限制读取大小
+        if (totalBytesRead > maxBytesToRead) {
+          logger.logError('获取单帧预览失败: 读取数据过多 (${totalBytesRead} 字节)');
+          return null;
+        }
+
+        // 查找JPEG开始标记（0xFF 0xD8）
+        if (!foundStart) {
+          for (int i = 0; i < buffer.length - 1; i++) {
+            if (buffer[i] == 0xFF && buffer[i + 1] == 0xD8) {
+              foundStart = true;
+              // 移除开始标记之前的数据
+              if (i > 0) {
+                buffer.removeRange(0, i);
+              }
+              logger.log('找到JPEG开始标记', tag: 'PREVIEW');
+              break;
+            }
+          }
+          if (!foundStart) {
+            // 如果缓冲区超过10KB还没找到开始标记，可能格式不对
+            if (buffer.length > 10 * 1024) {
+              logger
+                  .logError('获取单帧预览失败: 未找到JPEG开始标记 (已读取 ${buffer.length} 字节)');
+              return null;
+            }
+            continue;
+          }
+        }
+
+        // 已找到开始标记，查找结束标记（0xFF 0xD9）
+        if (foundStart && buffer.length >= 2) {
+          for (int i = buffer.length - 2; i >= 0; i--) {
+            if (buffer[i] == 0xFF && buffer[i + 1] == 0xD9) {
+              // 找到完整的JPEG帧
+              final jpegData = Uint8List.fromList(buffer.sublist(0, i + 2));
+              logger.log('成功获取单帧预览，大小: ${jpegData.length} 字节', tag: 'PREVIEW');
+              return jpegData;
+            }
+          }
+        }
+
+        // 如果缓冲区太大但还没找到完整帧，可能有问题
+        if (buffer.length > 2 * 1024 * 1024) {
+          logger.logError('获取单帧预览失败: 缓冲区过大但未找到完整帧 (${buffer.length} 字节)');
+          return null;
+        }
+      }
+
+      logger.logError('获取单帧预览失败: 流结束但未找到完整JPEG帧 (已读取 ${buffer.length} 字节)');
+      return null;
+    } catch (e, stackTrace) {
+      logger.logError('获取单帧预览失败', error: e, stackTrace: stackTrace);
+      return null;
+    }
+  }
+
   // 获取指定相机的能力信息（完全使用WebSocket）
   Future<Map<String, dynamic>> getCameraCapabilities(String cameraId) async {
     try {

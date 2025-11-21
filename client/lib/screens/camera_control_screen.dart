@@ -2,22 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
 import 'dart:async';
-import 'dart:math' as math;
 import '../services/api_service.dart';
 import '../services/api_service_manager.dart';
 import '../services/download_manager.dart';
 import '../models/file_info.dart';
 import '../models/download_task.dart';
-import '../widgets/mjpeg_stream_widget.dart';
+import '../widgets/transformed_preview_widget.dart';
 import '../services/orientation_preferences_service.dart';
-import 'settings_screen.dart';
-import 'advanced_camera_settings_screen.dart';
 import 'settings_selection_screen.dart';
 import 'file_manager_screen.dart';
 import 'download_manager_screen.dart';
-import 'client_settings_screen.dart';
 import 'device_connection_screen.dart';
-import 'camera_capabilities_screen.dart';
 import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
@@ -49,7 +44,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   bool _isConnected = true;
   bool _isReconnecting = false;
   int _reconnectAttempts = 0; // 当前重连次数
-  int _previewStreamKey = 0; // 预览流key，用于强制重建
   Timer? _connectionCheckTimer;
   StreamSubscription? _webSocketSubscription; // WebSocket通知消息订阅
   RetryHelper? _reconnectHelper; // 重连助手
@@ -58,7 +52,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   bool _isAuthFailure = false; // 标记是否是认证失败（版本不兼容等）
 
   // 左右布局比例（0.0-1.0，表示左侧占比）
-  double _leftPanelRatio = 0.3; // 默认左侧30%
+  double _leftPanelRatio = 0.3; // 默认左侧30%，可手动调整
 
   // 设备方向（0=竖屏, 90=横屏右转, 180=倒置, 270=横屏左转）
   // 使用ValueNotifier，只更新预览部分，不影响文件列表
@@ -76,6 +70,14 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   // 预览尺寸（从服务器获取，默认640x480）
   final ValueNotifier<Map<String, int>> _previewSizeNotifier =
       ValueNotifier<Map<String, int>>({'width': 640, 'height': 480});
+
+  // 转置后的预览尺寸（根据旋转角度计算）
+  final ValueNotifier<Map<String, int>> _transformedPreviewSizeNotifier =
+      ValueNotifier<Map<String, int>>({'width': 640, 'height': 480});
+
+  // 预览初始化状态
+  bool _previewInitialized = false;
+  int _previewInitKey = 0; // 用于强制重建预览组件
 
   /// 统一更新预览尺寸的方法
   /// 从服务器返回的预览尺寸数据中提取并更新本地状态
@@ -106,6 +108,9 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         'height': height,
       };
       _logger.log('更新预览尺寸: ${width}x${height} (之前: ${currentSize['width']}x${currentSize['height']})', tag: 'PREVIEW');
+      
+      // 预览尺寸更新后，自动更新转置后的尺寸
+      _updateTransformedPreviewSize();
     }
   }
 
@@ -238,14 +243,59 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       // 更新客户端预览旋转角度
       if (mounted) {
         _updatePreviewRotation();
+        // 初始化预览（获取第一帧并转置）
+        _initializePreview();
       }
     } catch (e, stackTrace) {
       _logger.logError('初始化方向锁定状态失败', error: e, stackTrace: stackTrace);
       // 出错时使用默认值
       if (mounted) {
         _updatePreviewRotation();
+        // 即使出错也尝试初始化预览
+        _initializePreview();
       }
     }
+  }
+
+  /// 计算并更新转置后的预览尺寸
+  /// 根据原始尺寸和旋转角度计算转置后的尺寸
+  void _updateTransformedPreviewSize() {
+    if (!mounted) return;
+
+    final rotationAngle = _rotationAngleNotifier.value;
+    final originalWidth = _previewSizeNotifier.value['width'] ?? 640;
+    final originalHeight = _previewSizeNotifier.value['height'] ?? 480;
+
+    int transformedWidth = originalWidth;
+    int transformedHeight = originalHeight;
+    if (rotationAngle == 90 || rotationAngle == 270) {
+      transformedWidth = originalHeight;
+      transformedHeight = originalWidth;
+    }
+
+    final currentTransformed = _transformedPreviewSizeNotifier.value;
+    if (currentTransformed['width'] != transformedWidth ||
+        currentTransformed['height'] != transformedHeight) {
+      _logger.log(
+          '预览转置尺寸确定: ${originalWidth}x${originalHeight} -> ${transformedWidth}x${transformedHeight} (旋转角度=$rotationAngle°)',
+          tag: 'PREVIEW');
+
+      _transformedPreviewSizeNotifier.value = {
+        'width': transformedWidth,
+        'height': transformedHeight,
+      };
+      _previewInitKey++; // 触发预览组件重建
+      _previewInitialized = true;
+    }
+  }
+
+  /// 初始化预览（使用服务器返回的预览尺寸，不需要获取第一帧）
+  void _initializePreview() {
+    if (!mounted || _previewStreamUrl == null) return;
+
+    _logger.log('开始初始化预览，使用服务器返回的预览尺寸', tag: 'PREVIEW');
+    _updateTransformedPreviewSize();
+    _logger.log('预览初始化完成', tag: 'PREVIEW');
   }
 
   @override
@@ -258,6 +308,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     _deviceOrientationNotifier.dispose();
     _rotationAngleNotifier.dispose();
     _previewSizeNotifier.dispose();
+    _transformedPreviewSizeNotifier.dispose();
     super.dispose();
   }
 
@@ -322,8 +373,8 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                   // 只有在解锁状态下才更新预览旋转角度
                   // 锁定状态下旋转角度由锁定角度决定，不受设备方向影响
                   if (!_orientationLocked) {
-                    _logger.log('方向已解锁，更新预览旋转角度', tag: 'ORIENTATION');
-                    _updatePreviewRotation();
+                    _logger.log('方向已解锁，更新预览旋转角度并重新初始化预览', tag: 'ORIENTATION');
+                    _updatePreviewRotation(); // 这会触发重新初始化
                   } else {
                     _logger.log('方向已锁定，跳过更新预览旋转角度', tag: 'ORIENTATION');
                   }
@@ -492,7 +543,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
             _isConnected = true;
             _isReconnecting = false;
             _reconnectAttempts = 0; // 重置重连次数
-            _previewStreamKey++; // 更新key，强制重建预览流
           });
           _logger.log('连接已恢复', tag: 'CONNECTION');
           _refreshFileList();
@@ -573,7 +623,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                 _isConnected = true;
                 _isReconnecting = false;
                 _reconnectAttempts = 0; // 重置重连次数
-                _previewStreamKey++; // 更新key，强制重建预览流
               });
             }
             _logger.log('重连成功', tag: 'CONNECTION');
@@ -653,7 +702,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           _isAuthFailure = false; // 重置认证失败标记
           setState(() {
             _reconnectAttempts = 0; // 重置重连次数
-            _previewStreamKey++; // 更新key，强制重建预览流
           });
           _showSuccess('重连成功');
           _refreshFileList();
@@ -1233,6 +1281,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       // 客户端根据锁定状态和方向计算旋转角度，与拍照方向一致
       // 锁定状态：sensorOrientation + 90 + lockedRotationAngle（与拍照逻辑一致）
       // 解锁状态：sensorOrientation + currentDeviceOrientation（与拍照逻辑一致）
+      final oldRotationAngle = _rotationAngleNotifier.value;
       final rotationAngle = _orientationLocked
           ? (_sensorOrientation + 90 + _lockedRotationAngle) % 360
           : (_sensorOrientation + _deviceOrientationNotifier.value) % 360;
@@ -1240,6 +1289,11 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       _logger.log(
           '更新预览旋转角度: ${_orientationLocked ? "锁定" : "解锁"}, 角度=$rotationAngle° (传感器=$_sensorOrientation°, ${_orientationLocked ? "锁定角度=$_lockedRotationAngle°" : "设备方向=${_deviceOrientationNotifier.value}°"})',
           tag: 'PREVIEW');
+
+      // 旋转角度改变后，自动更新转置后的尺寸
+      if (oldRotationAngle != rotationAngle) {
+        _updateTransformedPreviewSize();
+      }
     } catch (e, stackTrace) {
       _logger.logError('更新预览旋转角度失败', error: e, stackTrace: stackTrace);
     }
@@ -1261,7 +1315,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         }
         // 保存到本地存储
         await _orientationPrefs.saveLockedRotationAngle(newAngle);
-        // 更新客户端预览旋转角度
+        // 更新客户端预览旋转角度（会触发重新初始化）
         if (mounted) {
           _updatePreviewRotation();
           _showSuccess('预览已旋转到 ${newAngle}°');
@@ -1300,7 +1354,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         if (newLockState) {
           await widget.apiService.setLockedRotationAngle(_lockedRotationAngle);
         }
-        // 更新客户端预览旋转角度
+        // 更新客户端预览旋转角度（会触发重新初始化）
         if (mounted) {
           _updatePreviewRotation();
           _showSuccess(newLockState ? '方向已锁定' : '方向已解锁');
@@ -1402,10 +1456,16 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       body: LayoutBuilder(
         builder: (context, constraints) {
           final totalWidth = constraints.maxWidth;
+          final totalHeight = constraints.maxHeight;
           const dividerWidth = 4.0; // 分割线宽度
           final leftWidth = totalWidth * _leftPanelRatio;
           // 右侧宽度 = 总宽度 - 左侧宽度 - 分割线宽度，确保不溢出
           final rightWidth = totalWidth - leftWidth - dividerWidth;
+          
+          // 记录左侧窗口尺寸
+          _logger.log(
+              '左侧窗口尺寸: ${leftWidth.toInt()}x${totalHeight.toInt()} (比例=${(_leftPanelRatio * 100).toStringAsFixed(1)}%)',
+              tag: 'PREVIEW');
 
           return Row(
             children: [
@@ -1500,7 +1560,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                           borderRadius: BorderRadius.circular(8),
                           child: Stack(
                             children: [
-                              // 预览窗口：客户端处理旋转，UI层只处理宽高比
+                              // 预览窗口：使用转置预览组件
                               Positioned.fill(
                                 child: ValueListenableBuilder<Map<String, int>>(
                                   valueListenable: _previewSizeNotifier,
@@ -1514,29 +1574,32 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                                             child: CircularProgressIndicator(),
                                           );
                                         }
-                                        
-                                        // 最简单直接的方法：外层填充整个容器
-                                        // 当旋转90度或270度时，交换宽高传递给MjpegStreamWidget
-                                        // 这样FittedBox会使用正确的宽高比，避免裁剪
-                                        var displayWidth = previewSize['width'];
-                                        var displayHeight = previewSize['height'];
-                                        if (rotationAngle == 90 || rotationAngle == 270) {
-                                          // 旋转90度或270度时，交换宽高
-                                          final temp = displayWidth;
-                                          displayWidth = displayHeight;
-                                          displayHeight = temp;
+
+                                        // 如果预览未初始化，显示加载指示器
+                                        if (!_previewInitialized) {
+                                          return const Center(
+                                            child: CircularProgressIndicator(),
+                                          );
                                         }
-                                        
-                                        return Positioned.fill(
-                                          child: Transform.rotate(
-                                            angle: rotationAngle * math.pi / 180,
-                                            child: MjpegStreamWidget(
-                                              key: ValueKey('preview_$_previewStreamKey'),
-                                              streamUrl: _previewStreamUrl!,
-                                              previewWidth: displayWidth,
-                                              previewHeight: displayHeight,
-                                            ),
-                                          ),
+
+                                        final originalWidth = previewSize['width'] ?? 640;
+                                        final originalHeight = previewSize['height'] ?? 480;
+
+                                        return TransformedPreviewWidget(
+                                          key: ValueKey('transformed_preview_$_previewInitKey'),
+                                          streamUrl: _previewStreamUrl!,
+                                          rotationAngle: rotationAngle,
+                                          originalWidth: originalWidth,
+                                          originalHeight: originalHeight,
+                                          onSizeDetermined: (width, height) {
+                                            // 转置后尺寸确定回调（由TransformedPreviewWidget内部处理）
+                                            if (mounted) {
+                                              _transformedPreviewSizeNotifier.value = {
+                                                'width': width,
+                                                'height': height,
+                                              };
+                                            }
+                                          },
                                         );
                                       },
                                     );

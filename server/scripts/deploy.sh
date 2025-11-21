@@ -6,13 +6,17 @@
 # 这样可以更好地显示错误信息
 
 # 解析命令行参数
-AUTO_START=false
+AUTO_START=true  # 默认自动启动
 BUILD_MODE="debug"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         -y|--yes)
             AUTO_START=true
+            shift
+            ;;
+        -n|--no-start)
+            AUTO_START=false
             shift
             ;;
         --release)
@@ -25,7 +29,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "未知参数: $1"
-            echo "用法: $0 [-y|--yes] [--release|--debug]"
+            echo "用法: $0 [-y|--yes] [-n|--no-start] [--release|--debug]"
+            echo "  默认行为: 自动启动应用"
+            echo "  -n, --no-start: 不自动启动应用"
             exit 1
             ;;
     esac
