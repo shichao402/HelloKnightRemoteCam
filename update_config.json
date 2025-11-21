@@ -1,0 +1,40 @@
+{
+  "client": {
+    "version": "1.0.4+1",
+    "versionNumber": "1.0.4",
+    "platforms": {
+      "macos": {
+        "version": "1.0.4+1",
+        "versionNumber": "1.0.4",
+        "downloadUrl": "https://jihulab.com/api/v4/projects/298216/packages/generic/helloknightrcc-client/1.0.4/HelloKnightRCC-1.0.4-macos.zip",
+        "fileName": "HelloKnightRCC-1.0.4-macos.zip",
+        "fileType": "zip",
+        "platform": "macos"
+      },
+      "windows": {
+        "version": "1.0.4+1",
+        "versionNumber": "1.0.4",
+        "downloadUrl": "https://jihulab.com/api/v4/projects/298216/packages/generic/helloknightrcc-client/1.0.4/HelloKnightRCC-1.0.4-windows.zip",
+        "fileName": "HelloKnightRCC-1.0.4-windows.zip",
+        "fileType": "zip",
+        "platform": "windows"
+      }
+    }
+  },
+  "server": {
+    "version": "1.0.4+1",
+    "versionNumber": "1.0.4",
+    "platforms": {
+      "android": {
+        "version": "1.0.4+1",
+        "versionNumber": "1.0.4",
+        "downloadUrl": "https://jihulab.com/api/v4/projects/298216/packages/generic/helloknightrcc-server/1.0.4/HelloKnightRCC-Server-1.0.4.apk",
+        "fileName": "HelloKnightRCC-Server-1.0.4.apk",
+        "fileType": "apk",
+        "platform": "android"
+      }
+    }
+  },
+  "updateCheckUrl": "https://jihulab.com/api/v4/projects/298216/repository/files/update_config.json/raw?ref=main",
+  "lastUpdated": "2025-11-21T19:31:15Z"
+}
