@@ -4,6 +4,8 @@ import 'dart:io';
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
 import '../services/version_service.dart';
+import '../services/update_service.dart';
+import '../services/update_settings_service.dart';
 import 'package:file_picker/file_picker.dart';
 
 class ClientSettingsScreen extends StatefulWidget {
@@ -17,10 +19,13 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   final ClientLoggerService _logger = ClientLoggerService();
   final DownloadSettingsService _downloadSettings = DownloadSettingsService();
   final VersionService _versionService = VersionService();
+  final UpdateService _updateService = UpdateService();
+  final UpdateSettingsService _updateSettings = UpdateSettingsService();
   bool _debugMode = false;
   bool _isLoading = true;
   String _downloadPath = '';
   String _version = '加载中...';
+  bool _isCheckingUpdate = false;
 
   @override
   void initState() {
@@ -31,6 +36,13 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   Future<void> _loadSettings() async {
     final downloadPath = await _downloadSettings.getDownloadPath();
     final version = await _versionService.getVersion();
+    final updateCheckUrl = await _updateSettings.getUpdateCheckUrl();
+    
+    // 设置更新检查URL
+    if (updateCheckUrl.isNotEmpty) {
+      _updateService.setUpdateCheckUrl(updateCheckUrl);
+    }
+    
     setState(() {
       _debugMode = _logger.debugEnabled;
       _downloadPath = downloadPath;
@@ -352,6 +364,163 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
     }
   }
 
+  Future<void> _checkForUpdate() async {
+    // 检查是否设置了更新检查URL
+    final updateCheckUrl = await _updateSettings.getUpdateCheckUrl();
+    if (updateCheckUrl.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('更新检查URL未设置，请在配置中设置'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() {
+      _isCheckingUpdate = true;
+    });
+
+    try {
+      final result = await _updateService.checkForUpdate();
+
+      if (!mounted) return;
+
+      setState(() {
+        _isCheckingUpdate = false;
+      });
+
+      if (result.error != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('检查更新失败: ${result.error}'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+
+      if (result.hasUpdate && result.updateInfo != null) {
+        // 显示更新对话框
+        _showUpdateDialog(result.updateInfo!);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('当前已是最新版本'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isCheckingUpdate = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('检查更新失败: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  void _showUpdateDialog(UpdateInfo updateInfo) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => UpdateDialog(
+        updateInfo: updateInfo,
+        onDownload: () => _downloadAndInstallUpdate(updateInfo),
+      ),
+    );
+  }
+
+  Future<void> _downloadAndInstallUpdate(UpdateInfo updateInfo) async {
+    // 关闭更新对话框
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+
+    // 显示下载进度对话框
+    if (!mounted) return;
+    
+    final progressKey = GlobalKey<_UpdateDownloadDialogState>();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => UpdateDownloadDialog(
+        key: progressKey,
+        updateInfo: updateInfo,
+      ),
+    );
+
+    try {
+      String? downloadedPath;
+      await _updateService.downloadUpdate(
+        updateInfo,
+        (received, total) {
+          if (mounted && progressKey.currentState != null) {
+            progressKey.currentState!.updateProgress(received, total);
+          }
+        },
+      ).then((path) {
+        downloadedPath = path;
+      });
+
+      if (!mounted) return;
+
+      // 关闭下载对话框
+      Navigator.of(context).pop();
+
+      if (downloadedPath != null) {
+        // 询问是否立即安装
+        final install = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('下载完成'),
+            content: Text('更新文件已下载到: $downloadedPath\n\n是否立即安装？'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('稍后'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('立即安装'),
+              ),
+            ],
+          ),
+        );
+
+        if (install == true && downloadedPath != null) {
+          await _updateService.installUpdate(downloadedPath!);
+        }
+      } else {
+        // 下载失败
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('下载失败，请稍后重试'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('下载失败: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -456,6 +625,30 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                 const Padding(
                   padding: EdgeInsets.all(16),
                   child: Text(
+                    '更新',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.system_update),
+                  title: const Text('检查更新'),
+                  subtitle: const Text('检查是否有新版本可用'),
+                  trailing: _isCheckingUpdate
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.chevron_right),
+                  onTap: _isCheckingUpdate ? null : _checkForUpdate,
+                ),
+                const Divider(),
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
                     '关于',
                     style: TextStyle(
                       fontSize: 18,
@@ -489,6 +682,126 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                 const SizedBox(height: 16),
               ],
             ),
+    );
+  }
+}
+
+/// 更新对话框
+class UpdateDialog extends StatelessWidget {
+  final UpdateInfo updateInfo;
+  final VoidCallback onDownload;
+
+  const UpdateDialog({
+    Key? key,
+    required this.updateInfo,
+    required this.onDownload,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('发现新版本'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('当前版本: ${updateInfo.version}'),
+          const SizedBox(height: 8),
+          if (updateInfo.releaseNotes != null) ...[
+            const Text(
+              '更新内容:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              updateInfo.releaseNotes!,
+              style: const TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+          ],
+          Text(
+            '文件大小: ${updateInfo.fileName}',
+            style: const TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('稍后'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            Navigator.of(context).pop();
+            onDownload();
+          },
+          child: const Text('立即更新'),
+        ),
+      ],
+    );
+  }
+}
+
+/// 更新下载进度对话框
+class UpdateDownloadDialog extends StatefulWidget {
+  final UpdateInfo updateInfo;
+
+  const UpdateDownloadDialog({
+    Key? key,
+    required this.updateInfo,
+  }) : super(key: key);
+
+  @override
+  State<UpdateDownloadDialog> createState() => _UpdateDownloadDialogState();
+}
+
+class _UpdateDownloadDialogState extends State<UpdateDownloadDialog> {
+  int _received = 0;
+  int _total = 0;
+
+  void updateProgress(int received, int total) {
+    if (mounted) {
+      setState(() {
+        _received = received;
+        _total = total;
+      });
+    }
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = _total > 0 ? _received / _total : 0.0;
+
+    return AlertDialog(
+      title: const Text('正在下载更新'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          LinearProgressIndicator(value: progress),
+          const SizedBox(height: 16),
+          Text(
+            '${_formatBytes(_received)} / ${_formatBytes(_total)}',
+            style: const TextStyle(fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${(progress * 100).toStringAsFixed(1)}%',
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+      ],
     );
   }
 }

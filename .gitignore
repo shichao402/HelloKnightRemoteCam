@@ -93,3 +93,4 @@ app.*.symbols
 !**/ios/**/default.pbxuser
 !**/ios/**/default.perspectivev3
 
+.gitlab_env
