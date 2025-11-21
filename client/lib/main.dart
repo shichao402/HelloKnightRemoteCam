@@ -19,8 +19,8 @@ void main() async {
   // 设置更新检查URL（如果未设置）
   final updateCheckUrl = await updateSettings.getUpdateCheckUrl();
   if (updateCheckUrl.isEmpty) {
-    // 设置默认更新检查URL
-    const defaultUrl = 'https://jihulab.com/api/v4/projects/298216/repository/files/update_config.json/raw?ref=main';
+    // 设置默认更新检查URL（GitHub）
+    const defaultUrl = 'https://raw.githubusercontent.com/shichao402/HelloKnightRemoteCam/main/update_config_github.json';
     await updateSettings.setUpdateCheckUrl(defaultUrl);
     updateService.setUpdateCheckUrl(defaultUrl);
   } else {

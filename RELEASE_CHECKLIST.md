@@ -5,7 +5,6 @@
 - [ ] 版本号已更新（使用 `./scripts/version.sh bump`）
 - [ ] 版本号已同步到 pubspec.yaml（使用 `./scripts/version.sh sync`）
 - [ ] 代码已测试通过
-- [ ] GitHub Secrets 已配置（GITLAB_URL, GITLAB_PROJECT_ID, GITLAB_TOKEN）
 - [ ] 所有更改已提交
 
 ## 发布步骤
@@ -29,8 +28,8 @@
 
 4. **验证发布结果**
    - [ ] GitHub Release 已创建
-   - [ ] GitLab Package Registry 中已有新版本
-   - [ ] 更新配置文件已更新到 GitLab 仓库
+   - [ ] 所有平台的构建产物已上传
+   - [ ] 更新配置文件已更新到 GitHub 仓库
 
 ## 发布后验证
 
@@ -42,7 +41,5 @@
 
 如果发布失败：
 1. 查看 GitHub Actions 日志
-2. 检查 Secrets 是否正确配置
-3. 检查 GitLab Token 权限
-4. 检查网络连接
-
+2. 检查版本号是否正确
+3. 检查网络连接
