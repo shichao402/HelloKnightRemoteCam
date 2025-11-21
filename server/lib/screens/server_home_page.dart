@@ -9,6 +9,7 @@ import '../services/http_server.dart';
 import '../services/logger_service.dart';
 import '../services/operation_log_service.dart';
 import '../services/foreground_service.dart';
+import '../services/update_service.dart';
 import '../models/camera_status.dart';
 import 'debug_log_screen.dart';
 import 'server_settings_screen.dart';
@@ -26,6 +27,7 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
   final SettingsService _settingsService = SettingsService();
   final LoggerService _logger = LoggerService();
   final ForegroundService _foregroundService = ForegroundService();
+  final UpdateService _updateService = UpdateService();
   late HttpServerService _httpServer;
   
   bool _isInitialized = false;
@@ -35,12 +37,23 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
   final int _port = 8080;
   String? _errorMessage;
   Timer? _refreshTimer;
+  UpdateInfo? _updateInfo;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initializeServices();
+    _checkForUpdate();
+  }
+  
+  Future<void> _checkForUpdate() async {
+    final updateInfo = await _updateService.getSavedUpdateInfo();
+    if (mounted) {
+      setState(() {
+        _updateInfo = updateInfo;
+      });
+    }
   }
 
   @override
@@ -470,6 +483,25 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
       appBar: AppBar(
         title: const Text('远程相机服务端'),
         actions: [
+          if (_updateInfo != null)
+            IconButton(
+              icon: const Badge(
+                label: Text('新'),
+                child: Icon(Icons.system_update),
+              ),
+              onPressed: () async {
+                final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
+                if (mounted && !success) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('无法打开下载链接'),
+                      duration: Duration(seconds: 3),
+                    ),
+                  );
+                }
+              },
+              tooltip: '有新版本可用: ${_updateInfo!.version}',
+            ),
           IconButton(
             icon: const Icon(Icons.bug_report),
             onPressed: _navigateToDebugLog,
@@ -484,6 +516,41 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
       ),
       body: Column(
         children: [
+          if (_updateInfo != null)
+            Container(
+              width: double.infinity,
+              color: Colors.orange,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: InkWell(
+                onTap: () async {
+                  final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
+                  if (mounted && !success) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('无法打开下载链接'),
+                        duration: Duration(seconds: 3),
+                      ),
+                    );
+                  }
+                },
+                child: Row(
+                  children: [
+                    const Icon(Icons.system_update, color: Colors.white),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '有新版本可用: ${_updateInfo!.version}，点击下载',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const Icon(Icons.arrow_forward, color: Colors.white),
+                  ],
+                ),
+              ),
+            ),
           // 控制按钮（移到最上面）
           Padding(
             padding: const EdgeInsets.all(16),

@@ -17,6 +17,7 @@ import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
 import '../services/connection_settings_service.dart';
+import '../services/update_service.dart';
 import '../models/connection_error.dart';
 import '../utils/retry_helper.dart';
 
@@ -49,7 +50,9 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   RetryHelper? _reconnectHelper; // 重连助手
   RetryHelper? _webSocketReconnectHelper; // WebSocket重连助手
   final ClientLoggerService _logger = ClientLoggerService();
+  final UpdateService _updateService = UpdateService();
   bool _isAuthFailure = false; // 标记是否是认证失败（版本不兼容等）
+  UpdateInfo? _updateInfo;
 
   // 左右布局比例（0.0-1.0，表示左侧占比）
   double _leftPanelRatio = 0.3; // 默认左侧30%，可手动调整
@@ -141,6 +144,17 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     _initializeOrientationLock();
     // 异步获取预览流URL（包含版本号）
     _loadPreviewStreamUrl();
+    // 检查更新
+    _checkForUpdate();
+  }
+  
+  Future<void> _checkForUpdate() async {
+    final updateInfo = await _updateService.getSavedUpdateInfo();
+    if (mounted) {
+      setState(() {
+        _updateInfo = updateInfo;
+      });
+    }
   }
 
   /// 加载预览流URL（包含客户端版本号）
@@ -1427,6 +1441,26 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
             ],
           ),
           actions: [
+            // 更新提示按钮
+            if (_updateInfo != null)
+              IconButton(
+                icon: const Badge(
+                  label: Text('新'),
+                  child: Icon(Icons.system_update),
+                ),
+                onPressed: () async {
+                  final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
+                  if (mounted && !success) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('无法打开下载链接'),
+                        duration: Duration(seconds: 3),
+                      ),
+                    );
+                  }
+                },
+                tooltip: '有新版本可用: ${_updateInfo!.version}',
+              ),
             // 断开连接按钮（右上角第一个）
             IconButton(
               icon: const Icon(Icons.link_off),
@@ -1453,21 +1487,59 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           ],
         ),
       ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final totalWidth = constraints.maxWidth;
-          final totalHeight = constraints.maxHeight;
-          const dividerWidth = 4.0; // 分割线宽度
-          final leftWidth = totalWidth * _leftPanelRatio;
-          // 右侧宽度 = 总宽度 - 左侧宽度 - 分割线宽度，确保不溢出
-          final rightWidth = totalWidth - leftWidth - dividerWidth;
-          
-          // 记录左侧窗口尺寸
-          _logger.log(
-              '左侧窗口尺寸: ${leftWidth.toInt()}x${totalHeight.toInt()} (比例=${(_leftPanelRatio * 100).toStringAsFixed(1)}%)',
-              tag: 'PREVIEW');
+      body: Column(
+        children: [
+          if (_updateInfo != null)
+            Container(
+              width: double.infinity,
+              color: Colors.orange,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: InkWell(
+                onTap: () async {
+                  final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
+                  if (mounted && !success) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('无法打开下载链接'),
+                        duration: Duration(seconds: 3),
+                      ),
+                    );
+                  }
+                },
+                child: Row(
+                  children: [
+                    const Icon(Icons.system_update, color: Colors.white),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '有新版本可用: ${_updateInfo!.version}，点击下载',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const Icon(Icons.arrow_forward, color: Colors.white),
+                  ],
+                ),
+              ),
+            ),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final totalWidth = constraints.maxWidth;
+                final totalHeight = constraints.maxHeight;
+                const dividerWidth = 4.0; // 分割线宽度
+                final leftWidth = totalWidth * _leftPanelRatio;
+                // 右侧宽度 = 总宽度 - 左侧宽度 - 分割线宽度，确保不溢出
+                final rightWidth = totalWidth - leftWidth - dividerWidth;
+                
+                // 记录左侧窗口尺寸
+                _logger.log(
+                    '左侧窗口尺寸: ${leftWidth.toInt()}x${totalHeight.toInt()} (比例=${(_leftPanelRatio * 100).toStringAsFixed(1)}%)',
+                    tag: 'PREVIEW');
 
-          return Row(
+                return Row(
             children: [
               // 左侧：视频预览区域（根据视频分辨率动态调整宽高比）
               SizedBox(
@@ -1686,7 +1758,10 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
               ),
             ],
           );
-        },
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

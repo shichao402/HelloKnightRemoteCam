@@ -5,6 +5,7 @@ import '../services/api_service_manager.dart';
 import '../services/connection_settings_service.dart';
 import '../services/device_config_service.dart';
 import '../services/logger_service.dart';
+import '../services/update_service.dart';
 import '../models/connection_error.dart';
 import 'camera_control_screen.dart';
 import 'client_settings_screen.dart';
@@ -24,15 +25,27 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
   final _connectionSettings = ConnectionSettingsService();
   final _deviceConfigService = DeviceConfigService();
   final _logger = ClientLoggerService();
+  final _updateService = UpdateService();
 
   bool _isConnecting = false;
   bool _isAutoConnecting = false;
   bool _autoConnectEnabled = true;
+  UpdateInfo? _updateInfo;
 
   @override
   void initState() {
     super.initState();
     _loadSettingsAndAutoConnect();
+    _checkForUpdate();
+  }
+  
+  Future<void> _checkForUpdate() async {
+    final updateInfo = await _updateService.getSavedUpdateInfo();
+    if (mounted) {
+      setState(() {
+        _updateInfo = updateInfo;
+      });
+    }
   }
 
   Future<void> _loadSettingsAndAutoConnect() async {
@@ -356,6 +369,25 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
       appBar: AppBar(
         title: const Text('连接设备'),
         actions: [
+          if (_updateInfo != null)
+            IconButton(
+              icon: const Badge(
+                label: Text('新'),
+                child: Icon(Icons.system_update),
+              ),
+              onPressed: () async {
+                final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
+                if (mounted && !success) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('无法打开下载链接'),
+                      duration: Duration(seconds: 3),
+                    ),
+                  );
+                }
+              },
+              tooltip: '有新版本可用: ${_updateInfo!.version}',
+            ),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: () {
@@ -369,15 +401,53 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
           ),
         ],
       ),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
+      body: Column(
+        children: [
+          if (_updateInfo != null)
+            Container(
+              width: double.infinity,
+              color: Colors.orange,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: InkWell(
+                onTap: () async {
+                  final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
+                  if (mounted && !success) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('无法打开下载链接'),
+                        duration: Duration(seconds: 3),
+                      ),
+                    );
+                  }
+                },
+                child: Row(
+                  children: [
+                    const Icon(Icons.system_update, color: Colors.white),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '有新版本可用: ${_updateInfo!.version}，点击下载',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const Icon(Icons.arrow_forward, color: Colors.white),
+                  ],
+                ),
+              ),
+            ),
+          Expanded(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
                 const Icon(
                   Icons.camera_alt,
                   size: 80,
@@ -476,10 +546,13 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
                           style: TextStyle(fontSize: 16),
                         ),
                 ),
-              ],
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }

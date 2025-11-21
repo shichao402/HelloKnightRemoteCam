@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'logger_service.dart';
 import 'version_service.dart';
+import 'update_settings_service.dart';
 
 /// 更新信息模型
 class UpdateInfo {
@@ -59,6 +60,7 @@ class UpdateService {
 
   final ClientLoggerService _logger = ClientLoggerService();
   final VersionService _versionService = VersionService();
+  final UpdateSettingsService _updateSettings = UpdateSettingsService();
   final Dio _dio = Dio();
 
   // 默认更新检查URL（可以从设置中配置）
@@ -110,7 +112,7 @@ class UpdateService {
   }
 
   /// 检查更新
-  Future<UpdateCheckResult> checkForUpdate() async {
+  Future<UpdateCheckResult> checkForUpdate({bool avoidCache = true}) async {
     if (_updateCheckUrl.isEmpty) {
       return UpdateCheckResult(
         hasUpdate: false,
@@ -119,15 +121,28 @@ class UpdateService {
     }
 
     try {
-      _logger.log('开始检查更新，URL: $_updateCheckUrl', tag: 'UPDATE');
+      // 添加时间戳参数避免缓存
+      String url = _updateCheckUrl;
+      if (avoidCache) {
+        final uri = Uri.parse(url);
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        url = uri.replace(queryParameters: {
+          ...uri.queryParameters,
+          '_t': timestamp.toString(),
+        }).toString();
+      }
+      
+      _logger.log('开始检查更新，URL: $url', tag: 'UPDATE');
 
       // 获取更新配置
       final response = await _dio.get(
-        _updateCheckUrl,
+        url,
         options: Options(
           responseType: ResponseType.json,
           headers: {
             'Accept': 'application/json',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
           },
         ),
       );
@@ -190,12 +205,16 @@ class UpdateService {
       
       if (hasUpdate) {
         _logger.log('发现新版本: ${updateInfo.version}', tag: 'UPDATE');
+        // 保存更新信息到本地
+        await _saveUpdateInfo(updateInfo);
         return UpdateCheckResult(
           hasUpdate: true,
           updateInfo: updateInfo,
         );
       } else {
         _logger.log('当前已是最新版本', tag: 'UPDATE');
+        // 清除保存的更新信息
+        await _saveUpdateInfo(null);
         return UpdateCheckResult(
           hasUpdate: false,
         );
@@ -209,6 +228,21 @@ class UpdateService {
     }
   }
 
+  /// 保存更新信息到本地
+  Future<void> _saveUpdateInfo(UpdateInfo? updateInfo) async {
+    await _updateSettings.saveUpdateInfo(updateInfo);
+  }
+  
+  /// 获取保存的更新信息
+  Future<UpdateInfo?> getSavedUpdateInfo() async {
+    return await _updateSettings.getUpdateInfo();
+  }
+  
+  /// 检查是否有可用的更新
+  Future<bool> hasUpdate() async {
+    return await _updateSettings.hasUpdate();
+  }
+  
   /// 打开下载链接（在浏览器中打开）
   Future<bool> openDownloadUrl(String url) async {
     try {

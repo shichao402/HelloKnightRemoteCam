@@ -29,6 +29,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   bool _isLoading = true;
   String _version = '加载中...';
   bool _isCheckingUpdate = false;
+  UpdateInfo? _updateInfo;
   
   // 临时状态（未保存的修改）
   bool _tempAutoStartServer = false;
@@ -53,6 +54,9 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
       _updateService.setUpdateCheckUrl(updateCheckUrl);
     }
     
+    // 检查是否有保存的更新信息
+    final updateInfo = await _updateService.getSavedUpdateInfo();
+    
     setState(() {
       _autoStartServer = prefs.getBool(_autoStartKey) ?? false;
       _autoStopEnabled = prefs.getBool(_autoStopEnabledKey) ?? false;
@@ -63,6 +67,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
       _autoStopMinutes = seconds == 0 ? 0 : (seconds / 60).ceil(); // 向上取整到分钟
       _debugMode = _logger.debugEnabled;
       _version = version;
+      _updateInfo = updateInfo;
       
       // 同步临时状态
       _tempAutoStartServer = _autoStartServer;
@@ -280,9 +285,15 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
       }
 
       if (result.hasUpdate && result.updateInfo != null) {
+        setState(() {
+          _updateInfo = result.updateInfo;
+        });
         // 显示更新对话框
         _showUpdateDialog(result.updateInfo!);
       } else {
+        setState(() {
+          _updateInfo = null;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('当前已是最新版本'),
@@ -546,7 +557,36 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
           ),
           ListTile(
             leading: const Icon(Icons.info_outline),
-            title: const Text('版本号'),
+            title: Row(
+              children: [
+                const Text('版本号'),
+                if (_updateInfo != null) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.orange,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.system_update, size: 14, color: Colors.white),
+                        const SizedBox(width: 4),
+                        Text(
+                          '新版本 ${_updateInfo!.version}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
             subtitle: Text(
               _version,
               style: const TextStyle(
@@ -554,17 +594,38 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
                 fontWeight: FontWeight.w500,
               ),
             ),
-            trailing: IconButton(
-              icon: const Icon(Icons.copy),
-              onPressed: () async {
-                await Clipboard.setData(ClipboardData(text: _version));
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('版本号已复制到剪贴板')),
-                  );
-                }
-              },
-              tooltip: '复制版本号',
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_updateInfo != null)
+                  IconButton(
+                    icon: const Icon(Icons.download),
+                    onPressed: () async {
+                      final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
+                      if (mounted && !success) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('无法打开下载链接'),
+                            duration: Duration(seconds: 3),
+                          ),
+                        );
+                      }
+                    },
+                    tooltip: '下载新版本',
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.copy),
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: _version));
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('版本号已复制到剪贴板')),
+                      );
+                    }
+                  },
+                  tooltip: '复制版本号',
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 16),

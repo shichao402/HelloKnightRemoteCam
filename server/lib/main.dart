@@ -22,16 +22,29 @@ void main() async {
   final updateService = UpdateService();
   final updateSettings = UpdateSettingsService();
   
-  // 设置更新检查URL（如果未设置）
+  // 设置更新检查URL（如果未设置或使用旧的 GitLab URL）
   final updateCheckUrl = await updateSettings.getUpdateCheckUrl();
-  if (updateCheckUrl.isEmpty) {
-    // 设置默认更新检查URL（GitHub）
-    const defaultUrl = 'https://raw.githubusercontent.com/shichao402/HelloKnightRemoteCam/main/update_config_github.json';
+  const defaultUrl = 'https://raw.githubusercontent.com/shichao402/HelloKnightRemoteCam/main/update_config_github.json';
+  
+  if (updateCheckUrl.isEmpty || updateCheckUrl.contains('jihulab.com') || updateCheckUrl.contains('gitlab')) {
+    // 如果未设置或使用旧的 GitLab URL，更新为新的 GitHub URL
+    logger.log('更新检查URL为空或使用旧的GitLab URL，更新为GitHub URL', tag: 'UPDATE');
     await updateSettings.setUpdateCheckUrl(defaultUrl);
     updateService.setUpdateCheckUrl(defaultUrl);
   } else {
     updateService.setUpdateCheckUrl(updateCheckUrl);
   }
+  
+  // 启动时自动检查更新（后台执行，不阻塞启动）
+  updateService.checkForUpdate(avoidCache: true).then((result) {
+    if (result.hasUpdate && result.updateInfo != null) {
+      logger.log('启动时发现新版本: ${result.updateInfo!.version}', tag: 'UPDATE');
+    } else {
+      logger.log('启动时检查更新完成，当前已是最新版本', tag: 'UPDATE');
+    }
+  }).catchError((e) {
+    logger.logError('启动时检查更新失败', error: e);
+  });
   
   try {
     cameras = await availableCameras();
