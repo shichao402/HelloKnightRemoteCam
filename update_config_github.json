@@ -1,20 +1,20 @@
 {
   "client": {
-    "version": "1.0.4+1",
-    "versionNumber": "1.0.4",
+    "version": "1.0.7+1",
+    "versionNumber": "1.0.7",
     "platforms": {
       "macos": {
-        "version": "1.0.4+1",
-        "versionNumber": "1.0.4",
-        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.6/HelloKnightRCC_macos_1.0.4+1.zip",
+        "version": "1.0.7+1",
+        "versionNumber": "1.0.7",
+        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.7/HelloKnightRCC_macos_1.0.4+1.zip",
         "fileName": "HelloKnightRCC_macos_1.0.4+1.zip",
         "fileType": "zip",
         "platform": "macos"
       },
       "windows": {
-        "version": "1.0.4+1",
-        "versionNumber": "1.0.4",
-        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.6/HelloKnightRCC_windows_1.0.4+1.zip",
+        "version": "1.0.7+1",
+        "versionNumber": "1.0.7",
+        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.7/HelloKnightRCC_windows_1.0.4+1.zip",
         "fileName": "HelloKnightRCC_windows_1.0.4+1.zip",
         "fileType": "zip",
         "platform": "windows"
@@ -22,13 +22,13 @@
     }
   },
   "server": {
-    "version": "1.0.4+1",
-    "versionNumber": "1.0.4",
+    "version": "1.0.7+1",
+    "versionNumber": "1.0.7",
     "platforms": {
       "android": {
-        "version": "1.0.4+1",
-        "versionNumber": "1.0.4",
-        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.6/helloknightrcc_server_android_1.0.4+1.apk",
+        "version": "1.0.7+1",
+        "versionNumber": "1.0.7",
+        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.7/helloknightrcc_server_android_1.0.4+1.apk",
         "fileName": "helloknightrcc_server_android_1.0.4+1.apk",
         "fileType": "apk",
         "platform": "android"
@@ -36,5 +36,5 @@
     }
   },
   "updateCheckUrl": "https://raw.githubusercontent.com/shichao402/HelloKnightRemoteCam/main/update_config_github.json",
-  "lastUpdated": "2025-11-21T20:48:46Z"
+  "lastUpdated": "2025-11-21T22:01:34Z"
 }
