@@ -1,10 +1,13 @@
 import 'dart:io';
 import 'dart:convert';
 import 'package:dio/dio.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/material.dart';
+import 'package:open_file/open_file.dart';
 import 'logger_service.dart';
 import 'version_service.dart';
 import 'update_settings_service.dart';
+import 'file_download_service.dart';
+import '../widgets/update_dialog.dart';
 
 /// 更新信息模型
 class UpdateInfo {
@@ -63,6 +66,7 @@ class UpdateService {
   final VersionService _versionService = VersionService();
   final UpdateSettingsService _updateSettings = UpdateSettingsService();
   final Dio _dio = Dio();
+  final FileDownloadService _fileDownloadService = FileDownloadService();
 
   // 默认更新检查URL（可以从设置中配置）
   String _updateCheckUrl = '';
@@ -257,24 +261,68 @@ class UpdateService {
     return await _updateSettings.hasUpdate();
   }
   
-  /// 打开下载链接（在浏览器中打开）
-  Future<bool> openDownloadUrl(String url) async {
+  /// 下载更新文件
+  /// 
+  /// [updateInfo] 更新信息
+  /// [onProgress] 进度回调 (received, total)
+  /// 
+  /// 返回下载文件的路径
+  Future<String?> downloadUpdateFile(
+    UpdateInfo updateInfo, {
+    Function(int received, int total)? onProgress,
+  }) async {
     try {
-      _logger.log('打开下载链接: $url', tag: 'UPDATE');
-      final uri = Uri.parse(url);
+      _logger.log('开始下载更新文件: ${updateInfo.fileName}', tag: 'UPDATE');
       
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-        _logger.log('已打开下载链接', tag: 'UPDATE');
+      final filePath = await _fileDownloadService.downloadFile(
+        url: updateInfo.downloadUrl,
+        fileName: updateInfo.fileName,
+        onProgress: onProgress,
+      );
+      
+      _logger.log('更新文件下载完成: $filePath', tag: 'UPDATE');
+      return filePath;
+    } catch (e, stackTrace) {
+      _logger.logError('下载更新文件失败', error: e, stackTrace: stackTrace);
+      rethrow;
+    }
+  }
+  
+  /// 打开下载的文件
+  Future<bool> openDownloadedFile(String filePath) async {
+    try {
+      _logger.log('打开下载的文件: $filePath', tag: 'UPDATE');
+      
+      final file = File(filePath);
+      if (!await file.exists()) {
+        _logger.logError('文件不存在', error: 'Path: $filePath');
+        return false;
+      }
+      
+      final result = await OpenFile.open(filePath);
+      
+      if (result.type == ResultType.done) {
+        _logger.log('已打开文件', tag: 'UPDATE');
         return true;
       } else {
-        _logger.logError('无法打开链接', error: 'URL: $url');
+        _logger.logError('打开文件失败', error: 'Result: ${result.type}, Message: ${result.message}');
         return false;
       }
     } catch (e, stackTrace) {
-      _logger.logError('打开下载链接失败', error: e, stackTrace: stackTrace);
+      _logger.logError('打开文件失败', error: e, stackTrace: stackTrace);
       return false;
     }
+  }
+
+  /// 显示更新对话框
+  /// 这是统一的更新UI入口，所有地方都应该使用这个方法
+  void showUpdateDialog(BuildContext context, UpdateInfo updateInfo) {
+    UpdateDialog.show(
+      context,
+      updateService: this,
+      updateInfo: updateInfo,
+      logger: _logger,
+    );
   }
 }
 

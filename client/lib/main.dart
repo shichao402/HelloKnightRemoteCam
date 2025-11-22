@@ -76,69 +76,8 @@ Future<void> _checkForUpdateOnStartup(UpdateService updateService, ClientLoggerS
 
 /// 显示更新对话框
 void _showUpdateDialog(BuildContext context, UpdateService updateService, 
-    dynamic updateInfo, ClientLoggerService logger) {
-  showDialog(
-    context: context,
-    barrierDismissible: false, // 不允许点击外部关闭
-    builder: (context) => AlertDialog(
-      title: const Text('发现新版本'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('新版本: ${updateInfo.version}'),
-            const SizedBox(height: 8),
-            if (updateInfo.releaseNotes != null) ...[
-              const Text(
-                '更新内容:',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                updateInfo.releaseNotes!,
-                style: const TextStyle(fontSize: 12),
-              ),
-              const SizedBox(height: 8),
-            ],
-            Text(
-              '文件: ${updateInfo.fileName}',
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () {
-            Navigator.of(context).pop();
-            logger.log('用户取消更新', tag: 'UPDATE');
-          },
-          child: const Text('取消'),
-        ),
-        ElevatedButton(
-          onPressed: () async {
-            Navigator.of(context).pop();
-            logger.log('用户确认更新，打开下载链接', tag: 'UPDATE');
-            final success = await updateService.openDownloadUrl(updateInfo.downloadUrl);
-            if (!success) {
-              // 如果无法打开链接，再次显示错误提示
-              final errorContext = navigatorKey.currentContext;
-              if (errorContext != null) {
-                ScaffoldMessenger.of(errorContext).showSnackBar(
-                  const SnackBar(
-                    content: Text('无法打开下载链接'),
-                    duration: Duration(seconds: 3),
-                  ),
-                );
-              }
-            }
-          },
-          child: const Text('立即更新'),
-        ),
-      ],
-    ),
-  );
+    UpdateInfo updateInfo, ClientLoggerService logger) {
+  updateService.showUpdateDialog(context, updateInfo);
 }
 
 class RemoteCamClientApp extends StatefulWidget {

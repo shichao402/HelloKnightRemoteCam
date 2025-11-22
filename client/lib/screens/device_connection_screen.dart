@@ -49,6 +49,11 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
     }
   }
 
+  /// 显示更新对话框
+  void _showUpdateDialog(UpdateInfo updateInfo) {
+    _updateService.showUpdateDialog(context, updateInfo);
+  }
+
   Future<void> _loadSettingsAndAutoConnect() async {
     try {
       final settings = await _connectionSettings.getConnectionSettings();
@@ -393,16 +398,9 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
               color: Colors.orange,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               child: InkWell(
-                onTap: () async {
-                  final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
-                  if (mounted && !success) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('无法打开下载链接'),
-                        duration: Duration(seconds: 3),
-                      ),
-                    );
-                  }
+                onTap: () {
+                  // 显示更新下载对话框
+                  _showUpdateDialog(_updateInfo!);
                 },
                 child: Row(
                   children: [
@@ -541,3 +539,4 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
     );
   }
 }
+

@@ -23,7 +23,7 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Extract and increment version from VERSION file
+      - name: Extract version from VERSION file
         id: get_version
         run: |
           # 始终从 VERSION 文件读取版本号（唯一数据源）
@@ -35,23 +35,11 @@ jobs:
               BUILD_NUMBER="1"
             fi
             echo "从 VERSION 文件读取客户端版本号: $CLIENT_VERSION"
-            
-            # 递增构建号
-            BUILD_NUMBER=$((BUILD_NUMBER + 1))
-            NEW_CLIENT_VERSION="${VERSION}+${BUILD_NUMBER}"
-            
-            # 更新 VERSION 文件
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-              sed -i '' "s/^CLIENT_VERSION=.*/CLIENT_VERSION=${NEW_CLIENT_VERSION}/" VERSION
-            else
-              sed -i "s/^CLIENT_VERSION=.*/CLIENT_VERSION=${NEW_CLIENT_VERSION}/" VERSION
-            fi
-            echo "构建号已递增: ${CLIENT_VERSION} → ${NEW_CLIENT_VERSION}"
           else
             echo "错误: VERSION 文件不存在"
             exit 1
           fi
-          # 同步版本号到 pubspec.yaml
+          # 同步版本号到 pubspec.yaml（使用当前版本号，不递增）
           cd client
           sed -i '' "s/^version:.*/version: ${VERSION}+${BUILD_NUMBER}/" pubspec.yaml
           echo "已同步版本号到 client/pubspec.yaml: ${VERSION}+${BUILD_NUMBER}"
@@ -104,12 +92,6 @@ jobs:
             client/HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.dmg
           retention-days: 30
 
-      - name: Upload updated VERSION file
-        uses: actions/upload-artifact@v4
-        with:
-          name: VERSION-client-macos
-          path: VERSION
-          retention-days: 30
 
   build-client-windows:
     name: Build Client Windows
@@ -125,7 +107,7 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Extract and increment version from VERSION file
+      - name: Extract version from VERSION file
         id: get_version
         shell: powershell
         run: |
@@ -140,16 +122,6 @@ jobs:
                 $buildNumber = "1"
               }
               Write-Host "Reading client version from VERSION file: $clientVersion"
-              
-              # Increment build number
-              $buildNumber = [int]$buildNumber + 1
-              $newClientVersion = "$version+$buildNumber"
-              
-              # Update VERSION file
-              $content = Get-Content "VERSION"
-              $content = $content -replace "^CLIENT_VERSION=.*", "CLIENT_VERSION=$newClientVersion"
-              $content | Set-Content "VERSION"
-              Write-Host "Build number incremented: $clientVersion -> $newClientVersion"
             } else {
               Write-Host "Error: CLIENT_VERSION not found in VERSION file"
               exit 1
@@ -158,10 +130,10 @@ jobs:
             Write-Host "Error: VERSION file not found"
             exit 1
           }
-          # Sync version to pubspec.yaml
+          # Sync version to pubspec.yaml（使用当前版本号，不递增）
           cd client
-          $content = Get-Content pubspec.yaml
           $fullVersion = "$version+$buildNumber"
+          $content = Get-Content pubspec.yaml
           $content = $content -replace "^version:.*", "version: $fullVersion"
           $content | Set-Content pubspec.yaml
           Write-Host "Version synced to client/pubspec.yaml: $fullVersion"
@@ -273,12 +245,6 @@ jobs:
           path: client/HelloKnightRCC_windows_${{ steps.get_version.outputs.FULL_VERSION }}_setup.exe
           retention-days: 30
 
-      - name: Upload updated VERSION file
-        uses: actions/upload-artifact@v4
-        with:
-          name: VERSION-client-windows
-          path: VERSION
-          retention-days: 30
 
   build-server-android:
     name: Build Server Android
@@ -300,7 +266,7 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Extract and increment version from VERSION file
+      - name: Extract version from VERSION file
         id: get_version
         run: |
           # 始终从 VERSION 文件读取版本号（唯一数据源）
@@ -312,19 +278,11 @@ jobs:
               BUILD_NUMBER="1"
             fi
             echo "从 VERSION 文件读取服务器版本号: $SERVER_VERSION"
-            
-            # 递增构建号
-            BUILD_NUMBER=$((BUILD_NUMBER + 1))
-            NEW_SERVER_VERSION="${VERSION}+${BUILD_NUMBER}"
-            
-            # 更新 VERSION 文件
-            sed -i "s/^SERVER_VERSION=.*/SERVER_VERSION=${NEW_SERVER_VERSION}/" VERSION
-            echo "构建号已递增: ${SERVER_VERSION} → ${NEW_SERVER_VERSION}"
           else
             echo "错误: VERSION 文件不存在"
             exit 1
           fi
-          # 同步版本号到 pubspec.yaml
+          # 同步版本号到 pubspec.yaml（使用当前版本号，不递增）
           cd server
           sed -i "s/^version:.*/version: ${VERSION}+${BUILD_NUMBER}/" pubspec.yaml
           echo "已同步版本号到 server/pubspec.yaml: ${VERSION}+${BUILD_NUMBER}"
@@ -353,12 +311,74 @@ jobs:
           path: server/helloknightrcc_server_android_${{ steps.get_version.outputs.FULL_VERSION }}.apk
           retention-days: 30
 
-      - name: Upload updated VERSION file
-        uses: actions/upload-artifact@v4
+  increment-version:
+    name: Increment Version
+    needs: [build-client-macos, build-client-windows, build-server-android]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          name: VERSION-server-android
-          path: VERSION
-          retention-days: 30
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Increment build numbers
+        id: increment_version
+        run: |
+          # 配置 Git
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          
+          # 读取当前版本号
+          if [ -f "VERSION" ]; then
+            # 递增客户端构建号
+            CLIENT_VERSION=$(grep "^CLIENT_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            CLIENT_VERSION_NUM=$(echo "$CLIENT_VERSION" | sed 's/+.*//')
+            CLIENT_BUILD_NUMBER=$(echo "$CLIENT_VERSION" | sed 's/.*+//')
+            if [ "$CLIENT_VERSION" == "$CLIENT_VERSION_NUM" ]; then
+              CLIENT_BUILD_NUMBER="1"
+            fi
+            CLIENT_BUILD_NUMBER=$((CLIENT_BUILD_NUMBER + 1))
+            NEW_CLIENT_VERSION="${CLIENT_VERSION_NUM}+${CLIENT_BUILD_NUMBER}"
+            sed -i "s/^CLIENT_VERSION=.*/CLIENT_VERSION=${NEW_CLIENT_VERSION}/" VERSION
+            echo "客户端构建号已递增: ${CLIENT_VERSION} → ${NEW_CLIENT_VERSION}"
+            
+            # 递增服务器构建号
+            SERVER_VERSION=$(grep "^SERVER_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            SERVER_VERSION_NUM=$(echo "$SERVER_VERSION" | sed 's/+.*//')
+            SERVER_BUILD_NUMBER=$(echo "$SERVER_VERSION" | sed 's/.*+//')
+            if [ "$SERVER_VERSION" == "$SERVER_VERSION_NUM" ]; then
+              SERVER_BUILD_NUMBER="1"
+            fi
+            SERVER_BUILD_NUMBER=$((SERVER_BUILD_NUMBER + 1))
+            NEW_SERVER_VERSION="${SERVER_VERSION_NUM}+${SERVER_BUILD_NUMBER}"
+            sed -i "s/^SERVER_VERSION=.*/SERVER_VERSION=${NEW_SERVER_VERSION}/" VERSION
+            echo "服务器构建号已递增: ${SERVER_VERSION} → ${NEW_SERVER_VERSION}"
+            
+            # 输出新版本号
+            echo "CLIENT_VERSION=${NEW_CLIENT_VERSION}" >> $GITHUB_OUTPUT
+            echo "SERVER_VERSION=${NEW_SERVER_VERSION}" >> $GITHUB_OUTPUT
+            echo "更新后的 VERSION 文件:"
+            cat VERSION
+          else
+            echo "错误: VERSION 文件不存在"
+            exit 1
+          fi
+
+      - name: Commit and push version increment
+        run: |
+          git add VERSION
+          if git diff --staged --quiet; then
+            echo "没有更改，跳过提交"
+          else
+            CLIENT_VERSION=$(grep "^CLIENT_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            SERVER_VERSION=$(grep "^SERVER_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            git commit -m "构建版本 ${CLIENT_VERSION}/${SERVER_VERSION} - 自动递增构建号"
+            git push origin HEAD:${{ github.ref_name }} || echo "推送失败，可能已是最新版本"
+          fi
 
   create-release:
     name: Create Release
@@ -440,56 +460,6 @@ jobs:
         with:
           name: helloknightrcc_server_android
           path: ./artifacts-temp
-
-      - name: Download updated VERSION files (client)
-        uses: actions/download-artifact@v4
-        with:
-          name: VERSION-client-macos
-          path: ./version-temp-client-macos
-        continue-on-error: true
-
-      - name: Download updated VERSION file (client windows)
-        uses: actions/download-artifact@v4
-        with:
-          name: VERSION-client-windows
-          path: ./version-temp-client-windows
-        continue-on-error: true
-
-      - name: Download updated VERSION file (server)
-        uses: actions/download-artifact@v4
-        with:
-          name: VERSION-server-android
-          path: ./version-temp-server
-        continue-on-error: true
-
-      - name: Merge updated VERSION file
-        run: |
-          # 合并客户端和服务器构建号更新
-          # 优先使用 macOS 构建的 CLIENT_VERSION（如果存在），否则使用 Windows 的
-          if [ -f "version-temp-client-macos/VERSION" ]; then
-            CLIENT_VERSION=$(grep "^CLIENT_VERSION=" version-temp-client-macos/VERSION | cut -d'=' -f2 | tr -d '[:space:]')
-            if [ -n "$CLIENT_VERSION" ]; then
-              sed -i "s/^CLIENT_VERSION=.*/CLIENT_VERSION=${CLIENT_VERSION}/" VERSION
-              echo "已更新 CLIENT_VERSION (来自 macOS 构建): $CLIENT_VERSION"
-            fi
-          elif [ -f "version-temp-client-windows/VERSION" ]; then
-            CLIENT_VERSION=$(grep "^CLIENT_VERSION=" version-temp-client-windows/VERSION | cut -d'=' -f2 | tr -d '[:space:]')
-            if [ -n "$CLIENT_VERSION" ]; then
-              sed -i "s/^CLIENT_VERSION=.*/CLIENT_VERSION=${CLIENT_VERSION}/" VERSION
-              echo "已更新 CLIENT_VERSION (来自 Windows 构建): $CLIENT_VERSION"
-            fi
-          fi
-          # 从服务器构建的 VERSION 文件读取 SERVER_VERSION
-          if [ -f "version-temp-server/VERSION" ]; then
-            SERVER_VERSION=$(grep "^SERVER_VERSION=" version-temp-server/VERSION | cut -d'=' -f2 | tr -d '[:space:]')
-            if [ -n "$SERVER_VERSION" ]; then
-              sed -i "s/^SERVER_VERSION=.*/SERVER_VERSION=${SERVER_VERSION}/" VERSION
-              echo "已更新 SERVER_VERSION: $SERVER_VERSION"
-            fi
-          fi
-          rm -rf version-temp-client-macos version-temp-client-windows version-temp-server
-          echo "合并后的 VERSION 文件:"
-          cat VERSION
 
       - name: Flatten artifacts structure
         run: |
@@ -592,7 +562,7 @@ jobs:
           echo "GitHub 更新配置文件已生成:"
           cat update_config_github.json
 
-      - name: Commit and Push VERSION and Update Config
+      - name: Commit and Push Update Config
         run: |
           # 配置 Git
           git config --global user.name "GitHub Actions"
@@ -602,14 +572,14 @@ jobs:
           git fetch origin main
           git checkout -b main origin/main || git checkout main
           
-          # 添加并提交 VERSION 文件（构建号已递增）和更新配置文件
-          git add VERSION update_config_github.json
+          # 添加并提交更新配置文件
+          git add update_config_github.json
           if git diff --staged --quiet; then
             echo "没有更改，跳过提交"
           else
-            CLIENT_VERSION=$(grep "^CLIENT_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
-            SERVER_VERSION=$(grep "^SERVER_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
-            git commit -m "构建版本 ${CLIENT_VERSION}/${SERVER_VERSION} - 更新构建号和 GitHub 自动更新配置"
+            CLIENT_VERSION=${{ steps.get_client_version.outputs.FULL_VERSION }}
+            SERVER_VERSION=${{ steps.get_server_version.outputs.FULL_VERSION }}
+            git commit -m "Release ${CLIENT_VERSION}/${SERVER_VERSION} - 更新 GitHub 自动更新配置"
             git push origin main || echo "推送失败，可能已是最新版本"
           fi
 

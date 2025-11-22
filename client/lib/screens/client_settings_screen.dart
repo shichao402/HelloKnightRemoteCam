@@ -441,57 +441,7 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   }
 
   void _showUpdateDialog(UpdateInfo updateInfo) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('发现新版本'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('新版本: ${updateInfo.version}'),
-            const SizedBox(height: 8),
-            if (updateInfo.releaseNotes != null) ...[
-              const Text(
-                '更新内容:',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                updateInfo.releaseNotes!,
-                style: const TextStyle(fontSize: 12),
-              ),
-              const SizedBox(height: 8),
-            ],
-            Text(
-              '文件: ${updateInfo.fileName}',
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('稍后'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.of(context).pop();
-              final success = await _updateService.openDownloadUrl(updateInfo.downloadUrl);
-              if (mounted && !success) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('无法打开下载链接'),
-                    duration: Duration(seconds: 3),
-                  ),
-                );
-              }
-            },
-            child: const Text('前往下载'),
-          ),
-        ],
-      ),
-    );
+    _updateService.showUpdateDialog(context, updateInfo);
   }
 
   @override
@@ -598,30 +548,6 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                 const Padding(
                   padding: EdgeInsets.all(16),
                   child: Text(
-                    '更新',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.system_update),
-                  title: const Text('检查更新'),
-                  subtitle: const Text('检查是否有新版本可用'),
-                  trailing: _isCheckingUpdate
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.chevron_right),
-                  onTap: _isCheckingUpdate ? null : _checkForUpdate,
-                ),
-                const Divider(),
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text(
                     '关于',
                     style: TextStyle(
                       fontSize: 18,
@@ -631,11 +557,12 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                 ),
                 ListTile(
                   leading: const Icon(Icons.info_outline),
-                  title: Row(
+                  title: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text('版本号'),
                       if (_updateInfo != null) ...[
-                        const SizedBox(width: 8),
+                        const SizedBox(height: 4),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                           decoration: BoxDecoration(
@@ -671,34 +598,25 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      IconButton(
+                        icon: _isCheckingUpdate
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.refresh),
+                        onPressed: _isCheckingUpdate ? null : _checkForUpdate,
+                        tooltip: '检查更新',
+                      ),
                       if (_updateInfo != null)
                         IconButton(
                           icon: const Icon(Icons.download),
-                          onPressed: () async {
-                            final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
-                            if (mounted && !success) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('无法打开下载链接'),
-                                  duration: Duration(seconds: 3),
-                                ),
-                              );
-                            }
+                          onPressed: () {
+                            _showUpdateDialog(_updateInfo!);
                           },
                           tooltip: '下载新版本',
                         ),
-                      IconButton(
-                        icon: const Icon(Icons.copy),
-                        onPressed: () async {
-                          await Clipboard.setData(ClipboardData(text: _version));
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('版本号已复制到剪贴板')),
-                            );
-                          }
-                        },
-                        tooltip: '复制版本号',
-                      ),
                     ],
                   ),
                 ),
@@ -708,5 +626,6 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
     );
   }
 }
+
 
 

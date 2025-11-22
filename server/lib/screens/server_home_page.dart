@@ -430,6 +430,19 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
     _loadUpdateInfo();
   }
 
+  /// 显示更新对话框
+  void _showUpdateDialog(UpdateInfo updateInfo) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => _UpdateDialogWidget(
+        updateService: _updateService,
+        updateInfo: updateInfo,
+        logger: _logger,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_errorMessage != null) {
@@ -486,25 +499,6 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
       appBar: AppBar(
         title: const Text('远程相机服务端'),
         actions: [
-          if (_updateInfo != null)
-            IconButton(
-              icon: const Badge(
-                label: Text('新'),
-                child: Icon(Icons.system_update),
-              ),
-              onPressed: () async {
-                final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
-                if (mounted && !success) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('无法打开下载链接'),
-                      duration: Duration(seconds: 3),
-                    ),
-                  );
-                }
-              },
-              tooltip: '有新版本可用: ${_updateInfo!.version}',
-            ),
           IconButton(
             icon: const Icon(Icons.bug_report),
             onPressed: _navigateToDebugLog,
@@ -525,16 +519,9 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
               color: Colors.orange,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               child: InkWell(
-                onTap: () async {
-                  final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
-                  if (mounted && !success) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('无法打开下载链接'),
-                        duration: Duration(seconds: 3),
-                      ),
-                    );
-                  }
+                onTap: () {
+                  // 显示更新对话框
+                  _showUpdateDialog(_updateInfo!);
                 },
                 child: Row(
                   children: [
@@ -959,5 +946,154 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
       return '${diff.inHours}小时前';
     }
   }
+}
 
+/// 更新对话框组件（支持下载进度显示）
+class _UpdateDialogWidget extends StatefulWidget {
+  final UpdateService updateService;
+  final UpdateInfo updateInfo;
+  final LoggerService logger;
+
+  const _UpdateDialogWidget({
+    required this.updateService,
+    required this.updateInfo,
+    required this.logger,
+  });
+
+  @override
+  State<_UpdateDialogWidget> createState() => _UpdateDialogWidgetState();
+}
+
+class _UpdateDialogWidgetState extends State<_UpdateDialogWidget> {
+  bool _isDownloading = false;
+  int _downloadedBytes = 0;
+  int _totalBytes = 0;
+  String? _errorMessage;
+
+  Future<void> _downloadAndOpen() async {
+    setState(() {
+      _isDownloading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      widget.logger.log('开始下载更新文件', tag: 'UPDATE');
+      
+      final filePath = await widget.updateService.downloadUpdateFile(
+        widget.updateInfo,
+        onProgress: (received, total) {
+          if (mounted) {
+            setState(() {
+              _downloadedBytes = received;
+              _totalBytes = total;
+            });
+          }
+        },
+      );
+
+      if (filePath == null) {
+        throw Exception('下载失败：文件路径为空');
+      }
+
+      widget.logger.log('下载完成，打开文件: $filePath', tag: 'UPDATE');
+      
+      // 关闭对话框
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+
+      // 打开文件
+      final success = await widget.updateService.openDownloadedFile(filePath);
+      if (!success) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('下载完成，但无法打开文件'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e, stackTrace) {
+      widget.logger.logError('下载更新文件失败', error: e, stackTrace: stackTrace);
+      if (mounted) {
+        setState(() {
+          _isDownloading = false;
+          _errorMessage = '下载失败: $e';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('发现新版本'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('新版本: ${widget.updateInfo.version}'),
+            const SizedBox(height: 8),
+            if (widget.updateInfo.releaseNotes != null) ...[
+              const Text(
+                '更新内容:',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                widget.updateInfo.releaseNotes!,
+                style: const TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+            ],
+            Text(
+              '文件: ${widget.updateInfo.fileName}',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            if (_isDownloading) ...[
+              const SizedBox(height: 16),
+              const Text('正在下载...', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              if (_totalBytes > 0)
+                LinearProgressIndicator(
+                  value: _downloadedBytes / _totalBytes,
+                ),
+              if (_totalBytes > 0) ...[
+                const SizedBox(height: 4),
+                Text(
+                  '${(_downloadedBytes / _totalBytes * 100).toStringAsFixed(1)}% '
+                  '(${(_downloadedBytes / 1024 / 1024).toStringAsFixed(2)} MB / '
+                  '${(_totalBytes / 1024 / 1024).toStringAsFixed(2)} MB)',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ],
+            ],
+            if (_errorMessage != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _errorMessage!,
+                style: const TextStyle(color: Colors.red, fontSize: 12),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        if (!_isDownloading)
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              widget.logger.log('用户取消更新', tag: 'UPDATE');
+            },
+            child: const Text('取消'),
+          ),
+        ElevatedButton(
+          onPressed: _isDownloading ? null : _downloadAndOpen,
+          child: Text(_isDownloading ? '下载中...' : '立即下载'),
+        ),
+      ],
+    );
+  }
 }

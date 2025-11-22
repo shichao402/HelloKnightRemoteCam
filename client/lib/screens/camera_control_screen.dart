@@ -157,6 +157,11 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     }
   }
 
+  /// 显示更新对话框
+  void _showUpdateDialog(UpdateInfo updateInfo) {
+    _updateService.showUpdateDialog(context, updateInfo);
+  }
+
   /// 加载预览流URL（包含客户端版本号）
   Future<void> _loadPreviewStreamUrl() async {
     try {
@@ -1441,26 +1446,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
             ],
           ),
           actions: [
-            // 更新提示按钮
-            if (_updateInfo != null)
-              IconButton(
-                icon: const Badge(
-                  label: Text('新'),
-                  child: Icon(Icons.system_update),
-                ),
-                onPressed: () async {
-                  final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
-                  if (mounted && !success) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('无法打开下载链接'),
-                        duration: Duration(seconds: 3),
-                      ),
-                    );
-                  }
-                },
-                tooltip: '有新版本可用: ${_updateInfo!.version}',
-              ),
             // 断开连接按钮（右上角第一个）
             IconButton(
               icon: const Icon(Icons.link_off),
@@ -1495,16 +1480,8 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
               color: Colors.orange,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               child: InkWell(
-                onTap: () async {
-                  final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
-                  if (mounted && !success) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('无法打开下载链接'),
-                        duration: Duration(seconds: 3),
-                      ),
-                    );
-                  }
+                onTap: () {
+                  _showUpdateDialog(_updateInfo!);
                 },
                 child: Row(
                   children: [
