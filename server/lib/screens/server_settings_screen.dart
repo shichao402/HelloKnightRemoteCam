@@ -266,7 +266,8 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     });
 
     try {
-      final result = await _updateService.checkForUpdate();
+      // 设置界面手动检查更新时，始终从网络检查
+      final result = await _updateService.checkForUpdate(avoidCache: true);
 
       if (!mounted) return;
 

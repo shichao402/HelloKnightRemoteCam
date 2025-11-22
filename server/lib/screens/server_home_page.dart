@@ -44,14 +44,15 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initializeServices();
-    _checkForUpdate();
+    _loadUpdateInfo();
   }
   
-  Future<void> _checkForUpdate() async {
-    final updateInfo = await _updateService.getSavedUpdateInfo();
+  /// 只读取本地缓存的更新信息，用于UI持久化状态显示
+  Future<void> _loadUpdateInfo() async {
+    final savedUpdateInfo = await _updateService.getSavedUpdateInfo();
     if (mounted) {
       setState(() {
-        _updateInfo = updateInfo;
+        _updateInfo = savedUpdateInfo;
       });
     }
   }
@@ -425,6 +426,8 @@ class _ServerHomePageState extends State<ServerHomePage> with WidgetsBindingObse
     if (_isServerRunning) {
       await _httpServer.updateAutoStopSettings();
     }
+    // 设置页面返回后，刷新更新信息（从本地缓存读取）
+    _loadUpdateInfo();
   }
 
   @override

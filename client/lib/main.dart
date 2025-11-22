@@ -5,6 +5,9 @@ import 'services/api_service_manager.dart';
 import 'services/update_service.dart';
 import 'services/update_settings_service.dart';
 
+// 全局导航键，用于在应用启动后显示对话框
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
@@ -29,18 +32,113 @@ void main() async {
     updateService.setUpdateCheckUrl(updateCheckUrl);
   }
   
-  // 启动时自动检查更新（后台执行，不阻塞启动）
-  updateService.checkForUpdate(avoidCache: true).then((result) {
+  // 启动应用
+  runApp(const RemoteCamClientApp());
+  
+  // 应用启动后，独立检查更新（不阻塞启动，不依赖UI状态）
+  // 等待一小段时间确保应用已完全启动
+  Future.delayed(const Duration(milliseconds: 500), () {
+    _checkForUpdateOnStartup(updateService, logger);
+  });
+}
+
+/// 独立的更新检查逻辑，检查到更新后立即弹窗
+Future<void> _checkForUpdateOnStartup(UpdateService updateService, ClientLoggerService logger) async {
+  try {
+    logger.log('启动时开始检查更新', tag: 'UPDATE');
+    
+    // 始终从网络检查更新
+    final result = await updateService.checkForUpdate(avoidCache: true);
+    
     if (result.hasUpdate && result.updateInfo != null) {
       logger.log('启动时发现新版本: ${result.updateInfo!.version}', tag: 'UPDATE');
+      
+      // 检查到更新后，立即弹窗提示
+      final context = navigatorKey.currentContext;
+      if (context != null) {
+        _showUpdateDialog(context, updateService, result.updateInfo!, logger);
+      } else {
+        // 如果context还未准备好，等待一下再试
+        Future.delayed(const Duration(milliseconds: 500), () {
+          final context = navigatorKey.currentContext;
+          if (context != null) {
+            _showUpdateDialog(context, updateService, result.updateInfo!, logger);
+          }
+        });
+      }
     } else {
       logger.log('启动时检查更新完成，当前已是最新版本', tag: 'UPDATE');
     }
-  }).catchError((e) {
-    logger.logError('启动时检查更新失败', error: e);
-  });
-  
-  runApp(const RemoteCamClientApp());
+  } catch (e, stackTrace) {
+    logger.logError('启动时检查更新失败', error: e, stackTrace: stackTrace);
+  }
+}
+
+/// 显示更新对话框
+void _showUpdateDialog(BuildContext context, UpdateService updateService, 
+    dynamic updateInfo, ClientLoggerService logger) {
+  showDialog(
+    context: context,
+    barrierDismissible: false, // 不允许点击外部关闭
+    builder: (context) => AlertDialog(
+      title: const Text('发现新版本'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('新版本: ${updateInfo.version}'),
+            const SizedBox(height: 8),
+            if (updateInfo.releaseNotes != null) ...[
+              const Text(
+                '更新内容:',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                updateInfo.releaseNotes!,
+                style: const TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+            ],
+            Text(
+              '文件: ${updateInfo.fileName}',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            Navigator.of(context).pop();
+            logger.log('用户取消更新', tag: 'UPDATE');
+          },
+          child: const Text('取消'),
+        ),
+        ElevatedButton(
+          onPressed: () async {
+            Navigator.of(context).pop();
+            logger.log('用户确认更新，打开下载链接', tag: 'UPDATE');
+            final success = await updateService.openDownloadUrl(updateInfo.downloadUrl);
+            if (!success) {
+              // 如果无法打开链接，再次显示错误提示
+              final errorContext = navigatorKey.currentContext;
+              if (errorContext != null) {
+                ScaffoldMessenger.of(errorContext).showSnackBar(
+                  const SnackBar(
+                    content: Text('无法打开下载链接'),
+                    duration: Duration(seconds: 3),
+                  ),
+                );
+              }
+            }
+          },
+          child: const Text('立即更新'),
+        ),
+      ],
+    ),
+  );
 }
 
 class RemoteCamClientApp extends StatefulWidget {
@@ -136,6 +234,7 @@ class _RemoteCamClientAppState extends State<RemoteCamClientApp> with WidgetsBin
     return MaterialApp(
       title: '远程相机客户端',
       debugShowCheckedModeBanner: true,
+      navigatorKey: navigatorKey, // 使用全局导航键
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,

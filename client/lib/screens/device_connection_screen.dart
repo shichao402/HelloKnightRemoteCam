@@ -36,14 +36,15 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
   void initState() {
     super.initState();
     _loadSettingsAndAutoConnect();
-    _checkForUpdate();
+    _loadUpdateInfo();
   }
   
-  Future<void> _checkForUpdate() async {
-    final updateInfo = await _updateService.getSavedUpdateInfo();
+  /// 只读取本地缓存的更新信息，用于UI持久化状态显示
+  Future<void> _loadUpdateInfo() async {
+    final savedUpdateInfo = await _updateService.getSavedUpdateInfo();
     if (mounted) {
       setState(() {
-        _updateInfo = updateInfo;
+        _updateInfo = savedUpdateInfo;
       });
     }
   }
@@ -369,33 +370,16 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
       appBar: AppBar(
         title: const Text('连接设备'),
         actions: [
-          if (_updateInfo != null)
-            IconButton(
-              icon: const Badge(
-                label: Text('新'),
-                child: Icon(Icons.system_update),
-              ),
-              onPressed: () async {
-                final success = await _updateService.openDownloadUrl(_updateInfo!.downloadUrl);
-                if (mounted && !success) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('无法打开下载链接'),
-                      duration: Duration(seconds: 3),
-                    ),
-                  );
-                }
-              },
-              tooltip: '有新版本可用: ${_updateInfo!.version}',
-            ),
           IconButton(
             icon: const Icon(Icons.settings),
-            onPressed: () {
-              Navigator.of(context).push(
+            onPressed: () async {
+              await Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => const ClientSettingsScreen(),
                 ),
               );
+              // 设置页面返回后，刷新更新信息（从本地缓存读取）
+              _loadUpdateInfo();
             },
             tooltip: '应用设置',
           ),

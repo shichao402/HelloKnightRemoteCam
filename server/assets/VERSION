@@ -9,7 +9,7 @@ SERVER_VERSION=1.0.6+1
 
 # 版本兼容性配置
 # 服务器支持的最小客户端版本（格式: x.y.z）
-MIN_CLIENT_VERSION=1.0.4
+MIN_CLIENT_VERSION=1.0.6
 
 # 客户端支持的最小服务器版本（格式: x.y.z）
-MIN_SERVER_VERSION=1.0.4
+MIN_SERVER_VERSION=1.0.6
