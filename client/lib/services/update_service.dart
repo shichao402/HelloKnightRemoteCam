@@ -322,7 +322,6 @@ class UpdateService {
       }
 
       // 解压所有文件
-      String? extractedFilePath;
       String? apkFilePath; // 优先查找APK文件（Android）
       String? dmgFilePath; // 查找DMG文件（macOS）- GitHub Actions打包的zip中包含dmg
       String? exeFilePath; // 查找EXE文件（Windows）
@@ -347,11 +346,6 @@ class UpdateService {
             exeFilePath = filePath;
             _logger.log('找到EXE/MSI文件: $filePath', tag: 'UPDATE');
           }
-
-          // 记录第一个文件路径（作为备选）
-          if (extractedFilePath == null) {
-            extractedFilePath = filePath;
-          }
         } else {
           // 创建目录
           final dir = Directory(filePath);
@@ -361,20 +355,24 @@ class UpdateService {
         }
       }
 
-      // 根据平台优先返回对应的文件
+      // 根据平台优先返回对应的文件，如果都找不到则返回null（让上层打开zip文件）
       String? result;
       if (Platform.isAndroid) {
-        result = apkFilePath ?? extractedFilePath;
+        result = apkFilePath;
       } else if (Platform.isMacOS) {
         // macOS: GitHub Actions打包的zip中包含dmg文件，优先查找dmg
-        result = dmgFilePath ?? extractedFilePath;
+        result = dmgFilePath;
       } else if (Platform.isWindows) {
-        result = exeFilePath ?? extractedFilePath;
+        result = exeFilePath;
       } else {
-        result = apkFilePath ?? dmgFilePath ?? exeFilePath ?? extractedFilePath;
+        result = apkFilePath ?? dmgFilePath ?? exeFilePath;
       }
 
-      _logger.log('zip文件解压完成: $extractDir, 返回文件: $result', tag: 'UPDATE');
+      if (result == null) {
+        _logger.log('zip文件解压完成，但未找到预期的安装文件，将打开zip文件本身', tag: 'UPDATE');
+      } else {
+        _logger.log('zip文件解压完成: $extractDir, 返回文件: $result', tag: 'UPDATE');
+      }
       return result;
     } catch (e, stackTrace) {
       _logger.logError('解压zip文件失败', error: e, stackTrace: stackTrace);
@@ -532,7 +530,9 @@ class UpdateService {
         final extractedFilePath = await _extractZipFile(filePath, extractDir);
 
         if (extractedFilePath == null) {
-          throw Exception('解压zip文件失败，未找到可执行文件');
+          // 如果找不到预期的安装文件，直接返回zip文件路径，让用户打开zip文件
+          _logger.log('未找到预期的安装文件，将打开zip文件本身: $filePath', tag: 'UPDATE');
+          return filePath;
         }
 
         _logger.log('zip文件解压完成: $extractedFilePath', tag: 'UPDATE');
