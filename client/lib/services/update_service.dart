@@ -1,8 +1,11 @@
 import 'dart:io';
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
+import 'package:archive/archive.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:open_file/open_file.dart';
+import 'package:path/path.dart' as path;
 import 'logger_service.dart';
 import 'version_service.dart';
 import 'update_settings_service.dart';
@@ -18,6 +21,7 @@ class UpdateInfo {
   final String fileType;
   final String platform;
   final String? releaseNotes;
+  final String? fileHash; // SHA256 hash值
 
   UpdateInfo({
     required this.version,
@@ -27,6 +31,7 @@ class UpdateInfo {
     required this.fileType,
     required this.platform,
     this.releaseNotes,
+    this.fileHash,
   });
 
   factory UpdateInfo.fromJson(Map<String, dynamic> json) {
@@ -38,6 +43,7 @@ class UpdateInfo {
       fileType: json['fileType'] as String,
       platform: json['platform'] as String,
       releaseNotes: json['releaseNotes'] as String?,
+      fileHash: json['fileHash'] as String?,
     );
   }
 }
@@ -261,12 +267,86 @@ class UpdateService {
     return await _updateSettings.hasUpdate();
   }
   
+  /// 计算文件的SHA256 hash
+  Future<String> _calculateFileHash(String filePath) async {
+    final file = File(filePath);
+    final bytes = await file.readAsBytes();
+    final digest = sha256.convert(bytes);
+    return digest.toString();
+  }
+
+  /// 校验文件hash
+  Future<bool> verifyFileHash(String filePath, String expectedHash) async {
+    try {
+      _logger.log('开始校验文件hash: $filePath', tag: 'UPDATE');
+      final actualHash = await _calculateFileHash(filePath);
+      final isValid = actualHash.toLowerCase() == expectedHash.toLowerCase();
+      
+      if (isValid) {
+        _logger.log('文件hash校验通过', tag: 'UPDATE');
+      } else {
+        _logger.logError('文件hash校验失败', error: '期望: $expectedHash, 实际: $actualHash');
+      }
+      
+      return isValid;
+    } catch (e, stackTrace) {
+      _logger.logError('校验文件hash失败', error: e, stackTrace: stackTrace);
+      return false;
+    }
+  }
+
+  /// 解压zip文件
+  Future<String?> _extractZipFile(String zipPath, String extractDir) async {
+    try {
+      _logger.log('开始解压zip文件: $zipPath', tag: 'UPDATE');
+      
+      final zipFile = File(zipPath);
+      final bytes = await zipFile.readAsBytes();
+      final archive = ZipDecoder().decodeBytes(bytes);
+      
+      // 创建解压目录
+      final extractDirectory = Directory(extractDir);
+      if (!await extractDirectory.exists()) {
+        await extractDirectory.create(recursive: true);
+      }
+      
+      // 解压所有文件
+      String? extractedFilePath;
+      for (final file in archive) {
+        final filePath = path.join(extractDir, file.name);
+        
+        if (file.isFile) {
+          final outputFile = File(filePath);
+          await outputFile.create(recursive: true);
+          await outputFile.writeAsBytes(file.content as List<int>);
+          
+          // 记录第一个文件路径（通常是安装程序）
+          if (extractedFilePath == null) {
+            extractedFilePath = filePath;
+          }
+        } else {
+          // 创建目录
+          final dir = Directory(filePath);
+          if (!await dir.exists()) {
+            await dir.create(recursive: true);
+          }
+        }
+      }
+      
+      _logger.log('zip文件解压完成: $extractDir', tag: 'UPDATE');
+      return extractedFilePath;
+    } catch (e, stackTrace) {
+      _logger.logError('解压zip文件失败', error: e, stackTrace: stackTrace);
+      rethrow;
+    }
+  }
+
   /// 下载更新文件
   /// 
   /// [updateInfo] 更新信息
   /// [onProgress] 进度回调 (received, total)
   /// 
-  /// 返回下载文件的路径
+  /// 返回下载文件的路径（如果是zip则返回解压后的文件路径）
   Future<String?> downloadUpdateFile(
     UpdateInfo updateInfo, {
     Function(int received, int total)? onProgress,
@@ -281,6 +361,38 @@ class UpdateService {
       );
       
       _logger.log('更新文件下载完成: $filePath', tag: 'UPDATE');
+      
+      // 如果有hash，进行校验
+      if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
+        final isValid = await verifyFileHash(filePath, updateInfo.fileHash!);
+        if (!isValid) {
+          // 删除下载的文件
+          try {
+            await File(filePath).delete();
+          } catch (e) {
+            // 忽略删除错误
+          }
+          throw Exception('文件hash校验失败，下载的文件可能已损坏或被篡改');
+        }
+      } else {
+        _logger.log('更新信息中未包含hash，跳过校验', tag: 'UPDATE');
+      }
+      
+      // 如果是zip文件，解压
+      if (updateInfo.fileType.toLowerCase() == 'zip') {
+        final extractDir = path.join(path.dirname(filePath), 'extracted_${path.basenameWithoutExtension(filePath)}');
+        final extractedFilePath = await _extractZipFile(filePath, extractDir);
+        
+        // 删除zip文件
+        try {
+          await File(filePath).delete();
+        } catch (e) {
+          _logger.log('删除zip文件失败: $e', tag: 'UPDATE');
+        }
+        
+        return extractedFilePath;
+      }
+      
       return filePath;
     } catch (e, stackTrace) {
       _logger.logError('下载更新文件失败', error: e, stackTrace: stackTrace);
@@ -289,6 +401,7 @@ class UpdateService {
   }
   
   /// 打开下载的文件
+  /// 根据平台和文件类型使用不同的打开方式
   Future<bool> openDownloadedFile(String filePath) async {
     try {
       _logger.log('打开下载的文件: $filePath', tag: 'UPDATE');
@@ -299,6 +412,48 @@ class UpdateService {
         return false;
       }
       
+      // 根据平台和文件类型选择打开方式
+      if (Platform.isWindows) {
+        // Windows: 直接打开exe或msi文件
+        final ext = path.extension(filePath).toLowerCase();
+        if (ext == '.exe' || ext == '.msi') {
+          final result = await Process.run('start', ['', filePath], runInShell: true);
+          if (result.exitCode == 0) {
+            _logger.log('已打开Windows安装程序', tag: 'UPDATE');
+            return true;
+          }
+        }
+      } else if (Platform.isMacOS) {
+        // macOS: 打开dmg文件
+        final ext = path.extension(filePath).toLowerCase();
+        if (ext == '.dmg') {
+          final result = await Process.run('open', [filePath]);
+          if (result.exitCode == 0) {
+            _logger.log('已打开macOS DMG文件', tag: 'UPDATE');
+            return true;
+          }
+        } else if (ext == '.app') {
+          // 如果是app包，直接打开
+          final result = await Process.run('open', [filePath]);
+          if (result.exitCode == 0) {
+            _logger.log('已打开macOS应用', tag: 'UPDATE');
+            return true;
+          }
+        }
+      } else if (Platform.isAndroid) {
+        // Android: 使用系统安装程序打开apk
+        final ext = path.extension(filePath).toLowerCase();
+        if (ext == '.apk') {
+          // Android需要使用Intent打开，这里使用open_file插件
+          final result = await OpenFile.open(filePath);
+          if (result.type == ResultType.done) {
+            _logger.log('已打开Android APK安装程序', tag: 'UPDATE');
+            return true;
+          }
+        }
+      }
+      
+      // 默认使用open_file插件打开
       final result = await OpenFile.open(filePath);
       
       if (result.type == ResultType.done) {

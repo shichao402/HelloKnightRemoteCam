@@ -1,15 +1,23 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:window_manager/window_manager.dart';
 import 'screens/device_connection_screen.dart';
 import 'services/logger_service.dart';
 import 'services/api_service_manager.dart';
 import 'services/update_service.dart';
 import 'services/update_settings_service.dart';
+import 'services/window_settings_service.dart';
 
 // 全局导航键，用于在应用启动后显示对话框
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // 初始化窗口管理器（仅桌面平台）
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    await _initializeWindow();
+  }
   
   // 初始化日志服务
   final logger = ClientLoggerService();
@@ -40,6 +48,39 @@ void main() async {
   Future.delayed(const Duration(milliseconds: 500), () {
     _checkForUpdateOnStartup(updateService, logger);
   });
+}
+
+/// 初始化窗口管理器
+Future<void> _initializeWindow() async {
+  await windowManager.ensureInitialized();
+  
+  const minSize = Size(800, 600);
+  const defaultSize = Size(1200, 800);
+  
+  // 设置最小窗口尺寸
+  await windowManager.setMinimumSize(minSize);
+  
+  // 获取保存的窗口设置
+  final windowSettings = WindowSettingsService();
+  final savedBounds = await windowSettings.getWindowBounds();
+  
+  // 如果有保存的设置，使用保存的位置和大小
+  if (await windowSettings.hasWindowBounds()) {
+    await windowManager.setSize(Size(savedBounds['width']!, savedBounds['height']!));
+    if (savedBounds['x']! > 0 && savedBounds['y']! > 0) {
+      await windowManager.setPosition(Offset(savedBounds['x']!, savedBounds['y']!));
+    } else {
+      await windowManager.center();
+    }
+  } else {
+    // 否则使用默认设置
+    await windowManager.setSize(defaultSize);
+    await windowManager.center();
+  }
+  
+  // 显示窗口
+  await windowManager.show();
+  await windowManager.focus();
 }
 
 /// 独立的更新检查逻辑，检查到更新后立即弹窗
@@ -87,9 +128,11 @@ class RemoteCamClientApp extends StatefulWidget {
   State<RemoteCamClientApp> createState() => _RemoteCamClientAppState();
 }
 
-class _RemoteCamClientAppState extends State<RemoteCamClientApp> with WidgetsBindingObserver {
+class _RemoteCamClientAppState extends State<RemoteCamClientApp> 
+    with WidgetsBindingObserver, WindowListener {
   final ClientLoggerService _logger = ClientLoggerService();
   final ApiServiceManager _apiServiceManager = ApiServiceManager();
+  final WindowSettingsService _windowSettings = WindowSettingsService();
 
   @override
   void initState() {
@@ -97,6 +140,11 @@ class _RemoteCamClientAppState extends State<RemoteCamClientApp> with WidgetsBin
     // 注册生命周期观察者
     WidgetsBinding.instance.addObserver(this);
     _logger.log('应用启动，已注册生命周期观察者', tag: 'LIFECYCLE');
+    
+    // 注册窗口监听器（仅桌面平台）
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      windowManager.addListener(this);
+    }
   }
 
   @override
@@ -104,7 +152,45 @@ class _RemoteCamClientAppState extends State<RemoteCamClientApp> with WidgetsBin
     // 移除生命周期观察者
     WidgetsBinding.instance.removeObserver(this);
     _logger.log('应用退出，已移除生命周期观察者', tag: 'LIFECYCLE');
+    
+    // 移除窗口监听器（仅桌面平台）
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      windowManager.removeListener(this);
+    }
+    
     super.dispose();
+  }
+  
+  // 窗口大小变化时保存
+  @override
+  void onWindowResize() async {
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      final size = await windowManager.getSize();
+      final position = await windowManager.getPosition();
+      
+      await _windowSettings.saveWindowBounds(
+        width: size.width,
+        height: size.height,
+        x: position.dx,
+        y: position.dy,
+      );
+    }
+  }
+  
+  // 窗口移动时保存
+  @override
+  void onWindowMove() async {
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      final size = await windowManager.getSize();
+      final position = await windowManager.getPosition();
+      
+      await _windowSettings.saveWindowBounds(
+        width: size.width,
+        height: size.height,
+        x: position.dx,
+        y: position.dy,
+      );
+    }
   }
 
   @override

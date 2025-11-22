@@ -498,8 +498,8 @@ jobs:
           draft: false
           prerelease: false
 
-      # 生成 GitHub 更新配置文件
-      - name: Generate GitHub Update Config
+      # 计算文件hash并生成 GitHub 更新配置文件
+      - name: Calculate File Hashes and Generate GitHub Update Config
         run: |
           CLIENT_VERSION=${{ steps.get_client_version.outputs.FULL_VERSION }}
           CLIENT_VERSION_NUMBER=${{ steps.get_client_version.outputs.VERSION }}
@@ -516,6 +516,26 @@ jobs:
           WINDOWS_FILE=$(find artifacts -name "HelloKnightRCC_windows_*_setup.exe" -exec basename {} \; | head -1)
           ANDROID_FILE=$(find artifacts -name "helloknightrcc_server_android_*.apk" -exec basename {} \; | head -1)
           
+          # 计算文件SHA256 hash
+          MACOS_HASH=""
+          WINDOWS_HASH=""
+          ANDROID_HASH=""
+          
+          if [ -n "$MACOS_FILE" ] && [ -f "artifacts/$MACOS_FILE" ]; then
+            MACOS_HASH=$(sha256sum "artifacts/$MACOS_FILE" | cut -d' ' -f1)
+            echo "macOS文件hash: $MACOS_HASH"
+          fi
+          
+          if [ -n "$WINDOWS_FILE" ] && [ -f "artifacts/$WINDOWS_FILE" ]; then
+            WINDOWS_HASH=$(sha256sum "artifacts/$WINDOWS_FILE" | cut -d' ' -f1)
+            echo "Windows文件hash: $WINDOWS_HASH"
+          fi
+          
+          if [ -n "$ANDROID_FILE" ] && [ -f "artifacts/$ANDROID_FILE" ]; then
+            ANDROID_HASH=$(sha256sum "artifacts/$ANDROID_FILE" | cut -d' ' -f1)
+            echo "Android文件hash: $ANDROID_HASH"
+          fi
+          
           cat > update_config_github.json <<EOF
           {
             "client": {
@@ -528,7 +548,8 @@ jobs:
                   "downloadUrl": "${BASE_URL}/${MACOS_FILE}",
                   "fileName": "${MACOS_FILE}",
                   "fileType": "dmg",
-                  "platform": "macos"
+                  "platform": "macos",
+                  "fileHash": "${MACOS_HASH}"
                 },
                 "windows": {
                   "version": "${CLIENT_VERSION}",
@@ -536,7 +557,8 @@ jobs:
                   "downloadUrl": "${BASE_URL}/${WINDOWS_FILE}",
                   "fileName": "${WINDOWS_FILE}",
                   "fileType": "exe",
-                  "platform": "windows"
+                  "platform": "windows",
+                  "fileHash": "${WINDOWS_HASH}"
                 }
               }
             },
@@ -550,7 +572,8 @@ jobs:
                   "downloadUrl": "${BASE_URL}/${ANDROID_FILE}",
                   "fileName": "${ANDROID_FILE}",
                   "fileType": "apk",
-                  "platform": "android"
+                  "platform": "android",
+                  "fileHash": "${ANDROID_HASH}"
                 }
               }
             },

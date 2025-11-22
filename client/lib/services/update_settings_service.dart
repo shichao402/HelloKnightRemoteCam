@@ -43,6 +43,7 @@ class UpdateSettingsService {
         'fileType': updateInfo.fileType,
         'platform': updateInfo.platform,
         'releaseNotes': updateInfo.releaseNotes,
+        'fileHash': updateInfo.fileHash,
       });
       await prefs.setString(_keyUpdateInfo, json);
     }
