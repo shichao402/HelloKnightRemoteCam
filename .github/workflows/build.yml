@@ -207,20 +207,22 @@ jobs:
         shell: powershell
         run: |
           $version = "${{ steps.get_version.outputs.FULL_VERSION }}"
+          # 获取构建产物的绝对路径
+          $buildPath = Resolve-Path "client\build\windows\x64\runner\Release"
           $scriptContent = @'
           [Setup]
           AppName=HelloKnightRCC
-          AppVersion=$version
+          AppVersion=PLACEHOLDER_VERSION
           DefaultDirName={autopf}\HelloKnightRCC
           DefaultGroupName=HelloKnightRCC
           OutputDir=installer
-          OutputBaseFilename=HelloKnightRCC_windows_${version}_setup
+          OutputBaseFilename=HelloKnightRCC_windows_PLACEHOLDER_VERSION_setup
           Compression=lzma
           SolidCompression=yes
           PrivilegesRequired=admin
           
           [Files]
-          Source: "client\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+          Source: "PLACEHOLDER_BUILD_PATH\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
           
           [Icons]
           Name: "{group}\HelloKnightRCC"; Filename: "{app}\HelloKnightRCC.exe"
@@ -229,10 +231,12 @@ jobs:
           [Tasks]
           Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
           '@
-          # 替换版本号变量
-          $scriptContent = $scriptContent -replace '\$version', $version
+          # 替换占位符
+          $scriptContent = $scriptContent -replace 'PLACEHOLDER_VERSION', $version
+          $scriptContent = $scriptContent -replace 'PLACEHOLDER_BUILD_PATH', $buildPath
           New-Item -ItemType Directory -Force -Path "installer" | Out-Null
           $scriptContent | Out-File -FilePath "installer\setup.iss" -Encoding UTF8
+          Write-Host "Inno Setup script created with build path: $buildPath"
 
       - name: Build Windows installer
         shell: powershell
