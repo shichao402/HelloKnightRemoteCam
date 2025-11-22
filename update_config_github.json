@@ -10,7 +10,7 @@
         "fileName": "HelloKnightRCC_macos_1.0.7+3.dmg",
         "fileType": "dmg",
         "platform": "macos",
-        "fileHash": "edcddd839d2f6db54716ae940b88a848f1b93a5cf7d6c3aab1ee1cf899272e89"
+        "fileHash": "22eba46cfba10dce5a660687620b665cd7f5c1812352b752330a2bee9b9d2cbe"
       },
       "windows": {
         "version": "1.0.7+3",
@@ -19,7 +19,7 @@
         "fileName": "HelloKnightRCC_windows_1.0.7+3_setup.exe",
         "fileType": "exe",
         "platform": "windows",
-        "fileHash": "ae295b6f7a4e4582ace268bc4e564f953b4613eec22d60e604fe96ee1a72af16"
+        "fileHash": "aa9dd98c36bd5c3712ba0924e8b88e64a5aeda093a52390a52a9226a03a0cb29"
       }
     }
   },
@@ -30,14 +30,14 @@
       "android": {
         "version": "1.0.7+3",
         "versionNumber": "1.0.7",
-        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.7/helloknightrcc_server_android_1.0.7+3.apk",
-        "fileName": "helloknightrcc_server_android_1.0.7+3.apk",
-        "fileType": "apk",
+        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.7/helloknightrcc_server_android_1.0.7+3.zip",
+        "fileName": "helloknightrcc_server_android_1.0.7+3.zip",
+        "fileType": "zip",
         "platform": "android",
-        "fileHash": "233024b150d9b6374602f34424a50f67c68c77c7c9c6e0376b8f614c1023b0f5"
+        "fileHash": "bce3b846d0b78e46ce5b33ec43cdeb3ecf395a802f0f95c51ed0c3364f8ff4a7"
       }
     }
   },
   "updateCheckUrl": "https://raw.githubusercontent.com/shichao402/HelloKnightRemoteCam/main/update_config_github.json",
-  "lastUpdated": "2025-11-22T08:50:20Z"
+  "lastUpdated": "2025-11-22T09:10:48Z"
 }
