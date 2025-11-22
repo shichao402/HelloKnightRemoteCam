@@ -1,0 +1,187 @@
+name: Sync Release to Gitee
+
+# 当 GitHub Release 创建后，自动同步到 Gitee
+on:
+  release:
+    types: [published]  # 当 Release 发布时触发
+
+jobs:
+  sync-release:
+    name: Sync Release to Gitee
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          # 从 release tag 获取版本号
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG_NAME#v}  # 去掉 v 前缀
+          echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Release tag: ${TAG_NAME}"
+          echo "Version: ${VERSION}"
+
+      - name: Download Release assets
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: '${{ steps.get_version.outputs.TAG_NAME }}'
+            });
+            
+            const assets = release.assets;
+            console.log(`Found ${assets.length} assets`);
+            
+            // 下载所有 assets
+            const fs = require('fs');
+            const path = require('path');
+            const https = require('https');
+            
+            const downloadDir = './release-assets';
+            if (!fs.existsSync(downloadDir)) {
+              fs.mkdirSync(downloadDir, { recursive: true });
+            }
+            
+            for (const asset of assets) {
+              const filePath = path.join(downloadDir, asset.name);
+              console.log(`Downloading ${asset.name}...`);
+              
+              const file = fs.createWriteStream(filePath);
+              const response = await new Promise((resolve, reject) => {
+                https.get(asset.browser_download_url, (res) => {
+                  res.pipe(file);
+                  res.on('end', () => resolve(res));
+                  res.on('error', reject);
+                });
+              });
+              
+              file.on('finish', () => {
+                file.close();
+                console.log(`Downloaded ${asset.name}`);
+              });
+            }
+            
+            // 保存 release 信息
+            core.setOutput('release_body', release.body || '');
+            core.setOutput('release_name', release.name || release.tag_name);
+
+      - name: Create Gitee Release
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_REPO_OWNER: ${{ secrets.GITEE_REPO_OWNER }}
+          GITEE_REPO_NAME: ${{ secrets.GITEE_REPO_NAME }}
+        run: |
+          TAG_NAME="${{ steps.get_version.outputs.TAG_NAME }}"
+          RELEASE_NAME="${{ steps.get_version.outputs.RELEASE_NAME }}"
+          RELEASE_BODY="${{ steps.get_version.outputs.RELEASE_BODY }}"
+          
+          GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
+          
+          # 创建 Gitee Release
+          echo "Creating Gitee Release: ${TAG_NAME}"
+          
+          RESPONSE=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: token ${GITEE_TOKEN}" \
+            -d "{
+              \"tag_name\": \"${TAG_NAME}\",
+              \"name\": \"${RELEASE_NAME}\",
+              \"body\": $(echo "${RELEASE_BODY}" | jq -Rs .),
+              \"prerelease\": false
+            }" \
+            "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases")
+          
+          echo "Gitee Release response: ${RESPONSE}"
+          
+          # 检查是否创建成功
+          if echo "${RESPONSE}" | grep -q '"id"'; then
+            echo "✅ Gitee Release created successfully"
+          else
+            echo "⚠️ Gitee Release may already exist or failed"
+            echo "Response: ${RESPONSE}"
+          fi
+
+      - name: Upload assets to Gitee Release
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_REPO_OWNER: ${{ secrets.GITEE_REPO_OWNER }}
+          GITEE_REPO_NAME: ${{ secrets.GITEE_REPO_NAME }}
+        run: |
+          TAG_NAME="${{ steps.get_version.outputs.TAG_NAME }}"
+          GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
+          
+          echo "Uploading assets to Gitee Release..."
+          
+          # 上传所有文件
+          for file in release-assets/*; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              echo "Uploading ${filename}..."
+              
+              curl -X POST \
+                -H "Authorization: token ${GITEE_TOKEN}" \
+                -F "file=@${file}" \
+                "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases/${TAG_NAME}/attach_files" || echo "Upload ${filename} failed or already exists"
+            fi
+          done
+          
+          echo "✅ Assets upload completed"
+
+      - name: Sync update config to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_REPO_OWNER: ${{ secrets.GITEE_REPO_OWNER }}
+          GITEE_REPO_NAME: ${{ secrets.GITEE_REPO_NAME }}
+        run: |
+          # 读取 GitHub 的更新配置文件
+          if [ -f "update_config_github.json" ]; then
+            echo "Reading GitHub update config..."
+            
+            # 转换为 Gitee 格式
+            GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
+            TAG_NAME="${{ steps.get_version.outputs.TAG_NAME }}"
+            
+            # 使用 jq 修改 URL
+            cat update_config_github.json | jq "
+              .updateCheckUrl = \"https://gitee.com/${GITEE_REPO}/raw/main/update_config_gitee.json\" |
+              .client.platforms.macos.downloadUrl = (.client.platforms.macos.downloadUrl | gsub(\"github.com.*releases\"; \"gitee.com/${GITEE_REPO}/releases\")) |
+              .client.platforms.windows.downloadUrl = (.client.platforms.windows.downloadUrl | gsub(\"github.com.*releases\"; \"gitee.com/${GITEE_REPO}/releases\")) |
+              .server.platforms.android.downloadUrl = (.server.platforms.android.downloadUrl | gsub(\"github.com.*releases\"; \"gitee.com/${GITEE_REPO}/releases\"))
+            " > update_config_gitee.json
+            
+            echo "Generated Gitee update config:"
+            cat update_config_gitee.json
+            
+            # 提交到 Gitee 仓库
+            git config --global user.name "GitHub Actions"
+            git config --global user.email "actions@github.com"
+            
+            # 添加 Gitee remote（如果还没有）
+            if ! git remote get-url gitee >/dev/null 2>&1; then
+              git remote add gitee https://${GITEE_TOKEN}@gitee.com/${GITEE_REPO}.git
+            fi
+            
+            # 切换到 main 分支并推送
+            git fetch gitee main || true
+            git checkout -b main gitee/main 2>/dev/null || git checkout main
+            
+            git add update_config_gitee.json
+            if git diff --staged --quiet; then
+              echo "No changes to commit"
+            else
+              git commit -m "Sync update config from GitHub Release ${TAG_NAME}"
+              git push gitee main || echo "Push failed, may already be up to date"
+            fi
+            
+            echo "✅ Update config synced to Gitee"
+          else
+            echo "⚠️ update_config_github.json not found, skipping config sync"
+          fi
+
