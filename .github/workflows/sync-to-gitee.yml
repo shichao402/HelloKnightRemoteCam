@@ -4,6 +4,12 @@ name: Sync Release to Gitee
 on:
   release:
     types: [published]  # 当 Release 发布时触发
+  workflow_dispatch:  # 允许手动触发
+    inputs:
+      release_tag:
+        description: '要同步的 Release 标签（例如：v1.0.7）'
+        required: true
+        type: string
 
 jobs:
   sync-release:
@@ -37,21 +43,33 @@ jobs:
       - name: Extract version from release
         id: get_version
         run: |
-          # 从 release 事件获取 tag 名称
-          # release 事件的 GITHUB_REF 格式可能是 refs/tags/v1.0.0
-          TAG_NAME=${GITHUB_REF#refs/tags/}
-          
-          # 如果没有从 GITHUB_REF 获取到，尝试从环境变量获取
-          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" == "$GITHUB_REF" ]; then
-            # release 事件可能使用不同的 ref
-            TAG_NAME=${GITHUB_REF#refs/heads/}
+          # 如果是手动触发，使用输入的 release_tag
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TAG_NAME="${{ github.event.inputs.release_tag }}"
+            echo "Manual trigger: using tag ${TAG_NAME}"
+          else
+            # 从 release 事件获取 tag 名称
+            # release 事件的 GITHUB_REF 格式可能是 refs/tags/v1.0.0
+            TAG_NAME=${GITHUB_REF#refs/tags/}
+            
+            # 如果没有从 GITHUB_REF 获取到，尝试从环境变量获取
+            if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" == "$GITHUB_REF" ]; then
+              # release 事件可能使用不同的 ref
+              TAG_NAME=${GITHUB_REF#refs/heads/}
+            fi
+            
+            # 如果还是获取不到，从 GitHub API 获取
+            if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" == "$GITHUB_REF" ]; then
+              TAG_NAME=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                "https://api.github.com/repos/${{ github.repository }}/releases/latest" | \
+                jq -r '.tag_name // empty')
+            fi
           fi
           
-          # 如果还是获取不到，从 GitHub API 获取
-          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" == "$GITHUB_REF" ]; then
-            TAG_NAME=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/latest" | \
-              jq -r '.tag_name // empty')
+          # 确保 TAG_NAME 不为空
+          if [ -z "$TAG_NAME" ]; then
+            echo "❌ Failed to get release tag"
+            exit 1
           fi
           
           VERSION=${TAG_NAME#v}  # 去掉 v 前缀
@@ -67,18 +85,24 @@ jobs:
           script: |
             // 从 release 事件获取 release 信息
             let release;
-            if (context.payload.release) {
+            const tagName = '${{ steps.get_version.outputs.TAG_NAME }}';
+            
+            if (context.payload.release && context.eventName === 'release') {
               // release 事件直接包含 release 信息
               release = context.payload.release;
             } else {
-              // 否则通过 API 获取
-              const tagName = '${{ steps.get_version.outputs.TAG_NAME }}';
-              const { data } = await github.rest.repos.getReleaseByTag({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                tag: tagName
-              });
-              release = data;
+              // 手动触发或其他情况，通过 API 获取
+              try {
+                const { data } = await github.rest.repos.getReleaseByTag({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag: tagName
+                });
+                release = data;
+              } catch (error) {
+                core.setFailed(`Failed to get release for tag ${tagName}: ${error.message}`);
+                throw error;
+              }
             }
             
             const assets = release.assets || [];
