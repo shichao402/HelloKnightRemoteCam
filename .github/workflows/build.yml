@@ -3,10 +3,14 @@ name: Build Applications
 on:
   push:
     branches: [ main, master, develop ]
-    tags:
-      - 'v*'  # 当推送版本标签时触发
+  tags:
+    - 'v*'  # 当推送版本标签时触发
   pull_request:
     branches: [ main, master, develop ]
+  workflow_dispatch:  # 允许手动触发
+
+env:
+  FLUTTER_VERSION: '3.24.0'  # 集中管理 Flutter 版本
 
 jobs:
   build-client-macos:
@@ -29,7 +33,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: false
 
@@ -197,7 +201,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: false
 
@@ -366,7 +370,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: false
 
@@ -452,12 +456,11 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop')
     permissions:
-      contents: write
+      contents: write  # 只需要写入内容权限
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1  # 只获取最新提交，加快 checkout
 
       - name: Increment build numbers
@@ -552,14 +555,12 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
-      contents: write
-      repository-projects: write
+      contents: write  # 创建 release 只需要 contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 1  # 只获取最新提交，加快 checkout  # 需要完整历史以计算 hashFiles
+          fetch-depth: 1  # 只获取最新提交，加快 checkout
 
       - name: Cache Python dependencies
         uses: actions/cache@v4
@@ -712,8 +713,8 @@ jobs:
           SERVER_VERSION_NUMBER=${{ steps.get_versions.outputs.SERVER_VERSION_NUM }}
           TAG_VERSION=${{ steps.get_versions.outputs.TAG_VERSION }}
           
-          # GitHub Releases 下载链接格式
-          GITHUB_REPO="shichao402/HelloKnightRemoteCam"
+          # GitHub Releases 下载链接格式（使用内置变量）
+          GITHUB_REPO="${{ github.repository }}"
           BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${TAG_VERSION}"
           
           # 使用传递的版本号构建文件名（直接使用zip文件，不创建_update.zip）
@@ -803,7 +804,7 @@ jobs:
                 }
               }
             },
-            "updateCheckUrl": "https://raw.githubusercontent.com/${GITHUB_REPO}/main/update_config_github.json",
+            "updateCheckUrl": "https://raw.githubusercontent.com/${{ github.repository }}/main/update_config_github.json",
             "lastUpdated": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           }
           EOF
