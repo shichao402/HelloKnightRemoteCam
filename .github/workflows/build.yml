@@ -178,28 +178,30 @@ jobs:
         shell: powershell
         run: |
           $version = "${{ steps.get_version.outputs.FULL_VERSION }}"
-          $scriptContent = @"
-[Setup]
-AppName=HelloKnightRCC
-AppVersion=$version
-DefaultDirName={autopf}\HelloKnightRCC
-DefaultGroupName=HelloKnightRCC
-OutputDir=installer
-OutputBaseFilename=HelloKnightRCC_windows_${version}_setup
-Compression=lzma
-SolidCompression=yes
-PrivilegesRequired=admin
-
-[Files]
-Source: "client\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
-
-[Icons]
-Name: "{group}\HelloKnightRCC"; Filename: "{app}\HelloKnightRCC.exe"
-Name: "{autodesktop}\HelloKnightRCC"; Filename: "{app}\HelloKnightRCC.exe"; Tasks: desktopicon
-
-[Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
-"@
+          $scriptContent = @'
+          [Setup]
+          AppName=HelloKnightRCC
+          AppVersion=$version
+          DefaultDirName={autopf}\HelloKnightRCC
+          DefaultGroupName=HelloKnightRCC
+          OutputDir=installer
+          OutputBaseFilename=HelloKnightRCC_windows_${version}_setup
+          Compression=lzma
+          SolidCompression=yes
+          PrivilegesRequired=admin
+          
+          [Files]
+          Source: "client\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+          
+          [Icons]
+          Name: "{group}\HelloKnightRCC"; Filename: "{app}\HelloKnightRCC.exe"
+          Name: "{autodesktop}\HelloKnightRCC"; Filename: "{app}\HelloKnightRCC.exe"; Tasks: desktopicon
+          
+          [Tasks]
+          Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
+          '@
+          # 替换版本号变量
+          $scriptContent = $scriptContent -replace '\$version', $version
           New-Item -ItemType Directory -Force -Path "installer" | Out-Null
           $scriptContent | Out-File -FilePath "installer\setup.iss" -Encoding UTF8
 
