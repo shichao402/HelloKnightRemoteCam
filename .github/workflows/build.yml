@@ -139,32 +139,32 @@ jobs:
               if ($buildNumber -eq $clientVersion) {
                 $buildNumber = "1"
               }
-              Write-Host "从 VERSION 文件读取客户端版本号: $clientVersion"
+              Write-Host "Reading client version from VERSION file: $clientVersion"
               
-              # 递增构建号
+              # Increment build number
               $buildNumber = [int]$buildNumber + 1
               $newClientVersion = "$version+$buildNumber"
               
-              # 更新 VERSION 文件
+              # Update VERSION file
               $content = Get-Content "VERSION"
               $content = $content -replace "^CLIENT_VERSION=.*", "CLIENT_VERSION=$newClientVersion"
               $content | Set-Content "VERSION"
-              Write-Host "构建号已递增: $clientVersion -> $newClientVersion"
+              Write-Host "Build number incremented: $clientVersion -> $newClientVersion"
             } else {
-              Write-Host "错误: VERSION 文件中未找到 CLIENT_VERSION"
+              Write-Host "Error: CLIENT_VERSION not found in VERSION file"
               exit 1
             }
           } else {
-            Write-Host "错误: VERSION 文件不存在"
+            Write-Host "Error: VERSION file not found"
             exit 1
           }
-          # 同步版本号到 pubspec.yaml
+          # Sync version to pubspec.yaml
           cd client
           $content = Get-Content pubspec.yaml
           $fullVersion = "$version+$buildNumber"
           $content = $content -replace "^version:.*", "version: $fullVersion"
           $content | Set-Content pubspec.yaml
-          Write-Host "已同步版本号到 client/pubspec.yaml: $fullVersion"
+          Write-Host "Version synced to client/pubspec.yaml: $fullVersion"
           $tagVersion = "v$version"
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
           echo "BUILD_NUMBER=$buildNumber" >> $env:GITHUB_OUTPUT
