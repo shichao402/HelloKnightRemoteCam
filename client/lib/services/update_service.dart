@@ -318,6 +318,8 @@ class UpdateService {
       // 解压所有文件
       String? extractedFilePath;
       String? apkFilePath; // 优先查找APK文件（Android）
+      String? dmgFilePath; // 查找DMG文件（macOS）
+      String? exeFilePath; // 查找EXE文件（Windows）
       
       for (final file in archive) {
         final filePath = path.join(extractDir, file.name);
@@ -327,11 +329,17 @@ class UpdateService {
           await outputFile.create(recursive: true);
           await outputFile.writeAsBytes(file.content as List<int>);
           
-          // 优先查找APK文件（Android平台）
+          // 根据文件扩展名分类查找
           final ext = path.extension(filePath).toLowerCase();
           if (ext == '.apk') {
             apkFilePath = filePath;
             _logger.log('找到APK文件: $filePath', tag: 'UPDATE');
+          } else if (ext == '.dmg') {
+            dmgFilePath = filePath;
+            _logger.log('找到DMG文件: $filePath', tag: 'UPDATE');
+          } else if (ext == '.exe' || ext == '.msi') {
+            exeFilePath = filePath;
+            _logger.log('找到EXE/MSI文件: $filePath', tag: 'UPDATE');
           }
           
           // 记录第一个文件路径（作为备选）
@@ -347,8 +355,18 @@ class UpdateService {
         }
       }
       
-      // 优先返回APK文件，否则返回第一个文件
-      final result = apkFilePath ?? extractedFilePath;
+      // 根据平台优先返回对应的文件
+      String? result;
+      if (Platform.isAndroid) {
+        result = apkFilePath ?? extractedFilePath;
+      } else if (Platform.isMacOS) {
+        result = dmgFilePath ?? extractedFilePath;
+      } else if (Platform.isWindows) {
+        result = exeFilePath ?? extractedFilePath;
+      } else {
+        result = apkFilePath ?? dmgFilePath ?? exeFilePath ?? extractedFilePath;
+      }
+      
       _logger.log('zip文件解压完成: $extractDir, 返回文件: $result', tag: 'UPDATE');
       return result;
     } catch (e, stackTrace) {
