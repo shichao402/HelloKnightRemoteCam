@@ -312,6 +312,8 @@ class UpdateService {
       
       // 解压所有文件
       String? extractedFilePath;
+      String? apkFilePath; // 优先查找APK文件（Android）
+      
       for (final file in archive) {
         final filePath = path.join(extractDir, file.name);
         
@@ -320,7 +322,14 @@ class UpdateService {
           await outputFile.create(recursive: true);
           await outputFile.writeAsBytes(file.content as List<int>);
           
-          // 记录第一个文件路径（通常是安装程序）
+          // 优先查找APK文件（Android平台）
+          final ext = path.extension(filePath).toLowerCase();
+          if (ext == '.apk') {
+            apkFilePath = filePath;
+            _logger.log('找到APK文件: $filePath', tag: 'UPDATE');
+          }
+          
+          // 记录第一个文件路径（作为备选）
           if (extractedFilePath == null) {
             extractedFilePath = filePath;
           }
@@ -333,8 +342,10 @@ class UpdateService {
         }
       }
       
-      _logger.log('zip文件解压完成: $extractDir', tag: 'UPDATE');
-      return extractedFilePath;
+      // 优先返回APK文件，否则返回第一个文件
+      final result = apkFilePath ?? extractedFilePath;
+      _logger.log('zip文件解压完成: $extractDir, 返回文件: $result', tag: 'UPDATE');
+      return result;
     } catch (e, stackTrace) {
       _logger.logError('解压zip文件失败', error: e, stackTrace: stackTrace);
       rethrow;
