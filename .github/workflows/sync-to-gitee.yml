@@ -12,8 +12,27 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Check Gitee Secrets
+        run: |
+          if [ -z "${{ secrets.GITEE_TOKEN }}" ]; then
+            echo "❌ GITEE_TOKEN is not set"
+            exit 1
+          fi
+          if [ -z "${{ secrets.GITEE_REPO_OWNER }}" ]; then
+            echo "❌ GITEE_REPO_OWNER is not set"
+            exit 1
+          fi
+          if [ -z "${{ secrets.GITEE_REPO_NAME }}" ]; then
+            echo "❌ GITEE_REPO_NAME is not set"
+            exit 1
+          fi
+          echo "✅ All Gitee secrets are configured"
+
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 需要完整历史记录以推送到 Gitee
+          ref: main  # 切换到 main 分支以获取最新的 update_config_github.json
 
       - name: Extract version from release
         id: get_version
@@ -103,8 +122,8 @@ jobs:
           GITEE_REPO_NAME: ${{ secrets.GITEE_REPO_NAME }}
         run: |
           TAG_NAME="${{ steps.get_version.outputs.TAG_NAME }}"
-          RELEASE_NAME="${{ steps.get_version.outputs.RELEASE_NAME }}"
-          RELEASE_BODY="${{ steps.get_version.outputs.RELEASE_BODY }}"
+          RELEASE_NAME="${{ steps.release_info.outputs.release_name }}"
+          RELEASE_BODY="${{ steps.release_info.outputs.release_body }}"
           
           GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
           
@@ -164,6 +183,10 @@ jobs:
           GITEE_REPO_OWNER: ${{ secrets.GITEE_REPO_OWNER }}
           GITEE_REPO_NAME: ${{ secrets.GITEE_REPO_NAME }}
         run: |
+          # 确保在 main 分支上
+          git checkout main || git checkout -b main origin/main
+          git pull origin main || true
+          
           # 读取 GitHub 的更新配置文件
           if [ -f "update_config_github.json" ]; then
             echo "Reading GitHub update config..."
