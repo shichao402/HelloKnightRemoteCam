@@ -399,6 +399,34 @@ A:
 2. 查看 `VERSION.yaml` 文件中的最小版本要求
 3. 更新到兼容的版本
 
+## CI/CD 和自动发布
+
+项目支持自动构建和发布到 GitHub 和 Gitee 两个平台。
+
+### 快速配置（一次性）
+
+```bash
+# 1. 配置双远程仓库
+./scripts/setup_dual_remote.sh [gitee_url]
+
+# 2. 安装 Git 配置
+./scripts/install_git_hooks.sh
+```
+
+### 日常使用（完全无感知）
+
+配置完成后，所有操作自动同步到两个平台：
+
+```bash
+# 推送代码（自动推送到 GitHub 和 Gitee）
+git push origin main
+
+# 创建 Release（自动推送到两个平台并触发 CI/CD）
+./scripts/create_release.sh 1.0.0
+```
+
+**详细说明请参考：[双平台自动推送配置指南](docs/DUAL_PLATFORM_SETUP.md)**
+
 ## 项目文档
 
 - [认证架构文档](docs/AUTH_ARCHITECTURE.md) - 认证系统设计和使用说明
@@ -407,6 +435,9 @@ A:
 - [版本管理指南](docs/VERSION_MANAGEMENT.md) - 版本号管理详细说明
 - [预览尺寸优化](docs/PREVIEW_SIZE_OPTIMIZATION.md) - 预览尺寸数据流优化
 - [预览旋转实现](docs/PREVIEW_ROTATION.md) - 预览旋转和转置实现文档
+- [双平台自动推送配置](docs/DUAL_PLATFORM_SETUP.md) - GitHub 和 Gitee 双平台自动同步
+- [Gitee Actions 设置](docs/GITEE_ACTIONS_SETUP.md) - Gitee Go CI/CD 配置指南
+- [GitHub Actions 设置](docs/GITHUB_ACTIONS_SETUP.md) - GitHub Actions CI/CD 配置指南
 
 ## 开发规范
 
