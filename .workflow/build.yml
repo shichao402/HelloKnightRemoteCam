@@ -1,0 +1,50 @@
+# Gitee Go 流水线配置文件
+# 根据 Gitee 官方文档格式：https://gitee.com/help/articles/4292
+
+name: build-applications
+displayName: '构建所有平台应用'
+
+triggers:
+  push:
+    branches:
+      include:
+        - main
+        - master
+        - develop
+  tag:
+    include:
+      - 'v*'
+  pull_request:
+    branches:
+      include:
+        - main
+        - master
+        - develop
+
+stages:
+  - name: Build
+    displayName: '构建阶段'
+    steps:
+      - name: Build Android Server
+        displayName: '构建 Android 服务器'
+        script: |
+          echo "开始构建 Android 服务器..."
+          cd server
+          # 安装 Flutter（如果未安装）
+          # 注意：Gitee Go 可能需要在任务中配置 Flutter 环境
+          flutter --version || echo "需要配置 Flutter 环境"
+          flutter pub get
+          flutter build apk --release
+          echo "Android 构建完成"
+      
+      # 注意：Gitee Go 可能不支持 macOS 和 Windows runner
+      # 如果需要构建 macOS/Windows，可能需要：
+      # 1. 使用 GitHub Actions 构建
+      # 2. 或者在 Gitee Go 中使用 Docker 镜像
+      - name: Build Info
+        displayName: '构建信息'
+        script: |
+          echo "当前构建环境：Linux"
+          echo "注意：macOS 和 Windows 构建需要在 GitHub Actions 中完成"
+          echo "Gitee Go 主要用于 Android (Linux) 构建"
+
