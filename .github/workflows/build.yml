@@ -47,7 +47,10 @@ jobs:
         id: get_version
         run: |
           # 安装 PyYAML（如果需要，优先使用缓存）
-          python3 -m pip install --user pyyaml --quiet || true
+          # macOS 需要 --break-system-packages 标志
+          python3 -c "import yaml" 2>/dev/null || \
+          python3 -m pip install --user --break-system-packages pyyaml --quiet || \
+          python3 -m pip install --break-system-packages pyyaml --quiet
           
           # 使用统一的版本管理模块提取和同步版本号
           python3 scripts/lib/version_manager.py extract client --sync client/pubspec.yaml > version_output.json
@@ -210,7 +213,9 @@ jobs:
         id: get_version
         run: |
           # 安装 PyYAML（如果需要，优先使用缓存）
-          python -m pip install --user pyyaml --quiet
+          # Windows 上使用 --user 即可
+          python -m pip install --user pyyaml --quiet || \
+          python -c "import yaml" 2>/dev/null || python -m pip install pyyaml --quiet
           
           # 使用统一的版本管理模块提取和同步版本号
           python scripts/lib/version_manager.py extract client --sync client/pubspec.yaml > version_output.json
@@ -371,7 +376,9 @@ jobs:
         id: get_version
         run: |
           # 安装 PyYAML（如果需要，优先使用缓存）
-          python3 -m pip install --user pyyaml --quiet || true
+          # Linux 上使用 --user 即可
+          python3 -m pip install --user pyyaml --quiet || \
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install pyyaml --quiet
           
           # 使用统一的版本管理模块提取和同步版本号
           python3 scripts/lib/version_manager.py extract server --sync server/pubspec.yaml > version_output.json
@@ -451,7 +458,11 @@ jobs:
           git config --global user.email "actions@github.com"
           
           # 安装 PyYAML（如果需要）
-          python3 -m pip install --user pyyaml || true
+          # macOS/Linux 需要处理 externally-managed-environment
+          python3 -c "import yaml" 2>/dev/null || \
+          python3 -m pip install --user --break-system-packages pyyaml --quiet || \
+          python3 -m pip install --break-system-packages pyyaml --quiet || \
+          python3 -m pip install --user pyyaml --quiet || true
           
           # 读取当前版本号并递增构建号
           if [ -f "VERSION.yaml" ]; then
@@ -501,7 +512,11 @@ jobs:
       - name: Commit and push version increment
         run: |
           # 安装 PyYAML（如果需要）
-          python3 -m pip install --user pyyaml || true
+          # macOS/Linux 需要处理 externally-managed-environment
+          python3 -c "import yaml" 2>/dev/null || \
+          python3 -m pip install --user --break-system-packages pyyaml --quiet || \
+          python3 -m pip install --break-system-packages pyyaml --quiet || \
+          python3 -m pip install --user pyyaml --quiet || true
           
           if [ -f "VERSION.yaml" ]; then
             git add VERSION.yaml
@@ -548,6 +563,10 @@ jobs:
         id: get_versions
         run: |
           # 安装 PyYAML（如果需要，优先使用缓存）
+          # macOS/Linux 需要处理 externally-managed-environment
+          python3 -c "import yaml" 2>/dev/null || \
+          python3 -m pip install --user --break-system-packages pyyaml --quiet || \
+          python3 -m pip install --break-system-packages pyyaml --quiet || \
           python3 -m pip install --user pyyaml --quiet || true
           
           # 使用统一的版本管理模块提取版本号
