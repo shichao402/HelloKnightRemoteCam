@@ -4,6 +4,7 @@ import 'package:window_manager/window_manager.dart';
 import 'screens/device_connection_screen.dart';
 import 'services/logger_service.dart';
 import 'services/api_service_manager.dart';
+import 'package:shared/shared.dart';
 import 'services/update_service.dart';
 import 'services/update_settings_service.dart';
 import 'services/window_settings_service.dart';

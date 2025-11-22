@@ -9,6 +9,7 @@ import '../services/http_server.dart';
 import '../services/logger_service.dart';
 import '../services/operation_log_service.dart';
 import '../services/foreground_service.dart';
+import 'package:shared/shared.dart';
 import '../services/update_service.dart';
 import '../models/camera_status.dart';
 import 'debug_log_screen.dart';

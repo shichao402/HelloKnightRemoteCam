@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared/shared.dart';
 import '../services/update_service.dart';
 import '../services/logger_service.dart';
 

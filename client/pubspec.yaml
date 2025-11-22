@@ -43,6 +43,10 @@ dependencies:
   path: ^1.8.3
   archive: ^3.4.0
   crypto: ^3.0.3
+  
+  # Shared code
+  shared:
+    path: ../shared
 
   # Storage
   sqflite: ^2.3.0

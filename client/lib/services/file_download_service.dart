@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'dart:async';
 import 'logger_service.dart';
+import 'download_directory_service.dart';
 
 /// 下载任务内部类
 class _DownloadTask {
@@ -28,6 +28,7 @@ class _DownloadTask {
 class FileDownloadService {
   final Dio _dio = Dio();
   final ClientLoggerService _logger = ClientLoggerService();
+  final DownloadDirectoryService _downloadDirService = DownloadDirectoryService();
   
   // 最大并发下载数
   static const int maxConcurrentDownloads = 2;
@@ -53,9 +54,8 @@ class FileDownloadService {
     try {
       _logger.log('开始下载文件: $url', tag: 'DOWNLOAD');
       
-      // 获取下载目录
-      final downloadDir = await _getDownloadDirectory();
-      await Directory(downloadDir).create(recursive: true);
+      // 获取下载目录（使用DownloadDirectoryService）
+      final downloadDir = await _downloadDirService.getDownloadDirectory();
       
       // 确定文件名
       String finalFileName = fileName ?? path.basename(url);
@@ -167,44 +167,5 @@ class FileDownloadService {
     }
   }
 
-  /// 获取下载目录（公开方法供UpdateService使用）
-  Future<String> _getDownloadDirectory() async {
-    if (Platform.isAndroid) {
-      // Android: 使用应用外部存储目录
-      final directory = await getExternalStorageDirectory();
-      if (directory != null) {
-        return path.join(directory.path, 'Downloads');
-      }
-      // 如果外部存储不可用，使用应用内部目录
-      final appDir = await getApplicationDocumentsDirectory();
-      return path.join(appDir.path, 'Downloads');
-    } else if (Platform.isIOS) {
-      // iOS: 使用应用文档目录
-      final directory = await getApplicationDocumentsDirectory();
-      return path.join(directory.path, 'Downloads');
-    } else if (Platform.isMacOS) {
-      // macOS: 使用用户下载目录
-      final directory = await getDownloadsDirectory();
-      if (directory != null) {
-        return directory.path;
-      }
-      // 如果不可用，使用应用支持目录
-      final appDir = await getApplicationSupportDirectory();
-      return path.join(appDir.path, 'Downloads');
-    } else if (Platform.isWindows) {
-      // Windows: 使用用户下载目录
-      final directory = await getDownloadsDirectory();
-      if (directory != null) {
-        return directory.path;
-      }
-      // 如果不可用，使用应用数据目录
-      final appDir = await getApplicationSupportDirectory();
-      return path.join(appDir.path, 'Downloads');
-    } else {
-      // 其他平台：使用应用支持目录
-      final appDir = await getApplicationSupportDirectory();
-      return path.join(appDir.path, 'Downloads');
-    }
-  }
 }
 

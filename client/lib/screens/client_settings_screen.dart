@@ -4,6 +4,7 @@ import 'dart:io';
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
 import '../services/version_service.dart';
+import 'package:shared/shared.dart';
 import '../services/update_service.dart';
 import '../services/update_settings_service.dart';
 import 'package:file_picker/file_picker.dart';

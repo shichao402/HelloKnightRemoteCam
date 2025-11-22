@@ -66,8 +66,58 @@ jobs:
           mkdir -p dmg_temp
           cp -R "$APP_NAME" dmg_temp/
           
-          # 创建DMG
-          hdiutil create -volname "$VOLUME_NAME" -srcfolder dmg_temp -ov -format UDZO "$DMG_NAME"
+          # 创建指向Applications文件夹的快捷方式（符号链接）
+          ln -s /Applications dmg_temp/Applications
+          
+          # 创建临时DMG（可读写）
+          TEMP_DMG="temp_$DMG_NAME"
+          hdiutil create -volname "$VOLUME_NAME" -srcfolder dmg_temp -ov -format UDRW "$TEMP_DMG"
+          
+          # 挂载DMG以设置视图属性
+          DMG_DEVICE=$(hdiutil attach -readwrite -noverify -noautoopen "$TEMP_DMG" | egrep '^/dev/' | sed 1q | awk '{print $1}')
+          
+          # 等待DMG挂载
+          sleep 2
+          
+          DMG_MOUNT_POINT="/Volumes/$VOLUME_NAME"
+          if [ -d "$DMG_MOUNT_POINT" ]; then
+            # 设置Applications快捷方式的属性（使其显示为快捷方式图标）
+            if command -v SetFile &> /dev/null; then
+              SetFile -a C "$DMG_MOUNT_POINT/Applications" || true
+            fi
+            
+            # 尝试设置DMG窗口视图（如果支持图形界面）
+            # 注意：在CI环境中可能无法执行AppleScript，但不影响DMG的功能
+            osascript <<EOF 2>/dev/null || true
+            tell application "Finder"
+              tell disk "$VOLUME_NAME"
+                open
+                set current view of container window to icon view
+                set toolbar visible of container window to false
+                set statusbar visible of container window to false
+                set the bounds of container window to {400, 100, 920, 420}
+                set viewOptions to the icon view options of container window
+                set arrangement of viewOptions to not arranged
+                set icon size of viewOptions to 72
+                set position of item "$APP_NAME" of container window to {160, 205}
+                set position of item "Applications" of container window to {360, 205}
+                close
+                open
+                update without registering applications
+                delay 2
+              end tell
+            end tell
+EOF
+          fi
+          
+          # 卸载DMG
+          hdiutil detach "$DMG_DEVICE" || true
+          
+          # 转换为只读压缩格式
+          hdiutil convert "$TEMP_DMG" -format UDZO -o "$DMG_NAME" -ov
+          
+          # 删除临时DMG
+          rm -f "$TEMP_DMG"
           
           # 移动到工作区根目录
           mv "$DMG_NAME" $GITHUB_WORKSPACE/client/
@@ -75,7 +125,7 @@ jobs:
           # 清理临时目录
           rm -rf dmg_temp
           
-          echo "DMG created: $DMG_NAME"
+          echo "DMG created: $DMG_NAME (with Applications shortcut)"
 
       - name: Archive macOS DMG (zip)
         run: |

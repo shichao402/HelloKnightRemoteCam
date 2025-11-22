@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/logger_service.dart';
 import '../services/version_service.dart';
+import 'package:shared/shared.dart';
 import '../services/update_service.dart';
 import '../services/update_settings_service.dart';
 

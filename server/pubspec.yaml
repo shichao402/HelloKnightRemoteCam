@@ -25,6 +25,10 @@ dependencies:
   url_launcher: ^6.2.5
   open_file: ^3.3.2
   archive: ^3.4.0
+  
+  # Shared code
+  shared:
+    path: ../shared
 
 dev_dependencies:
   flutter_test:

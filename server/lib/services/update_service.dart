@@ -4,58 +4,12 @@ import 'package:dio/dio.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:open_file/open_file.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:archive/archive.dart';
 import 'package:path/path.dart' as path;
+import 'package:shared/shared.dart';
 import 'logger_service.dart';
 import 'version_service.dart';
 import 'update_settings_service.dart';
 import 'file_download_service.dart';
-
-/// 更新信息模型
-class UpdateInfo {
-  final String version;
-  final String versionNumber;
-  final String downloadUrl;
-  final String fileName;
-  final String fileType;
-  final String platform;
-  final String? releaseNotes;
-
-  UpdateInfo({
-    required this.version,
-    required this.versionNumber,
-    required this.downloadUrl,
-    required this.fileName,
-    required this.fileType,
-    required this.platform,
-    this.releaseNotes,
-  });
-
-  factory UpdateInfo.fromJson(Map<String, dynamic> json) {
-    return UpdateInfo(
-      version: json['version'] as String,
-      versionNumber: json['versionNumber'] as String,
-      downloadUrl: json['downloadUrl'] as String,
-      fileName: json['fileName'] as String,
-      fileType: json['fileType'] as String,
-      platform: json['platform'] as String,
-      releaseNotes: json['releaseNotes'] as String?,
-    );
-  }
-}
-
-/// 更新检查结果
-class UpdateCheckResult {
-  final bool hasUpdate;
-  final UpdateInfo? updateInfo;
-  final String? error;
-
-  UpdateCheckResult({
-    required this.hasUpdate,
-    this.updateInfo,
-    this.error,
-  });
-}
 
 /// 更新服务（服务端）
 /// 负责检查更新、下载更新文件
@@ -69,6 +23,12 @@ class UpdateService {
   final UpdateSettingsService _updateSettings = UpdateSettingsService();
   final Dio _dio = Dio();
   final FileDownloadService _fileDownloadService = FileDownloadService();
+  
+  // 使用shared包的服务，注入logger回调
+  late final ArchiveService _archiveService = ArchiveService(
+    onLog: (message, {tag}) => _logger.log(message, tag: tag ?? 'ARCHIVE'),
+    onLogError: (message, {error, stackTrace}) => _logger.logError(message, error: error, stackTrace: stackTrace),
+  );
 
   // 默认更新检查URL（可以从设置中配置）
   String _updateCheckUrl = '';
@@ -90,26 +50,9 @@ class UpdateService {
     }
   }
 
-  /// 比较版本号
-  /// 返回 true 如果 version1 > version2
+  /// 比较版本号（使用shared包的VersionUtils）
   bool _compareVersions(String version1, String version2) {
-    final v1Parts = version1.split('.').map((e) => int.parse(e)).toList();
-    final v2Parts = version2.split('.').map((e) => int.parse(e)).toList();
-
-    // 确保两个版本号都有3个部分
-    while (v1Parts.length < 3) {
-      v1Parts.add(0);
-    }
-    while (v2Parts.length < 3) {
-      v2Parts.add(0);
-    }
-
-    for (int i = 0; i < 3; i++) {
-      if (v1Parts[i] > v2Parts[i]) return true;
-      if (v1Parts[i] < v2Parts[i]) return false;
-    }
-
-    return false; // 相等
+    return VersionUtils.compareVersions(version1, version2);
   }
 
   /// 检查更新
@@ -377,67 +320,9 @@ class UpdateService {
     }
   }
   
-  /// 解压zip文件
+  /// 解压zip文件（使用shared包的ArchiveService）
   Future<String?> _extractZipFile(String zipPath, String extractDir) async {
-    try {
-      _logger.log('开始解压zip文件: $zipPath', tag: 'UPDATE');
-
-      final zipFile = File(zipPath);
-      final bytes = await zipFile.readAsBytes();
-      final archive = ZipDecoder().decodeBytes(bytes);
-
-      // 创建解压目录
-      final extractDirectory = Directory(extractDir);
-      if (!await extractDirectory.exists()) {
-        await extractDirectory.create(recursive: true);
-      }
-
-      // 解压所有文件
-      String? extractedFilePath;
-      String? apkFilePath; // 优先查找APK文件（Android）
-
-      for (final file in archive) {
-        final filePath = path.join(extractDir, file.name);
-
-        if (file.isFile) {
-          final outputFile = File(filePath);
-          await outputFile.create(recursive: true);
-          await outputFile.writeAsBytes(file.content as List<int>);
-
-          // 根据文件扩展名分类查找
-          final ext = path.extension(filePath).toLowerCase();
-          if (ext == '.apk') {
-            apkFilePath = filePath;
-            _logger.log('找到APK文件: $filePath', tag: 'UPDATE');
-          }
-
-          // 记录第一个文件路径（作为备选）
-          if (extractedFilePath == null) {
-            extractedFilePath = filePath;
-          }
-        } else {
-          // 创建目录
-          final dir = Directory(filePath);
-          if (!await dir.exists()) {
-            await dir.create(recursive: true);
-          }
-        }
-      }
-
-      // 根据平台优先返回对应的文件
-      String? result;
-      if (Platform.isAndroid) {
-        result = apkFilePath ?? extractedFilePath;
-      } else {
-        result = apkFilePath ?? extractedFilePath;
-      }
-
-      _logger.log('zip文件解压完成: $extractDir, 返回文件: $result', tag: 'UPDATE');
-      return result;
-    } catch (e, stackTrace) {
-      _logger.logError('解压zip文件失败', error: e, stackTrace: stackTrace);
-      rethrow;
-    }
+    return await _archiveService.extractZipFile(zipPath, extractDir);
   }
 
   /// 下载更新文件
@@ -477,7 +362,9 @@ class UpdateService {
         final extractedFilePath = await _extractZipFile(filePath, extractDir);
 
         if (extractedFilePath == null) {
-          throw Exception('解压zip文件失败，未找到可执行文件');
+          // 如果找不到预期的安装文件，返回zip文件路径让系统打开zip文件
+          _logger.log('未找到预期的安装文件，将打开zip文件本身: $filePath', tag: 'UPDATE');
+          return filePath;
         }
 
         _logger.log('zip文件解压完成: $extractedFilePath', tag: 'UPDATE');

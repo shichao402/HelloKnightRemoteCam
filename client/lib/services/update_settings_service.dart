@@ -1,6 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
-import 'update_service.dart';
+import 'package:shared/shared.dart';
 
 /// 更新设置服务：管理更新检查URL等设置
 class UpdateSettingsService {

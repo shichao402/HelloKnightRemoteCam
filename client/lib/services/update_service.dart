@@ -1,65 +1,16 @@
 import 'dart:io';
 import 'dart:convert';
-import 'package:crypto/crypto.dart';
-import 'package:archive/archive.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path/path.dart' as path;
-import 'package:path_provider/path_provider.dart';
+import 'package:shared/shared.dart';
 import 'logger_service.dart';
 import 'version_service.dart';
 import 'file_download_service.dart';
+import 'download_directory_service.dart';
+import 'update_file_cleanup_service.dart';
 import '../widgets/update_dialog.dart';
-
-/// 更新信息模型
-class UpdateInfo {
-  final String version;
-  final String versionNumber;
-  final String downloadUrl;
-  final String fileName;
-  final String fileType;
-  final String platform;
-  final String? releaseNotes;
-  final String? fileHash; // SHA256 hash值
-
-  UpdateInfo({
-    required this.version,
-    required this.versionNumber,
-    required this.downloadUrl,
-    required this.fileName,
-    required this.fileType,
-    required this.platform,
-    this.releaseNotes,
-    this.fileHash,
-  });
-
-  factory UpdateInfo.fromJson(Map<String, dynamic> json) {
-    return UpdateInfo(
-      version: json['version'] as String,
-      versionNumber: json['versionNumber'] as String,
-      downloadUrl: json['downloadUrl'] as String,
-      fileName: json['fileName'] as String,
-      fileType: json['fileType'] as String,
-      platform: json['platform'] as String,
-      releaseNotes: json['releaseNotes'] as String?,
-      fileHash: json['fileHash'] as String?,
-    );
-  }
-}
-
-/// 更新检查结果
-class UpdateCheckResult {
-  final bool hasUpdate;
-  final UpdateInfo? updateInfo;
-  final String? error;
-
-  UpdateCheckResult({
-    required this.hasUpdate,
-    this.updateInfo,
-    this.error,
-  });
-}
 
 /// 更新服务
 /// 负责检查更新、下载更新文件
@@ -72,6 +23,23 @@ class UpdateService {
   final VersionService _versionService = VersionService();
   final Dio _dio = Dio();
   final FileDownloadService _fileDownloadService = FileDownloadService();
+  final DownloadDirectoryService _downloadDirService =
+      DownloadDirectoryService();
+  final UpdateFileCleanupService _cleanupService = UpdateFileCleanupService();
+
+  // 使用shared包的服务，注入logger回调
+  late final FileVerificationService _fileVerificationService =
+      FileVerificationService(
+    onLog: (message, {tag}) => _logger.log(message, tag: tag ?? 'VERIFY'),
+    onLogError: (message, {error, stackTrace}) =>
+        _logger.logError(message, error: error, stackTrace: stackTrace),
+  );
+
+  late final ArchiveService _archiveService = ArchiveService(
+    onLog: (message, {tag}) => _logger.log(message, tag: tag ?? 'ARCHIVE'),
+    onLogError: (message, {error, stackTrace}) =>
+        _logger.logError(message, error: error, stackTrace: stackTrace),
+  );
 
   // 默认更新检查URL（可以从设置中配置）
   String _updateCheckUrl = '';
@@ -99,67 +67,6 @@ class UpdateService {
       return 'linux';
     } else {
       return 'unknown';
-    }
-  }
-
-  /// 比较版本号
-  /// 返回 true 如果 version1 > version2
-  bool _compareVersions(String version1, String version2) {
-    final v1Parts = version1.split('.').map((e) => int.parse(e)).toList();
-    final v2Parts = version2.split('.').map((e) => int.parse(e)).toList();
-
-    // 确保两个版本号都有3个部分
-    while (v1Parts.length < 3) {
-      v1Parts.add(0);
-    }
-    while (v2Parts.length < 3) {
-      v2Parts.add(0);
-    }
-
-    for (int i = 0; i < 3; i++) {
-      if (v1Parts[i] > v2Parts[i]) return true;
-      if (v1Parts[i] < v2Parts[i]) return false;
-    }
-
-    return false; // 相等
-  }
-
-  /// 比较完整版本号（包含构建号，格式: x.y.z+build）
-  /// 返回 true 如果 version1 >= version2
-  bool _compareFullVersions(String version1, String version2) {
-    // 分离版本号和构建号
-    final v1Parts = version1.split('+');
-    final v2Parts = version2.split('+');
-
-    final v1Version = v1Parts[0];
-    final v2Version = v2Parts[0];
-    final v1Build = v1Parts.length > 1 ? int.tryParse(v1Parts[1]) ?? 0 : 0;
-    final v2Build = v2Parts.length > 1 ? int.tryParse(v2Parts[1]) ?? 0 : 0;
-
-    // 先比较版本号
-    final versionCompare = _compareVersions(v1Version, v2Version);
-    if (versionCompare) return true;
-    if (!_compareVersions(v2Version, v1Version)) {
-      // 版本号相等，比较构建号
-      return v1Build >= v2Build;
-    }
-    return false;
-  }
-
-  /// 从文件名提取版本号（格式: x.y.z+build）
-  /// 例如: HelloKnightRCC_macos_1.0.7+5.zip -> 1.0.7+5
-  String? _extractVersionFromFileName(String fileName) {
-    try {
-      // 匹配模式: _x.y.z+build 或 _x.y.z
-      final regex = RegExp(r'_(\d+\.\d+\.\d+(?:\+\d+)?)');
-      final match = regex.firstMatch(fileName);
-      if (match != null) {
-        return match.group(1);
-      }
-      return null;
-    } catch (e) {
-      _logger.log('从文件名提取版本号失败: $fileName, 错误: $e', tag: 'UPDATE');
-      return null;
     }
   }
 
@@ -266,9 +173,9 @@ class UpdateService {
       final updateInfo = UpdateInfo.fromJson(platformConfig);
       _logger.log('最新版本: ${updateInfo.version}', tag: 'UPDATE');
 
-      // 比较版本
-      final hasUpdate =
-          _compareVersions(updateInfo.versionNumber, currentVersionNumber);
+      // 比较版本（使用工具类）
+      final hasUpdate = VersionUtils.compareVersions(
+          updateInfo.versionNumber, currentVersionNumber);
 
       if (hasUpdate) {
         _logger.log('发现新版本: ${updateInfo.version}', tag: 'UPDATE');
@@ -316,107 +223,15 @@ class UpdateService {
     return _currentUpdateInfo != null;
   }
 
-  /// 计算文件的SHA256 hash
-  Future<String> _calculateFileHash(String filePath) async {
-    final file = File(filePath);
-    final bytes = await file.readAsBytes();
-    final digest = sha256.convert(bytes);
-    return digest.toString();
-  }
-
-  /// 校验文件hash
+  /// 校验文件hash（使用FileVerificationService）
   Future<bool> verifyFileHash(String filePath, String expectedHash) async {
-    try {
-      _logger.log('开始校验文件hash: $filePath', tag: 'UPDATE');
-      final actualHash = await _calculateFileHash(filePath);
-      final isValid = actualHash.toLowerCase() == expectedHash.toLowerCase();
-
-      if (isValid) {
-        _logger.log('文件hash校验通过', tag: 'UPDATE');
-      } else {
-        _logger.logError('文件hash校验失败',
-            error: '期望: $expectedHash, 实际: $actualHash');
-      }
-
-      return isValid;
-    } catch (e, stackTrace) {
-      _logger.logError('校验文件hash失败', error: e, stackTrace: stackTrace);
-      return false;
-    }
+    return await _fileVerificationService.verifyFileHash(
+        filePath, expectedHash);
   }
 
-  /// 解压zip文件
+  /// 解压zip文件（使用ArchiveService）
   Future<String?> _extractZipFile(String zipPath, String extractDir) async {
-    try {
-      _logger.log('开始解压zip文件: $zipPath', tag: 'UPDATE');
-
-      final zipFile = File(zipPath);
-      final bytes = await zipFile.readAsBytes();
-      final archive = ZipDecoder().decodeBytes(bytes);
-
-      // 创建解压目录
-      final extractDirectory = Directory(extractDir);
-      if (!await extractDirectory.exists()) {
-        await extractDirectory.create(recursive: true);
-      }
-
-      // 解压所有文件
-      String? apkFilePath; // 优先查找APK文件（Android）
-      String? dmgFilePath; // 查找DMG文件（macOS）- GitHub Actions打包的zip中包含dmg
-      String? exeFilePath; // 查找EXE文件（Windows）
-
-      for (final file in archive) {
-        final filePath = path.join(extractDir, file.name);
-
-        if (file.isFile) {
-          final outputFile = File(filePath);
-          await outputFile.create(recursive: true);
-          await outputFile.writeAsBytes(file.content as List<int>);
-
-          // 根据文件扩展名分类查找
-          final ext = path.extension(filePath).toLowerCase();
-          if (ext == '.apk') {
-            apkFilePath = filePath;
-            _logger.log('找到APK文件: $filePath', tag: 'UPDATE');
-          } else if (ext == '.dmg') {
-            dmgFilePath = filePath;
-            _logger.log('找到DMG文件: $filePath', tag: 'UPDATE');
-          } else if (ext == '.exe' || ext == '.msi') {
-            exeFilePath = filePath;
-            _logger.log('找到EXE/MSI文件: $filePath', tag: 'UPDATE');
-          }
-        } else {
-          // 创建目录
-          final dir = Directory(filePath);
-          if (!await dir.exists()) {
-            await dir.create(recursive: true);
-          }
-        }
-      }
-
-      // 根据平台优先返回对应的文件，如果都找不到则返回null（让上层打开zip文件）
-      String? result;
-      if (Platform.isAndroid) {
-        result = apkFilePath;
-      } else if (Platform.isMacOS) {
-        // macOS: GitHub Actions打包的zip中包含dmg文件，优先查找dmg
-        result = dmgFilePath;
-      } else if (Platform.isWindows) {
-        result = exeFilePath;
-      } else {
-        result = apkFilePath ?? dmgFilePath ?? exeFilePath;
-      }
-
-      if (result == null) {
-        _logger.log('zip文件解压完成，但未找到预期的安装文件，将打开zip文件本身', tag: 'UPDATE');
-      } else {
-        _logger.log('zip文件解压完成: $extractDir, 返回文件: $result', tag: 'UPDATE');
-      }
-      return result;
-    } catch (e, stackTrace) {
-      _logger.logError('解压zip文件失败', error: e, stackTrace: stackTrace);
-      rethrow;
-    }
+    return await _archiveService.extractZipFile(zipPath, extractDir);
   }
 
   /// 清理旧的更新包
@@ -425,7 +240,7 @@ class UpdateService {
       _logger.log('开始清理旧的更新包: ${oldUpdateInfo.fileName}', tag: 'UPDATE');
 
       // 获取下载目录
-      final downloadDir = await _getDownloadDirectory();
+      final downloadDir = await _downloadDirService.getDownloadDirectory();
 
       // 1. 删除旧的下载文件（已完成的）
       final oldFilePath = path.join(downloadDir, oldUpdateInfo.fileName);
@@ -495,114 +310,31 @@ class UpdateService {
     }
   }
 
-  /// 获取下载目录（通过FileDownloadService的内部方法）
-  Future<String> _getDownloadDirectory() async {
-    // 使用反射或直接复制逻辑，这里我们直接复制逻辑
-    if (Platform.isAndroid) {
-      final directory = await getApplicationDocumentsDirectory();
-      return path.join(directory.path, 'Downloads');
-    } else if (Platform.isIOS) {
-      final directory = await getApplicationDocumentsDirectory();
-      return path.join(directory.path, 'Downloads');
-    } else if (Platform.isMacOS) {
-      final directory = await getDownloadsDirectory();
-      if (directory != null) {
-        return directory.path;
-      }
-      final appDir = await getApplicationSupportDirectory();
-      return path.join(appDir.path, 'Downloads');
-    } else if (Platform.isWindows) {
-      final directory = await getDownloadsDirectory();
-      if (directory != null) {
-        return directory.path;
-      }
-      final appDir = await getApplicationSupportDirectory();
-      return path.join(appDir.path, 'Downloads');
-    } else {
-      final appDir = await getApplicationSupportDirectory();
-      return path.join(appDir.path, 'Downloads');
-    }
-  }
-
-  /// 清理旧版本文件（清理所有<=当前版本的文件）
+  /// 清理旧版本文件（使用UpdateFileCleanupService）
   Future<void> _cleanupOldVersions() async {
-    try {
-      final currentVersion = await _versionService.getVersion();
-      _logger.log('开始清理旧版本文件，当前版本: $currentVersion', tag: 'UPDATE');
-
-      final downloadDir = await _getDownloadDirectory();
-      final dir = Directory(downloadDir);
-
-      if (!await dir.exists()) {
-        _logger.log('下载目录不存在，跳过清理', tag: 'UPDATE');
-        return;
-      }
-
-      final files = await dir.list().toList();
-      int cleanedCount = 0;
-
-      for (final fileEntity in files) {
-        if (fileEntity is File) {
-          final fileName = path.basename(fileEntity.path);
-          final fileVersion = _extractVersionFromFileName(fileName);
-
-          if (fileVersion != null) {
-            // 比较版本，如果文件版本 <= 当前版本，则删除
-            if (!_compareFullVersions(fileVersion, currentVersion) ||
-                fileVersion == currentVersion) {
-              try {
-                await fileEntity.delete();
-                _logger.log('已删除旧版本文件: $fileName (版本: $fileVersion)',
-                    tag: 'UPDATE');
-                cleanedCount++;
-
-                // 同时删除对应的解压目录（如果存在）
-                final extractDir = path.join(path.dirname(fileEntity.path),
-                    'extracted_${path.basenameWithoutExtension(fileName)}');
-                final extractDirEntity = Directory(extractDir);
-                if (await extractDirEntity.exists()) {
-                  await extractDirEntity.delete(recursive: true);
-                  _logger.log('已删除解压目录: $extractDir', tag: 'UPDATE');
-                }
-              } catch (e) {
-                _logger.log('删除文件失败: $fileName, 错误: $e', tag: 'UPDATE');
-              }
-            }
-          }
-        }
-      }
-
-      _logger.log('旧版本文件清理完成，共清理 $cleanedCount 个文件', tag: 'UPDATE');
-    } catch (e, stackTrace) {
-      _logger.logError('清理旧版本文件失败', error: e, stackTrace: stackTrace);
-    }
+    await _cleanupService.cleanupOldVersions();
   }
 
   /// 检查已存在的文件（已下载完成）
   /// 返回文件路径如果文件存在且hash校验通过，否则返回null
   Future<String?> _checkExistingCompleteFile(UpdateInfo updateInfo) async {
     try {
-      final downloadDir = await _getDownloadDirectory();
+      final downloadDir = await _downloadDirService.getDownloadDirectory();
       final filePath = path.join(downloadDir, updateInfo.fileName);
-      final file = File(filePath);
 
-      if (!await file.exists()) {
+      // 检查文件是否存在且大小合理
+      final fileSize = await _fileVerificationService.checkFileExists(filePath);
+      if (fileSize == null) {
         return null;
       }
 
-      _logger.log('发现已存在的文件: $filePath', tag: 'UPDATE');
-
-      // 检查文件大小是否合理（至少大于0）
-      final fileSize = await file.length();
-      if (fileSize == 0) {
-        _logger.log('文件大小为0，视为未完成下载', tag: 'UPDATE');
-        return null;
-      }
+      _logger.log('发现已存在的文件: $filePath (大小: $fileSize)', tag: 'UPDATE');
 
       // 如果有hash，验证文件完整性
       if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
         _logger.log('开始验证已存在文件的hash', tag: 'UPDATE');
-        final isValid = await verifyFileHash(filePath, updateInfo.fileHash!);
+        final isValid = await _fileVerificationService.verifyFileHash(
+            filePath, updateInfo.fileHash!);
         if (isValid) {
           _logger.log('已存在文件hash校验通过: $filePath', tag: 'UPDATE');
           return filePath;
@@ -610,7 +342,7 @@ class UpdateService {
           _logger.log('已存在文件hash校验失败，将重新下载', tag: 'UPDATE');
           // 删除损坏的文件
           try {
-            await file.delete();
+            await File(filePath).delete();
           } catch (e) {
             _logger.log('删除损坏文件失败: $e', tag: 'UPDATE');
           }
@@ -632,10 +364,11 @@ class UpdateService {
   /// 注意：此方法不验证hash，hash验证在调用方进行
   Future<String?> _checkExistingIncompleteFile(UpdateInfo updateInfo) async {
     try {
-      final downloadDir = await _getDownloadDirectory();
+      final downloadDir = await _downloadDirService.getDownloadDirectory();
       final filePath = path.join(downloadDir, updateInfo.fileName);
-      final file = File(filePath);
 
+      // 检查文件是否存在（包括大小为0的文件，可以用于断点续传）
+      final file = File(filePath);
       if (!await file.exists()) {
         return null;
       }
@@ -682,7 +415,7 @@ class UpdateService {
       if (existingIncompleteFile != null) {
         // 检查文件是否实际已完成（通过hash验证）
         if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
-          final isValid = await verifyFileHash(
+          final isValid = await _fileVerificationService.verifyFileHash(
               existingIncompleteFile, updateInfo.fileHash!);
           if (isValid) {
             _logger.log('未完成文件实际已完整（hash校验通过），直接使用: $existingIncompleteFile',
@@ -717,10 +450,11 @@ class UpdateService {
   Future<String?> _processDownloadedFile(
       String filePath, UpdateInfo updateInfo) async {
     try {
-      // 如果有hash，进行校验
+      // 如果有hash，进行校验（使用FileVerificationService）
       if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
         _logger.log('开始校验文件hash: $filePath', tag: 'UPDATE');
-        final isValid = await verifyFileHash(filePath, updateInfo.fileHash!);
+        final isValid = await _fileVerificationService.verifyFileHash(
+            filePath, updateInfo.fileHash!);
         if (!isValid) {
           // 删除下载的文件
           try {

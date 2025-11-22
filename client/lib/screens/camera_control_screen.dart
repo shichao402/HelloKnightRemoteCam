@@ -17,6 +17,7 @@ import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
 import '../services/connection_settings_service.dart';
+import 'package:shared/shared.dart';
 import '../services/update_service.dart';
 import '../models/connection_error.dart';
 import '../utils/retry_helper.dart';

@@ -5,6 +5,7 @@ import '../services/api_service_manager.dart';
 import '../services/connection_settings_service.dart';
 import '../services/device_config_service.dart';
 import '../services/logger_service.dart';
+import 'package:shared/shared.dart';
 import '../services/update_service.dart';
 import '../models/connection_error.dart';
 import 'camera_control_screen.dart';
