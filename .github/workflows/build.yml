@@ -23,29 +23,26 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Extract version from tag or pubspec.yaml
+      - name: Extract version from VERSION file
         id: get_version
         run: |
-          cd client
-          # 如果是标签触发，从标签提取版本号
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            TAG_VERSION=${GITHUB_REF#refs/tags/v}
-            VERSION=$TAG_VERSION
-            # 从VERSION文件读取build number，如果没有则使用1
-            if [ -f "../../VERSION" ]; then
-              BUILD_NUMBER=$(grep "^CLIENT_VERSION=" ../../VERSION | sed 's/.*+//' || echo "1")
-            else
+          # 始终从 VERSION 文件读取版本号（唯一数据源）
+          if [ -f "VERSION" ]; then
+            CLIENT_VERSION=$(grep "^CLIENT_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            VERSION=$(echo "$CLIENT_VERSION" | sed 's/+.*//')
+            BUILD_NUMBER=$(echo "$CLIENT_VERSION" | sed 's/.*+//')
+            if [ "$CLIENT_VERSION" == "$VERSION" ]; then
               BUILD_NUMBER="1"
             fi
-            echo "使用标签版本号: $VERSION"
-            # 同步版本号到 pubspec.yaml
-            sed -i '' "s/^version:.*/version: ${VERSION}+${BUILD_NUMBER}/" pubspec.yaml
+            echo "从 VERSION 文件读取客户端版本号: $CLIENT_VERSION"
           else
-            # 否则从 pubspec.yaml 读取
-            VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
-            BUILD_NUMBER=$(grep '^version:' pubspec.yaml | sed 's/.*+//')
-            echo "使用 pubspec.yaml 版本号: $VERSION"
+            echo "错误: VERSION 文件不存在"
+            exit 1
           fi
+          # 同步版本号到 pubspec.yaml
+          cd client
+          sed -i '' "s/^version:.*/version: ${VERSION}+${BUILD_NUMBER}/" pubspec.yaml
+          echo "已同步版本号到 client/pubspec.yaml: ${VERSION}+${BUILD_NUMBER}"
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_OUTPUT
           echo "FULL_VERSION=${VERSION}+${BUILD_NUMBER}" >> $GITHUB_OUTPUT
@@ -109,39 +106,35 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Extract version from tag or pubspec.yaml
+      - name: Extract version from VERSION file
         id: get_version
         shell: powershell
         run: |
-          cd client
-          # 如果是标签触发，从标签提取版本号
-          $ref = "${{ github.ref }}"
-          if ($ref -like "refs/tags/v*") {
-            $tagVersion = $ref -replace "refs/tags/v", ""
-            $version = $tagVersion
-            # 从VERSION文件读取build number
-            if (Test-Path "../../VERSION") {
-              $versionLine = Get-Content "../../VERSION" | Select-String -Pattern "^CLIENT_VERSION="
-              if ($versionLine) {
-                $buildNumber = $versionLine -replace ".*\+", ""
-              } else {
+          # 始终从 VERSION 文件读取版本号（唯一数据源）
+          if (Test-Path "VERSION") {
+            $versionLine = Get-Content "VERSION" | Select-String -Pattern "^CLIENT_VERSION="
+            if ($versionLine) {
+              $clientVersion = $versionLine -replace "CLIENT_VERSION=", "" -replace " ", ""
+              $version = $clientVersion -replace "\+.*", ""
+              $buildNumber = $clientVersion -replace ".*\+", ""
+              if ($buildNumber -eq $clientVersion) {
                 $buildNumber = "1"
               }
+              Write-Host "从 VERSION 文件读取客户端版本号: $clientVersion"
             } else {
-              $buildNumber = "1"
+              Write-Host "错误: VERSION 文件中未找到 CLIENT_VERSION"
+              exit 1
             }
-            Write-Host "使用标签版本号: $version"
-            # 同步版本号到 pubspec.yaml
-            $content = Get-Content pubspec.yaml
-            $content = $content -replace "^version:.*", "version: ${version}+${buildNumber}"
-            $content | Set-Content pubspec.yaml
           } else {
-            # 否则从 pubspec.yaml 读取
-            $versionLine = Get-Content pubspec.yaml | Select-String -Pattern '^version:'
-            $version = $versionLine -replace 'version: ', '' -replace '\+.*', ''
-            $buildNumber = $versionLine -replace '.*\+', ''
-            Write-Host "使用 pubspec.yaml 版本号: $version"
+            Write-Host "错误: VERSION 文件不存在"
+            exit 1
           }
+          # 同步版本号到 pubspec.yaml
+          cd client
+          $content = Get-Content pubspec.yaml
+          $content = $content -replace "^version:.*", "version: ${version}+${buildNumber}"
+          $content | Set-Content pubspec.yaml
+          Write-Host "已同步版本号到 client/pubspec.yaml: ${version}+${buildNumber}"
           $fullVersion = "${version}+${buildNumber}"
           $tagVersion = "v${version}"
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
@@ -252,29 +245,26 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
           channel: 'stable'
           cache: true
 
-      - name: Extract version from tag or pubspec.yaml
+      - name: Extract version from VERSION file
         id: get_version
         run: |
-          cd server
-          # 如果是标签触发，从标签提取版本号
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            TAG_VERSION=${GITHUB_REF#refs/tags/v}
-            VERSION=$TAG_VERSION
-            # 从VERSION文件读取build number，如果没有则使用1
-            if [ -f "../../VERSION" ]; then
-              BUILD_NUMBER=$(grep "^SERVER_VERSION=" ../../VERSION | sed 's/.*+//' || echo "1")
-            else
+          # 始终从 VERSION 文件读取版本号（唯一数据源）
+          if [ -f "VERSION" ]; then
+            SERVER_VERSION=$(grep "^SERVER_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            VERSION=$(echo "$SERVER_VERSION" | sed 's/+.*//')
+            BUILD_NUMBER=$(echo "$SERVER_VERSION" | sed 's/.*+//')
+            if [ "$SERVER_VERSION" == "$VERSION" ]; then
               BUILD_NUMBER="1"
             fi
-            echo "使用标签版本号: $VERSION"
-            # 同步版本号到 pubspec.yaml
-            sed -i "s/^version:.*/version: ${VERSION}+${BUILD_NUMBER}/" pubspec.yaml
+            echo "从 VERSION 文件读取服务器版本号: $SERVER_VERSION"
           else
-            # 否则从 pubspec.yaml 读取
-            VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
-            BUILD_NUMBER=$(grep '^version:' pubspec.yaml | sed 's/.*+//')
-            echo "使用 pubspec.yaml 版本号: $VERSION"
+            echo "错误: VERSION 文件不存在"
+            exit 1
           fi
+          # 同步版本号到 pubspec.yaml
+          cd server
+          sed -i "s/^version:.*/version: ${VERSION}+${BUILD_NUMBER}/" pubspec.yaml
+          echo "已同步版本号到 server/pubspec.yaml: ${VERSION}+${BUILD_NUMBER}"
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_OUTPUT
           echo "FULL_VERSION=${VERSION}+${BUILD_NUMBER}" >> $GITHUB_OUTPUT
@@ -498,3 +488,5 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
             git commit -m "发布版本 ${{ steps.get_tag_version.outputs.VERSION }} - 更新 GitHub 自动更新配置"
             git push origin main || echo "推送失败，可能已是最新版本"
           fi
+
+
