@@ -424,6 +424,43 @@ jobs:
           name: helloknightrcc_server_android
           path: ./artifacts-temp
 
+      - name: Download updated VERSION files
+        uses: actions/download-artifact@v4
+        with:
+          name: VERSION-client
+          path: ./version-temp-client
+        continue-on-error: true
+
+      - name: Download updated VERSION file (server)
+        uses: actions/download-artifact@v4
+        with:
+          name: VERSION-server
+          path: ./version-temp-server
+        continue-on-error: true
+
+      - name: Merge updated VERSION file
+        run: |
+          # 合并客户端和服务器构建号更新
+          if [ -f "version-temp-client/VERSION" ]; then
+            # 从客户端构建的 VERSION 文件读取 CLIENT_VERSION
+            CLIENT_VERSION=$(grep "^CLIENT_VERSION=" version-temp-client/VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            if [ -n "$CLIENT_VERSION" ]; then
+              sed -i "s/^CLIENT_VERSION=.*/CLIENT_VERSION=${CLIENT_VERSION}/" VERSION
+              echo "已更新 CLIENT_VERSION: $CLIENT_VERSION"
+            fi
+          fi
+          # 从服务器构建的 VERSION 文件读取 SERVER_VERSION
+          if [ -f "version-temp-server/VERSION" ]; then
+            SERVER_VERSION=$(grep "^SERVER_VERSION=" version-temp-server/VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            if [ -n "$SERVER_VERSION" ]; then
+              sed -i "s/^SERVER_VERSION=.*/SERVER_VERSION=${SERVER_VERSION}/" VERSION
+              echo "已更新 SERVER_VERSION: $SERVER_VERSION"
+            fi
+          fi
+          rm -rf version-temp-client version-temp-server
+          echo "合并后的 VERSION 文件:"
+          cat VERSION
+
       - name: Flatten artifacts structure
         run: |
           mkdir -p artifacts
