@@ -23,72 +23,28 @@ jobs:
           channel: 'stable'
           cache: false
 
-      - name: Extract version from VERSION.yaml file
+      - name: Extract and sync version
         id: get_version
         run: |
           # 安装 PyYAML（如果需要）
           python3 -m pip install --user pyyaml || true
           
-          # 始终从 VERSION.yaml 文件读取版本号（唯一数据源）
-          if [ -f "VERSION.yaml" ]; then
-            CLIENT_VERSION=$(./scripts/version.sh get client)
-            # 验证版本号不为空
-            if [ -z "$CLIENT_VERSION" ]; then
-              echo "错误: 无法从 VERSION.yaml 读取客户端版本号"
-              exit 1
-            fi
-            VERSION=$(echo "$CLIENT_VERSION" | sed 's/+.*//')
-            BUILD_NUMBER=$(echo "$CLIENT_VERSION" | sed 's/.*+//')
-            if [ "$CLIENT_VERSION" == "$VERSION" ]; then
-              BUILD_NUMBER="1"
-            fi
-            # 验证版本号格式（必须包含 major.minor.patch）
-            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "错误: 版本号格式不正确: $VERSION (应为 x.y.z 格式)"
-              exit 1
-            fi
-            # 验证构建号不为空
-            if [ -z "$BUILD_NUMBER" ]; then
-              BUILD_NUMBER="1"
-            fi
-            echo "从 VERSION.yaml 文件读取客户端版本号: $CLIENT_VERSION"
-          elif [ -f "VERSION" ]; then
-            # 兼容旧格式
-            CLIENT_VERSION=$(grep "^CLIENT_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
-            # 验证版本号不为空
-            if [ -z "$CLIENT_VERSION" ]; then
-              echo "错误: 无法从 VERSION 文件读取客户端版本号"
-              exit 1
-            fi
-            VERSION=$(echo "$CLIENT_VERSION" | sed 's/+.*//')
-            BUILD_NUMBER=$(echo "$CLIENT_VERSION" | sed 's/.*+//')
-            if [ "$CLIENT_VERSION" == "$VERSION" ]; then
-              BUILD_NUMBER="1"
-            fi
-            # 验证版本号格式（必须包含 major.minor.patch）
-            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "错误: 版本号格式不正确: $VERSION (应为 x.y.z 格式)"
-              exit 1
-            fi
-            # 验证构建号不为空
-            if [ -z "$BUILD_NUMBER" ]; then
-              BUILD_NUMBER="1"
-            fi
-            echo "从 VERSION 文件（旧格式）读取客户端版本号: $CLIENT_VERSION"
-          else
-            echo "错误: VERSION.yaml 文件不存在"
-            exit 1
-          fi
-          # 同步版本号到 pubspec.yaml（使用当前版本号，不递增）
-          cd client
-          sed -i '' "s/^version:.*/version: ${VERSION}+${BUILD_NUMBER}/" pubspec.yaml
-          echo "已同步版本号到 client/pubspec.yaml: ${VERSION}+${BUILD_NUMBER}"
+          # 使用统一的版本管理模块提取和同步版本号
+          python3 scripts/lib/version_manager.py extract client --sync client/pubspec.yaml > version_output.json
+          
+          # 解析 JSON 输出并设置 GitHub Actions 输出
+          VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['version'])")
+          BUILD_NUMBER=$(python3 -c "import json; print(json.load(open('version_output.json'))['build_number'])")
+          FULL_VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['full_version'])")
+          TAG_VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['tag_version'])")
+          
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_OUTPUT
-          echo "FULL_VERSION=${VERSION}+${BUILD_NUMBER}" >> $GITHUB_OUTPUT
-          echo "TAG_VERSION=v${VERSION}" >> $GITHUB_OUTPUT
+          echo "FULL_VERSION=$FULL_VERSION" >> $GITHUB_OUTPUT
+          echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
           echo "Build Number: $BUILD_NUMBER"
+          echo "Full Version: $FULL_VERSION"
 
       - name: Build macOS app
         run: |
@@ -207,86 +163,25 @@ jobs:
           flutter-version: '3.24.0'
           channel: 'stable'
           cache: false
-          cache-key: 'flutter-windows-stable-3.24.0-${{ hashFiles(''client/pubspec.lock'') }}'
-          cache-path: 'client/.dart_tool'
 
-      - name: Extract version from VERSION.yaml file
+      - name: Extract and sync version
         id: get_version
-        shell: powershell
         run: |
           # 安装 PyYAML（如果需要）
           python -m pip install --user pyyaml
           
-          # 始终从 VERSION.yaml 文件读取版本号（唯一数据源）
-          if (Test-Path "VERSION.yaml") {
-            $clientVersion = bash scripts/version.sh get client
-            # 验证版本号不为空
-            if ([string]::IsNullOrWhiteSpace($clientVersion)) {
-              Write-Host "错误: 无法从 VERSION.yaml 读取客户端版本号"
-              exit 1
-            }
-            $version = $clientVersion -replace "\+.*", ""
-            $buildNumber = $clientVersion -replace ".*\+", ""
-            if ($buildNumber -eq $clientVersion) {
-              $buildNumber = "1"
-            }
-            # 验证版本号格式（必须包含 major.minor.patch）
-            if ($version -notmatch '^\d+\.\d+\.\d+$') {
-              Write-Host "错误: 版本号格式不正确: $version (应为 x.y.z 格式)"
-              exit 1
-            }
-            # 验证构建号不为空
-            if ([string]::IsNullOrWhiteSpace($buildNumber)) {
-              $buildNumber = "1"
-            }
-            Write-Host "Reading client version from VERSION.yaml file: $clientVersion"
-          } elseif (Test-Path "VERSION") {
-            # 兼容旧格式
-            $versionLine = Get-Content "VERSION" | Select-String -Pattern "^CLIENT_VERSION="
-            if ($versionLine) {
-              $clientVersion = $versionLine -replace "CLIENT_VERSION=", "" -replace " ", ""
-              # 验证版本号不为空
-              if ([string]::IsNullOrWhiteSpace($clientVersion)) {
-                Write-Host "错误: 无法从 VERSION 文件读取客户端版本号"
-                exit 1
-              }
-              $version = $clientVersion -replace "\+.*", ""
-              $buildNumber = $clientVersion -replace ".*\+", ""
-              if ($buildNumber -eq $clientVersion) {
-                $buildNumber = "1"
-              }
-              # 验证版本号格式（必须包含 major.minor.patch）
-              if ($version -notmatch '^\d+\.\d+\.\d+$') {
-                Write-Host "错误: 版本号格式不正确: $version (应为 x.y.z 格式)"
-                exit 1
-              }
-              # 验证构建号不为空
-              if ([string]::IsNullOrWhiteSpace($buildNumber)) {
-                $buildNumber = "1"
-              }
-              Write-Host "Reading client version from VERSION file (old format): $clientVersion"
-            } else {
-              Write-Host "Error: CLIENT_VERSION not found in VERSION file"
-              exit 1
-            }
-          } else {
-            Write-Host "Error: VERSION.yaml file not found"
-            exit 1
-          }
-          # Sync version to pubspec.yaml（使用当前版本号，不递增）
-          cd client
-          $fullVersion = "$version+$buildNumber"
-          $content = Get-Content pubspec.yaml
-          $content = $content -replace "^version:.*", "version: $fullVersion"
-          $content | Set-Content pubspec.yaml
-          Write-Host "Version synced to client/pubspec.yaml: $fullVersion"
-          $tagVersion = "v$version"
-          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
-          echo "BUILD_NUMBER=$buildNumber" >> $env:GITHUB_OUTPUT
-          echo "FULL_VERSION=$fullVersion" >> $env:GITHUB_OUTPUT
-          echo "TAG_VERSION=$tagVersion" >> $env:GITHUB_OUTPUT
-          Write-Host "Version: $version"
-          Write-Host "Build Number: $buildNumber"
+          # 使用统一的版本管理模块提取和同步版本号
+          python scripts/lib/version_manager.py extract client --sync client/pubspec.yaml > version_output.json
+          
+          # 解析 JSON 输出并设置 GitHub Actions 输出
+          $versionInfo = Get-Content version_output.json | ConvertFrom-Json
+          echo "VERSION=$($versionInfo.version)" >> $env:GITHUB_OUTPUT
+          echo "BUILD_NUMBER=$($versionInfo.build_number)" >> $env:GITHUB_OUTPUT
+          echo "FULL_VERSION=$($versionInfo.full_version)" >> $env:GITHUB_OUTPUT
+          echo "TAG_VERSION=$($versionInfo.tag_version)" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $($versionInfo.version)"
+          Write-Host "Build Number: $($versionInfo.build_number)"
+          Write-Host "Full Version: $($versionInfo.full_version)"
 
       - name: Build Windows app
         run: |
@@ -409,72 +304,28 @@ jobs:
           channel: 'stable'
           cache: false
 
-      - name: Extract version from VERSION.yaml file
+      - name: Extract and sync version
         id: get_version
         run: |
           # 安装 PyYAML（如果需要）
           python3 -m pip install --user pyyaml || true
           
-          # 始终从 VERSION.yaml 文件读取版本号（唯一数据源）
-          if [ -f "VERSION.yaml" ]; then
-            SERVER_VERSION=$(./scripts/version.sh get server)
-            # 验证版本号不为空
-            if [ -z "$SERVER_VERSION" ]; then
-              echo "错误: 无法从 VERSION.yaml 读取服务器版本号"
-              exit 1
-            fi
-            VERSION=$(echo "$SERVER_VERSION" | sed 's/+.*//')
-            BUILD_NUMBER=$(echo "$SERVER_VERSION" | sed 's/.*+//')
-            if [ "$SERVER_VERSION" == "$VERSION" ]; then
-              BUILD_NUMBER="1"
-            fi
-            # 验证版本号格式（必须包含 major.minor.patch）
-            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "错误: 版本号格式不正确: $VERSION (应为 x.y.z 格式)"
-              exit 1
-            fi
-            # 验证构建号不为空
-            if [ -z "$BUILD_NUMBER" ]; then
-              BUILD_NUMBER="1"
-            fi
-            echo "从 VERSION.yaml 文件读取服务器版本号: $SERVER_VERSION"
-          elif [ -f "VERSION" ]; then
-            # 兼容旧格式
-            SERVER_VERSION=$(grep "^SERVER_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
-            # 验证版本号不为空
-            if [ -z "$SERVER_VERSION" ]; then
-              echo "错误: 无法从 VERSION 文件读取服务器版本号"
-              exit 1
-            fi
-            VERSION=$(echo "$SERVER_VERSION" | sed 's/+.*//')
-            BUILD_NUMBER=$(echo "$SERVER_VERSION" | sed 's/.*+//')
-            if [ "$SERVER_VERSION" == "$VERSION" ]; then
-              BUILD_NUMBER="1"
-            fi
-            # 验证版本号格式（必须包含 major.minor.patch）
-            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "错误: 版本号格式不正确: $VERSION (应为 x.y.z 格式)"
-              exit 1
-            fi
-            # 验证构建号不为空
-            if [ -z "$BUILD_NUMBER" ]; then
-              BUILD_NUMBER="1"
-            fi
-            echo "从 VERSION 文件（旧格式）读取服务器版本号: $SERVER_VERSION"
-          else
-            echo "错误: VERSION.yaml 文件不存在"
-            exit 1
-          fi
-          # 同步版本号到 pubspec.yaml（使用当前版本号，不递增）
-          cd server
-          sed -i "s/^version:.*/version: ${VERSION}+${BUILD_NUMBER}/" pubspec.yaml
-          echo "已同步版本号到 server/pubspec.yaml: ${VERSION}+${BUILD_NUMBER}"
+          # 使用统一的版本管理模块提取和同步版本号
+          python3 scripts/lib/version_manager.py extract server --sync server/pubspec.yaml > version_output.json
+          
+          # 解析 JSON 输出并设置 GitHub Actions 输出
+          VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['version'])")
+          BUILD_NUMBER=$(python3 -c "import json; print(json.load(open('version_output.json'))['build_number'])")
+          FULL_VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['full_version'])")
+          TAG_VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['tag_version'])")
+          
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_OUTPUT
-          echo "FULL_VERSION=${VERSION}+${BUILD_NUMBER}" >> $GITHUB_OUTPUT
-          echo "TAG_VERSION=v${VERSION}" >> $GITHUB_OUTPUT
+          echo "FULL_VERSION=$FULL_VERSION" >> $GITHUB_OUTPUT
+          echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
           echo "Build Number: $BUILD_NUMBER"
+          echo "Full Version: $FULL_VERSION"
 
       - name: Build Android APK
         run: |
@@ -541,13 +392,9 @@ jobs:
           
           # 读取当前版本号并递增构建号
           if [ -f "VERSION.yaml" ]; then
-            # 使用 version.sh 脚本递增构建号
-            ./scripts/version.sh bump client build
-            ./scripts/version.sh bump server build
-            
-            # 读取新版本号
-            NEW_CLIENT_VERSION=$(./scripts/version.sh get client)
-            NEW_SERVER_VERSION=$(./scripts/version.sh get server)
+            # 使用统一的版本管理模块递增构建号
+            NEW_CLIENT_VERSION=$(python3 scripts/lib/version_manager.py bump client build)
+            NEW_SERVER_VERSION=$(python3 scripts/lib/version_manager.py bump server build)
             
             echo "客户端构建号已递增: → ${NEW_CLIENT_VERSION}"
             echo "服务器构建号已递增: → ${NEW_SERVER_VERSION}"
@@ -590,10 +437,14 @@ jobs:
 
       - name: Commit and push version increment
         run: |
+          # 安装 PyYAML（如果需要）
+          python3 -m pip install --user pyyaml || true
+          
           if [ -f "VERSION.yaml" ]; then
             git add VERSION.yaml
-            CLIENT_VERSION=$(./scripts/version.sh get client)
-            SERVER_VERSION=$(./scripts/version.sh get server)
+            # 使用统一的版本管理模块读取版本号
+            CLIENT_VERSION=$(python3 scripts/lib/version_manager.py extract client --json | python3 -c "import json, sys; print(json.load(sys.stdin)['full_version'])")
+            SERVER_VERSION=$(python3 scripts/lib/version_manager.py extract server --json | python3 -c "import json, sys; print(json.load(sys.stdin)['full_version'])")
           elif [ -f "VERSION" ]; then
             git add VERSION
             CLIENT_VERSION=$(grep "^CLIENT_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
@@ -628,75 +479,37 @@ jobs:
           # 安装 PyYAML（如果需要）
           python3 -m pip install --user pyyaml || true
           
-          # 始终从 VERSION.yaml 文件读取版本号（唯一数据源）
-          if [ -f "VERSION.yaml" ]; then
-            # 读取客户端版本号
-            CLIENT_VERSION=$(./scripts/version.sh get client)
-            CLIENT_VERSION_NUM=$(echo "$CLIENT_VERSION" | sed 's/+.*//')
-            CLIENT_BUILD_NUMBER=$(echo "$CLIENT_VERSION" | sed 's/.*+//')
-            if [ "$CLIENT_VERSION" == "$CLIENT_VERSION_NUM" ]; then
-              CLIENT_BUILD_NUMBER="1"
-            fi
-            echo "从 VERSION.yaml 文件读取客户端版本号: $CLIENT_VERSION"
-            
-            # 读取服务器版本号
-            SERVER_VERSION=$(./scripts/version.sh get server)
-            SERVER_VERSION_NUM=$(echo "$SERVER_VERSION" | sed 's/+.*//')
-            SERVER_BUILD_NUMBER=$(echo "$SERVER_VERSION" | sed 's/.*+//')
-            if [ "$SERVER_VERSION" == "$SERVER_VERSION_NUM" ]; then
-              SERVER_BUILD_NUMBER="1"
-            fi
-            echo "从 VERSION.yaml 文件读取服务器版本号: $SERVER_VERSION"
-            
-            # 使用客户端版本号生成tag（客户端和服务器版本号应该一致）
-            TAG_VERSION="v${CLIENT_VERSION_NUM}"
-            
-            echo "CLIENT_VERSION=${CLIENT_VERSION}" >> $GITHUB_OUTPUT
-            echo "CLIENT_VERSION_NUM=${CLIENT_VERSION_NUM}" >> $GITHUB_OUTPUT
-            echo "CLIENT_BUILD_NUMBER=${CLIENT_BUILD_NUMBER}" >> $GITHUB_OUTPUT
-            echo "CLIENT_FULL_VERSION=${CLIENT_VERSION_NUM}+${CLIENT_BUILD_NUMBER}" >> $GITHUB_OUTPUT
-            
-            echo "SERVER_VERSION=${SERVER_VERSION}" >> $GITHUB_OUTPUT
-            echo "SERVER_VERSION_NUM=${SERVER_VERSION_NUM}" >> $GITHUB_OUTPUT
-            echo "SERVER_BUILD_NUMBER=${SERVER_BUILD_NUMBER}" >> $GITHUB_OUTPUT
-            echo "SERVER_FULL_VERSION=${SERVER_VERSION_NUM}+${SERVER_BUILD_NUMBER}" >> $GITHUB_OUTPUT
-            
-            echo "TAG_VERSION=${TAG_VERSION}" >> $GITHUB_OUTPUT
-            echo "RELEASE_VERSION=${CLIENT_VERSION_NUM}" >> $GITHUB_OUTPUT
-          elif [ -f "VERSION" ]; then
-            # 兼容旧格式
-            CLIENT_VERSION=$(grep "^CLIENT_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
-            CLIENT_VERSION_NUM=$(echo "$CLIENT_VERSION" | sed 's/+.*//')
-            CLIENT_BUILD_NUMBER=$(echo "$CLIENT_VERSION" | sed 's/.*+//')
-            if [ "$CLIENT_VERSION" == "$CLIENT_VERSION_NUM" ]; then
-              CLIENT_BUILD_NUMBER="1"
-            fi
-            
-            SERVER_VERSION=$(grep "^SERVER_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
-            SERVER_VERSION_NUM=$(echo "$SERVER_VERSION" | sed 's/+.*//')
-            SERVER_BUILD_NUMBER=$(echo "$SERVER_VERSION" | sed 's/.*+//')
-            if [ "$SERVER_VERSION" == "$SERVER_VERSION_NUM" ]; then
-              SERVER_BUILD_NUMBER="1"
-            fi
-            
-            TAG_VERSION="v${CLIENT_VERSION_NUM}"
-            
-            echo "CLIENT_VERSION=${CLIENT_VERSION}" >> $GITHUB_OUTPUT
-            echo "CLIENT_VERSION_NUM=${CLIENT_VERSION_NUM}" >> $GITHUB_OUTPUT
-            echo "CLIENT_BUILD_NUMBER=${CLIENT_BUILD_NUMBER}" >> $GITHUB_OUTPUT
-            echo "CLIENT_FULL_VERSION=${CLIENT_VERSION_NUM}+${CLIENT_BUILD_NUMBER}" >> $GITHUB_OUTPUT
-            
-            echo "SERVER_VERSION=${SERVER_VERSION}" >> $GITHUB_OUTPUT
-            echo "SERVER_VERSION_NUM=${SERVER_VERSION_NUM}" >> $GITHUB_OUTPUT
-            echo "SERVER_BUILD_NUMBER=${SERVER_BUILD_NUMBER}" >> $GITHUB_OUTPUT
-            echo "SERVER_FULL_VERSION=${SERVER_VERSION_NUM}+${SERVER_BUILD_NUMBER}" >> $GITHUB_OUTPUT
-            
-            echo "TAG_VERSION=${TAG_VERSION}" >> $GITHUB_OUTPUT
-            echo "RELEASE_VERSION=${CLIENT_VERSION_NUM}" >> $GITHUB_OUTPUT
-          else
-            echo "错误: VERSION.yaml 文件不存在"
-            exit 1
-          fi
+          # 使用统一的版本管理模块提取版本号
+          python3 scripts/lib/version_manager.py extract client --json > client_version.json
+          python3 scripts/lib/version_manager.py extract server --json > server_version.json
+          
+          # 解析 JSON 输出并设置 GitHub Actions 输出
+          CLIENT_VERSION_NUM=$(python3 -c "import json; print(json.load(open('client_version.json'))['version'])")
+          CLIENT_BUILD_NUMBER=$(python3 -c "import json; print(json.load(open('client_version.json'))['build_number'])")
+          CLIENT_FULL_VERSION=$(python3 -c "import json; print(json.load(open('client_version.json'))['full_version'])")
+          
+          SERVER_VERSION_NUM=$(python3 -c "import json; print(json.load(open('server_version.json'))['version'])")
+          SERVER_BUILD_NUMBER=$(python3 -c "import json; print(json.load(open('server_version.json'))['build_number'])")
+          SERVER_FULL_VERSION=$(python3 -c "import json; print(json.load(open('server_version.json'))['full_version'])")
+          
+          # 使用客户端版本号生成tag（客户端和服务器版本号应该一致）
+          TAG_VERSION="v${CLIENT_VERSION_NUM}"
+          
+          echo "CLIENT_VERSION=${CLIENT_FULL_VERSION}" >> $GITHUB_OUTPUT
+          echo "CLIENT_VERSION_NUM=${CLIENT_VERSION_NUM}" >> $GITHUB_OUTPUT
+          echo "CLIENT_BUILD_NUMBER=${CLIENT_BUILD_NUMBER}" >> $GITHUB_OUTPUT
+          echo "CLIENT_FULL_VERSION=${CLIENT_FULL_VERSION}" >> $GITHUB_OUTPUT
+          
+          echo "SERVER_VERSION=${SERVER_FULL_VERSION}" >> $GITHUB_OUTPUT
+          echo "SERVER_VERSION_NUM=${SERVER_VERSION_NUM}" >> $GITHUB_OUTPUT
+          echo "SERVER_BUILD_NUMBER=${SERVER_BUILD_NUMBER}" >> $GITHUB_OUTPUT
+          echo "SERVER_FULL_VERSION=${SERVER_FULL_VERSION}" >> $GITHUB_OUTPUT
+          
+          echo "TAG_VERSION=${TAG_VERSION}" >> $GITHUB_OUTPUT
+          echo "RELEASE_VERSION=${CLIENT_VERSION_NUM}" >> $GITHUB_OUTPUT
+          
+          echo "客户端版本: ${CLIENT_FULL_VERSION}"
+          echo "服务器版本: ${SERVER_FULL_VERSION}"
 
       - name: Download macOS artifact
         uses: actions/download-artifact@v4

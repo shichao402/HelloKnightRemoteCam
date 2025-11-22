@@ -9,15 +9,21 @@ set -e
 
 # 获取版本号
 if [ $# -eq 0 ]; then
-    # 优先从 VERSION.yaml 读取版本号
-    if [ -f "VERSION.yaml" ]; then
+    # 优先从 VERSION.yaml 读取版本号（使用统一的版本管理模块）
+    if [ -f "scripts/lib/version_manager.py" ]; then
+        # 使用 version_manager.py 获取版本号（JSON 格式）
+        VERSION=$(python3 scripts/lib/version_manager.py get client --json 2>/dev/null | \
+                 python3 -c "import sys, json; print(json.load(sys.stdin)['version'])" 2>/dev/null || \
+                 python3 scripts/lib/version_manager.py get client 2>/dev/null | sed 's/+.*//')
+    elif [ -f "VERSION.yaml" ]; then
+        # 回退到使用 version.sh（用户接口）
         VERSION=$(./scripts/version.sh get client | sed 's/+.*//')
     elif [ -f "client/pubspec.yaml" ]; then
         VERSION=$(grep '^version:' client/pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
     elif [ -f "server/pubspec.yaml" ]; then
         VERSION=$(grep '^version:' server/pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
     else
-        echo "错误: 未找到 VERSION.yaml 或 pubspec.yaml 文件"
+        echo "错误: 未找到版本管理模块或版本文件"
         exit 1
     fi
 else

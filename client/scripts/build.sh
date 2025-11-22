@@ -67,16 +67,18 @@ echo "使用 Flutter: $FLUTTER"
 # 同步版本号（只同步客户端）
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-VERSION_SCRIPT="$PROJECT_ROOT/scripts/version.sh"
+VERSION_MANAGER="$PROJECT_ROOT/scripts/lib/version_manager.py"
 PUBSPEC_FILE="pubspec.yaml"
 
 # 注意：不再自动还原 pubspec.yaml，保留版本号同步后的状态
 
-if [ -f "$VERSION_SCRIPT" ]; then
+if [ -f "$VERSION_MANAGER" ]; then
     echo "同步客户端版本号到 pubspec.yaml..."
-    bash "$VERSION_SCRIPT" sync client
+    python3 "$VERSION_MANAGER" sync client --pubspec "$(pwd)/$PUBSPEC_FILE" || {
+        echo "警告: 版本号同步失败，跳过版本号同步"
+    }
 else
-    echo "警告: 版本号同步脚本未找到，跳过版本号同步"
+    echo "警告: 版本管理模块未找到，跳过版本号同步"
 fi
 
 # 获取依赖
