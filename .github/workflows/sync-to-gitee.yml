@@ -28,6 +28,7 @@ jobs:
 
       - name: Download Release assets
         uses: actions/github-script@v7
+        id: release_info
         with:
           script: |
             const { data: release } = await github.rest.repos.getReleaseByTag({
@@ -39,38 +40,36 @@ jobs:
             const assets = release.assets;
             console.log(`Found ${assets.length} assets`);
             
-            // 下载所有 assets
-            const fs = require('fs');
-            const path = require('path');
-            const https = require('https');
-            
-            const downloadDir = './release-assets';
-            if (!fs.existsSync(downloadDir)) {
-              fs.mkdirSync(downloadDir, { recursive: true });
-            }
-            
-            for (const asset of assets) {
-              const filePath = path.join(downloadDir, asset.name);
-              console.log(`Downloading ${asset.name}...`);
-              
-              const file = fs.createWriteStream(filePath);
-              const response = await new Promise((resolve, reject) => {
-                https.get(asset.browser_download_url, (res) => {
-                  res.pipe(file);
-                  res.on('end', () => resolve(res));
-                  res.on('error', reject);
-                });
-              });
-              
-              file.on('finish', () => {
-                file.close();
-                console.log(`Downloaded ${asset.name}`);
-              });
-            }
-            
             // 保存 release 信息
             core.setOutput('release_body', release.body || '');
             core.setOutput('release_name', release.name || release.tag_name);
+            
+            // 返回 assets 信息供后续步骤使用
+            return JSON.stringify(assets.map(a => ({
+              name: a.name,
+              url: a.browser_download_url
+            })));
+
+      - name: Download assets files
+        run: |
+          mkdir -p release-assets
+          
+          # 使用 GitHub CLI 下载文件（如果可用）
+          if command -v gh &> /dev/null; then
+            echo "Using GitHub CLI to download assets..."
+            gh release download "${{ steps.get_version.outputs.TAG_NAME }}" -D release-assets
+          else
+            # 手动下载（使用 curl）
+            echo "Downloading assets manually..."
+            ASSETS='${{ steps.release_info.outputs.result }}'
+            echo "$ASSETS" | jq -r '.[] | "\(.url)|\(.name)"' | while IFS='|' read -r url name; do
+              echo "Downloading $name..."
+              curl -L -o "release-assets/$name" "$url"
+            done
+          fi
+          
+          echo "Downloaded files:"
+          ls -lh release-assets/
 
       - name: Create Gitee Release
         env:
