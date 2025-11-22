@@ -496,46 +496,41 @@ jobs:
           echo "  CLIENT_VERSION=$CLIENT_VERSION"
           echo "  SERVER_VERSION=$SERVER_VERSION"
           
-          # macOS文件 - 查找并重命名，然后打包为zip用于更新
+          # macOS文件 - 只使用zip文件（用于更新）
           MACOS_ZIP=$(find ./artifacts-temp -name "HelloKnightRCC_macos_*.zip" | head -1)
-          MACOS_DMG=$(find ./artifacts-temp -name "HelloKnightRCC_macos_*.dmg" | head -1)
           if [ -n "$MACOS_ZIP" ]; then
             mv "$MACOS_ZIP" "./artifacts/HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
             echo "重命名macOS ZIP: $(basename "$MACOS_ZIP") -> HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
-          fi
-          if [ -n "$MACOS_DMG" ]; then
-            mv "$MACOS_DMG" "./artifacts/HelloKnightRCC_macos_${CLIENT_VERSION}.dmg"
-            echo "重命名macOS DMG: $(basename "$MACOS_DMG") -> HelloKnightRCC_macos_${CLIENT_VERSION}.dmg"
-            # 将DMG打包为zip用于更新
-            cd artifacts
-            zip "HelloKnightRCC_macos_${CLIENT_VERSION}_update.zip" "HelloKnightRCC_macos_${CLIENT_VERSION}.dmg"
-            cd ..
-            echo "已创建macOS更新zip: HelloKnightRCC_macos_${CLIENT_VERSION}_update.zip"
+          else
+            echo "警告: 未找到macOS ZIP文件"
           fi
           
-          # Windows文件 - 查找并重命名，然后打包为zip用于更新
+          # Windows文件 - 需要从exe创建zip用于更新
+          # 注意：Windows构建只生成exe，需要将其打包为zip
           WINDOWS_EXE=$(find ./artifacts-temp -name "HelloKnightRCC_windows_*_setup.exe" | head -1)
           if [ -n "$WINDOWS_EXE" ]; then
-            mv "$WINDOWS_EXE" "./artifacts/HelloKnightRCC_windows_${CLIENT_VERSION}_setup.exe"
-            echo "重命名Windows EXE: $(basename "$WINDOWS_EXE") -> HelloKnightRCC_windows_${CLIENT_VERSION}_setup.exe"
             # 将EXE打包为zip用于更新
-            cd artifacts
-            zip "HelloKnightRCC_windows_${CLIENT_VERSION}_update.zip" "HelloKnightRCC_windows_${CLIENT_VERSION}_setup.exe"
+            cd artifacts-temp
+            zip "../artifacts/HelloKnightRCC_windows_${CLIENT_VERSION}.zip" "$(basename "$WINDOWS_EXE")"
             cd ..
-            echo "已创建Windows更新zip: HelloKnightRCC_windows_${CLIENT_VERSION}_update.zip"
+            echo "已创建Windows更新zip: HelloKnightRCC_windows_${CLIENT_VERSION}.zip"
+          else
+            echo "警告: 未找到Windows EXE文件"
           fi
           
-          # Android文件 - 查找并重命名（现在是zip文件）
+          # Android文件 - 查找并重命名（已经是zip文件）
           ANDROID_ZIP=$(find ./artifacts-temp -name "helloknightrcc_server_android_*.zip" | head -1)
           if [ -n "$ANDROID_ZIP" ]; then
             mv "$ANDROID_ZIP" "./artifacts/helloknightrcc_server_android_${SERVER_VERSION}.zip"
             echo "重命名Android ZIP: $(basename "$ANDROID_ZIP") -> helloknightrcc_server_android_${SERVER_VERSION}.zip"
+          else
+            echo "警告: 未找到Android ZIP文件"
           fi
           
           rm -rf ./artifacts-temp
           
           echo ""
-          echo "重命名后的文件列表:"
+          echo "重命名后的文件列表（仅zip文件）:"
           ls -la artifacts/
 
       - name: Create Release
@@ -547,10 +542,8 @@ jobs:
             ## Release ${{ steps.get_versions.outputs.RELEASE_VERSION }}
 
             ### Client
-            - **macOS**: 
-              - DMG: HelloKnightRCC_macos_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.dmg (推荐)
-              - ZIP: HelloKnightRCC_macos_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.zip
-            - **Windows**: HelloKnightRCC_windows_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}_setup.exe
+            - **macOS**: HelloKnightRCC_macos_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.zip
+            - **Windows**: HelloKnightRCC_windows_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.zip
 
             ### Server
             - **Android**: helloknightrcc_server_android_${{ steps.get_versions.outputs.SERVER_FULL_VERSION }}.zip
@@ -559,8 +552,7 @@ jobs:
             - See commit history for details
           files: |
             artifacts/HelloKnightRCC_macos_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.zip
-            artifacts/HelloKnightRCC_macos_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.dmg
-            artifacts/HelloKnightRCC_windows_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}_setup.exe
+            artifacts/HelloKnightRCC_windows_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.zip
             artifacts/helloknightrcc_server_android_${{ steps.get_versions.outputs.SERVER_FULL_VERSION }}.zip
           draft: false
           prerelease: false
@@ -578,12 +570,12 @@ jobs:
           GITHUB_REPO="shichao402/HelloKnightRemoteCam"
           BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${TAG_VERSION}"
           
-          # 使用传递的版本号构建文件名（更新使用zip文件）
-          MACOS_UPDATE_FILE="HelloKnightRCC_macos_${CLIENT_VERSION}_update.zip"
-          WINDOWS_UPDATE_FILE="HelloKnightRCC_windows_${CLIENT_VERSION}_update.zip"
+          # 使用传递的版本号构建文件名（直接使用zip文件，不创建_update.zip）
+          MACOS_UPDATE_FILE="HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
+          WINDOWS_UPDATE_FILE="HelloKnightRCC_windows_${CLIENT_VERSION}.zip"
           ANDROID_FILE="helloknightrcc_server_android_${SERVER_VERSION}.zip"
           
-          echo "使用更新文件名（基于传递的版本号）:"
+          echo "使用更新文件名（基于传递的版本号，仅zip文件）:"
           echo "  macOS: $MACOS_UPDATE_FILE"
           echo "  Windows: $WINDOWS_UPDATE_FILE"
           echo "  Android: $ANDROID_FILE"
@@ -604,7 +596,7 @@ jobs:
             exit 1
           fi
           
-          # 计算文件SHA256 hash（使用更新zip文件）
+          # 计算文件SHA256 hash（使用zip文件）
           MACOS_HASH=""
           WINDOWS_HASH=""
           ANDROID_HASH=""

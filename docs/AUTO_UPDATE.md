@@ -21,6 +21,8 @@
 
 ### 配置格式
 
+**重要说明：** 更新列表中**仅包含zip包**，其他格式的文件（如dmg、exe等）不会出现在更新列表中。
+
 ```json
 {
   "client": {
@@ -52,9 +54,9 @@
       "android": {
         "version": "1.0.0+1",
         "versionNumber": "1.0.0",
-        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.0/helloknightrcc_server_android_1.0.0+1.apk",
-        "fileName": "helloknightrcc_server_android_1.0.0+1.apk",
-        "fileType": "apk",
+        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.0/helloknightrcc_server_android_1.0.0+1.zip",
+        "fileName": "helloknightrcc_server_android_1.0.0+1.zip",
+        "fileType": "zip",
         "platform": "android"
       }
     }
@@ -63,6 +65,15 @@
   "lastUpdated": "2025-01-21T10:00:00Z"
 }
 ```
+
+### 发布文件说明
+
+**GitHub Release 中只包含zip文件：**
+- macOS: `HelloKnightRCC_macos_<version>.zip`
+- Windows: `HelloKnightRCC_windows_<version>.zip`
+- Android: `helloknightrcc_server_android_<version>.zip`
+
+**注意：** 虽然构建过程中可能生成其他格式的文件（如dmg、exe等），但这些文件**不会上传到Release**，也不会出现在更新列表中。更新列表和Release中**仅包含zip包**。
 
 ## 完整发布流程
 

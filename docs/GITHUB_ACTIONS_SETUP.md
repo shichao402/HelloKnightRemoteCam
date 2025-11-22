@@ -47,18 +47,24 @@ git push origin v1.0.4
 
 - macOS: `HelloKnightRCC_macos_1.0.4+1.zip`
 - Windows: `HelloKnightRCC_windows_1.0.4+1.zip`
-- Android: `helloknightrcc_server_android_1.0.4+1.apk`
+- Android: `helloknightrcc_server_android_1.0.4+1.zip`
 
 ### GitHub Release
 
-构建产物会直接上传到 GitHub Release，文件名保持不变。
+**重要说明：** GitHub Release 中**仅上传zip文件**，其他格式的文件（如dmg、exe等）不会上传到Release。
+
+- macOS: `HelloKnightRCC_macos_<version>.zip`
+- Windows: `HelloKnightRCC_windows_<version>.zip`
+- Android: `helloknightrcc_server_android_<version>.zip`
 
 ## 更新配置文件
 
 生成的 `update_config_github.json` 包含：
 - 所有平台的版本信息
-- 下载 URL（指向 GitHub Releases）
+- 下载 URL（指向 GitHub Releases，**仅包含zip包**）
 - 更新检查 URL
+
+**重要说明：** 更新配置文件中**仅包含zip包的下载链接**，不包含其他格式的文件。发布后，更新列表中预期只有zip包。
 
 配置文件会自动推送到 GitHub 仓库的 `main` 分支。
 

@@ -19,9 +19,11 @@
 当你推送版本标签（如 `v1.0.5`）时：
 
 1. 从构建 artifacts 下载所有构建产物
-2. 创建 GitHub Release，并上传构建产物
-3. 生成 `update_config_github.json` 配置文件
+2. 创建 GitHub Release，**仅上传zip文件**（不包含dmg、exe等其他格式）
+3. 生成 `update_config_github.json` 配置文件（**仅包含zip包的下载链接**）
 4. 将配置文件提交并推送到 GitHub 仓库的 `main` 分支
+
+**重要说明：** 发布后，更新列表中**仅包含zip包**，其他格式的文件不会出现在更新列表中。
 
 ## 配置文件说明
 
@@ -34,6 +36,8 @@
 ```
 https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.5/HelloKnightRCC_macos_1.0.5+1.zip
 ```
+
+**注意：** 更新配置中**仅包含zip包的下载链接**，不包含其他格式的文件（如dmg、exe等）。
 
 ## 客户端配置
 
