@@ -315,38 +315,40 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
           echo "Tag Version: $TAG_VERSION"
           echo "Version: $VERSION"
 
-      - name: Extract client version from pubspec.yaml
+      - name: Extract client version from VERSION file
         id: get_client_version
         run: |
-          cd client
-          PUBSPEC_VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
-          BUILD_NUMBER=$(grep '^version:' pubspec.yaml | sed 's/.*+//')
-          # 如果是从标签触发，优先使用标签版本号；否则使用 pubspec.yaml 中的版本号
-          TAG_VERSION=${{ steps.get_tag_version.outputs.VERSION }}
-          if [ -n "$TAG_VERSION" ] && [ "$TAG_VERSION" != "" ]; then
-            VERSION=$TAG_VERSION
-            echo "使用标签版本号: $VERSION"
+          # 始终从 VERSION 文件读取版本号（唯一数据源）
+          if [ -f "VERSION" ]; then
+            CLIENT_VERSION=$(grep "^CLIENT_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            VERSION=$(echo "$CLIENT_VERSION" | sed 's/+.*//')
+            BUILD_NUMBER=$(echo "$CLIENT_VERSION" | sed 's/.*+//')
+            if [ "$CLIENT_VERSION" == "$VERSION" ]; then
+              BUILD_NUMBER="1"
+            fi
+            echo "从 VERSION 文件读取客户端版本号: $CLIENT_VERSION"
           else
-            VERSION=$PUBSPEC_VERSION
-            echo "使用 pubspec.yaml 版本号: $VERSION"
+            echo "错误: VERSION 文件不存在"
+            exit 1
           fi
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "FULL_VERSION=${VERSION}+${BUILD_NUMBER}" >> $GITHUB_OUTPUT
 
-      - name: Extract server version from pubspec.yaml
+      - name: Extract server version from VERSION file
         id: get_server_version
         run: |
-          cd server
-          PUBSPEC_VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
-          BUILD_NUMBER=$(grep '^version:' pubspec.yaml | sed 's/.*+//')
-          # 如果是从标签触发，优先使用标签版本号；否则使用 pubspec.yaml 中的版本号
-          TAG_VERSION=${{ steps.get_tag_version.outputs.VERSION }}
-          if [ -n "$TAG_VERSION" ] && [ "$TAG_VERSION" != "" ]; then
-            VERSION=$TAG_VERSION
-            echo "使用标签版本号: $VERSION"
+          # 始终从 VERSION 文件读取版本号（唯一数据源）
+          if [ -f "VERSION" ]; then
+            SERVER_VERSION=$(grep "^SERVER_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            VERSION=$(echo "$SERVER_VERSION" | sed 's/+.*//')
+            BUILD_NUMBER=$(echo "$SERVER_VERSION" | sed 's/.*+//')
+            if [ "$SERVER_VERSION" == "$VERSION" ]; then
+              BUILD_NUMBER="1"
+            fi
+            echo "从 VERSION 文件读取服务器版本号: $SERVER_VERSION"
           else
-            VERSION=$PUBSPEC_VERSION
-            echo "使用 pubspec.yaml 版本号: $VERSION"
+            echo "错误: VERSION 文件不存在"
+            exit 1
           fi
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "FULL_VERSION=${VERSION}+${BUILD_NUMBER}" >> $GITHUB_OUTPUT
