@@ -34,7 +34,9 @@ jobs:
           cache: false
 
       - name: Cache Flutter dependencies
+        id: cache_flutter
         uses: actions/cache@v4
+        continue-on-error: true
         with:
           path: |
             client/.dart_tool
@@ -200,7 +202,9 @@ jobs:
           cache: false
 
       - name: Cache Flutter dependencies
+        id: cache_flutter
         uses: actions/cache@v4
+        continue-on-error: true
         with:
           path: |
             client/.dart_tool
@@ -213,9 +217,13 @@ jobs:
         id: get_version
         run: |
           # 安装 PyYAML（如果需要，优先使用缓存）
-          # Windows 上使用 --user 即可
-          python -m pip install --user pyyaml --quiet || \
-          python -c "import yaml" 2>/dev/null || python -m pip install pyyaml --quiet
+          # Windows PowerShell 语法
+          $ErrorActionPreference = "SilentlyContinue"
+          python -c "import yaml" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            python -m pip install --user pyyaml --quiet
+          }
+          $ErrorActionPreference = "Continue"
           
           # 使用统一的版本管理模块提取和同步版本号
           python scripts/lib/version_manager.py extract client --sync client/pubspec.yaml > version_output.json
@@ -363,7 +371,9 @@ jobs:
           cache: false
 
       - name: Cache Flutter dependencies
+        id: cache_flutter
         uses: actions/cache@v4
+        continue-on-error: true
         with:
           path: |
             server/.dart_tool
@@ -448,7 +458,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
+          fetch-depth: 1  # 只获取最新提交，加快 checkout
 
       - name: Increment build numbers
         id: increment_version
@@ -549,7 +559,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 1  # 只需要最新提交即可
+          fetch-depth: 1  # 只获取最新提交，加快 checkout  # 需要完整历史以计算 hashFiles
 
       - name: Cache Python dependencies
         uses: actions/cache@v4
