@@ -15,29 +15,54 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Extract version from tag
+      - name: Extract version from release
         id: get_version
         run: |
-          # 从 release tag 获取版本号
+          # 从 release 事件获取 tag 名称
+          # release 事件的 GITHUB_REF 格式可能是 refs/tags/v1.0.0
           TAG_NAME=${GITHUB_REF#refs/tags/}
+          
+          # 如果没有从 GITHUB_REF 获取到，尝试从环境变量获取
+          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" == "$GITHUB_REF" ]; then
+            # release 事件可能使用不同的 ref
+            TAG_NAME=${GITHUB_REF#refs/heads/}
+          fi
+          
+          # 如果还是获取不到，从 GitHub API 获取
+          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" == "$GITHUB_REF" ]; then
+            TAG_NAME=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/latest" | \
+              jq -r '.tag_name // empty')
+          fi
+          
           VERSION=${TAG_NAME#v}  # 去掉 v 前缀
           echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_OUTPUT
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
           echo "Release tag: ${TAG_NAME}"
           echo "Version: ${VERSION}"
 
-      - name: Download Release assets
+      - name: Get Release info
         uses: actions/github-script@v7
         id: release_info
         with:
           script: |
-            const { data: release } = await github.rest.repos.getReleaseByTag({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag: '${{ steps.get_version.outputs.TAG_NAME }}'
-            });
+            // 从 release 事件获取 release 信息
+            let release;
+            if (context.payload.release) {
+              // release 事件直接包含 release 信息
+              release = context.payload.release;
+            } else {
+              // 否则通过 API 获取
+              const tagName = '${{ steps.get_version.outputs.TAG_NAME }}';
+              const { data } = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: tagName
+              });
+              release = data;
+            }
             
-            const assets = release.assets;
+            const assets = release.assets || [];
             console.log(`Found ${assets.length} assets`);
             
             // 保存 release 信息
