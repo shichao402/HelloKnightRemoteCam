@@ -38,6 +38,37 @@ class FileDownloadService {
       final filePath = path.join(downloadDir, finalFileName);
       _logger.log('保存路径: $filePath', tag: 'DOWNLOAD');
       
+      // 检查文件是否已存在
+      final existingFile = File(filePath);
+      if (await existingFile.exists()) {
+        final existingSize = await existingFile.length();
+        _logger.log('文件已存在: $filePath, 大小: $existingSize 字节', tag: 'DOWNLOAD');
+        
+        // 尝试获取远程文件大小（如果可能）
+        try {
+          final headResponse = await _dio.head(url);
+          final contentLength = headResponse.headers.value('content-length');
+          if (contentLength != null) {
+            final remoteSize = int.tryParse(contentLength);
+            if (remoteSize != null && existingSize == remoteSize) {
+              _logger.log('文件已存在且大小匹配，跳过下载', tag: 'DOWNLOAD');
+              // 调用进度回调，表示已完成
+              if (onProgress != null) {
+                onProgress(existingSize, existingSize);
+              }
+              return filePath;
+            } else if (remoteSize != null && existingSize != remoteSize) {
+              _logger.log('文件已存在但大小不匹配（本地: $existingSize, 远程: $remoteSize），重新下载', tag: 'DOWNLOAD');
+              // 删除不完整的文件
+              await existingFile.delete();
+            }
+          }
+        } catch (e) {
+          // 如果无法获取远程文件大小，继续下载（会覆盖现有文件）
+          _logger.log('无法获取远程文件大小，将重新下载: $e', tag: 'DOWNLOAD');
+        }
+      }
+      
       // 下载文件
       await _dio.download(
         url,
@@ -59,9 +90,9 @@ class FileDownloadService {
       );
       
       // 验证文件是否存在
-      final file = File(filePath);
-      if (await file.exists()) {
-        final fileSize = await file.length();
+      final downloadedFile = File(filePath);
+      if (await downloadedFile.exists()) {
+        final fileSize = await downloadedFile.length();
         _logger.log('文件下载完成: $filePath, 大小: $fileSize 字节', tag: 'DOWNLOAD');
         return filePath;
       } else {

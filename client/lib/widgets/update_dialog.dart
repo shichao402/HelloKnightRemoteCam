@@ -44,6 +44,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
   int _downloadedBytes = 0;
   int _totalBytes = 0;
   String? _errorMessage;
+  String? _statusMessage; // 当前操作状态提示
 
   /// 将技术性错误转换为友好的中文提示
   String _getFriendlyErrorMessage(dynamic error) {
@@ -120,6 +121,17 @@ class _UpdateDialogState extends State<UpdateDialog> {
             setState(() {
               _downloadedBytes = received;
               _totalBytes = total;
+              // 有进度时清除状态消息
+              if (_statusMessage != null && total > 0) {
+                _statusMessage = null;
+              }
+            });
+          }
+        },
+        onStatus: (status) {
+          if (mounted) {
+            setState(() {
+              _statusMessage = status;
             });
           }
         },
@@ -186,12 +198,23 @@ class _UpdateDialogState extends State<UpdateDialog> {
             ),
             if (_isDownloading) ...[
               const SizedBox(height: 16),
-              const Text('正在下载...', style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
+              // 显示状态消息（如果有）
+              if (_statusMessage != null) ...[
+                Text(
+                  _statusMessage!,
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                const SizedBox(height: 8),
+              ] else ...[
+                const Text('正在下载...', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+              ],
               if (_totalBytes > 0)
                 LinearProgressIndicator(
                   value: _downloadedBytes / _totalBytes,
-                ),
+                )
+              else if (_statusMessage != null)
+                const LinearProgressIndicator(), // 不确定进度时显示无限进度条
               if (_totalBytes > 0) ...[
                 const SizedBox(height: 4),
                 Text(

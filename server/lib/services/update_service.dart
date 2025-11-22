@@ -354,11 +354,56 @@ class UpdateService {
       
       _logger.log('更新文件下载完成: $filePath', tag: 'UPDATE');
 
-      // 如果是zip文件，先解压
+      // 如果是zip文件，先检查解压后的文件是否已存在
       if (updateInfo.fileType.toLowerCase() == 'zip') {
-        _logger.log('检测到zip文件，开始解压', tag: 'UPDATE');
         final extractDir = path.join(path.dirname(filePath),
             'extracted_${path.basenameWithoutExtension(filePath)}');
+        
+        // 尝试查找已解压的文件（根据平台查找 apk/dmg/exe）
+        // ArchiveService 会在解压目录中查找所有安装文件，所以我们也需要查找所有可能的文件
+        String? existingExtractedFile;
+        if (Platform.isAndroid) {
+          // 查找所有 .apk 文件
+          final extractDirObj = Directory(extractDir);
+          if (await extractDirObj.exists()) {
+            await for (final entity in extractDirObj.list(recursive: true)) {
+              if (entity is File && path.extension(entity.path).toLowerCase() == '.apk') {
+                existingExtractedFile = entity.path;
+                break;
+              }
+            }
+          }
+        } else if (Platform.isMacOS) {
+          // 查找所有 .dmg 文件
+          final extractDirObj = Directory(extractDir);
+          if (await extractDirObj.exists()) {
+            await for (final entity in extractDirObj.list(recursive: true)) {
+              if (entity is File && path.extension(entity.path).toLowerCase() == '.dmg') {
+                existingExtractedFile = entity.path;
+                break;
+              }
+            }
+          }
+        } else if (Platform.isWindows) {
+          // 查找所有 .exe 或 .msi 文件
+          final extractDirObj = Directory(extractDir);
+          if (await extractDirObj.exists()) {
+            await for (final entity in extractDirObj.list(recursive: true)) {
+              final ext = path.extension(entity.path).toLowerCase();
+              if (entity is File && (ext == '.exe' || ext == '.msi')) {
+                existingExtractedFile = entity.path;
+                break;
+              }
+            }
+          }
+        }
+        
+        if (existingExtractedFile != null) {
+          _logger.log('发现已解压的文件，直接使用: $existingExtractedFile', tag: 'UPDATE');
+          return existingExtractedFile;
+        }
+        
+        _logger.log('检测到zip文件，开始解压', tag: 'UPDATE');
         final extractedFilePath = await _extractZipFile(filePath, extractDir);
 
         if (extractedFilePath == null) {
@@ -399,15 +444,13 @@ class UpdateService {
         return false;
       }
 
-      // Android平台：如果是APK文件，需要先请求安装权限
+      // Android平台：如果是APK文件，需要先检查安装权限
       if (Platform.isAndroid) {
         final ext = path.extension(filePath).toLowerCase();
         if (ext == '.apk') {
-          final hasPermission = await requestInstallPermission();
-          if (!hasPermission) {
-            _logger.logError('安装APK权限被拒绝，无法打开APK文件', error: 'Path: $filePath');
-            return false;
-          }
+          await requestInstallPermission();
+          // 注意：即使权限未授予，也继续尝试打开文件
+          // OpenFile插件会尝试打开，如果权限不足会返回错误
         }
       }
       
@@ -416,6 +459,24 @@ class UpdateService {
       if (result.type == ResultType.done) {
         _logger.log('已打开文件', tag: 'UPDATE');
         return true;
+      } else if (result.type == ResultType.permissionDenied) {
+        // 权限被拒绝，引导用户到设置页面
+        _logger.log('打开文件权限被拒绝，引导用户到设置页面', tag: 'UPDATE');
+        if (Platform.isAndroid) {
+          try {
+            // 打开应用设置页面，用户可以开启"允许从此来源安装应用"
+            final opened = await openAppSettings();
+            if (opened) {
+              _logger.log('已打开应用设置页面', tag: 'UPDATE');
+            } else {
+              _logger.logError('无法打开应用设置页面');
+            }
+          } catch (e, stackTrace) {
+            _logger.logError('打开应用设置页面失败', error: e, stackTrace: stackTrace);
+          }
+        }
+        _logger.logError('打开文件失败', error: 'Result: ${result.type}, Message: ${result.message}');
+        return false;
       } else {
         _logger.logError('打开文件失败', error: 'Result: ${result.type}, Message: ${result.message}');
         return false;

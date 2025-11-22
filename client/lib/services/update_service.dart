@@ -388,33 +388,43 @@ class UpdateService {
   ///
   /// [updateInfo] 更新信息
   /// [onProgress] 进度回调 (received, total)
+  /// [onStatus] 状态回调，用于通知UI当前操作状态
   ///
   /// 返回下载文件的路径（如果是zip则返回解压后的文件路径）
   Future<String?> downloadUpdateFile(
     UpdateInfo updateInfo, {
     Function(int received, int total)? onProgress,
+    Function(String status)? onStatus,
   }) async {
     try {
       _logger.log('开始下载更新文件: ${updateInfo.fileName}', tag: 'UPDATE');
 
       // 1. 清理旧版本文件
+      onStatus?.call('正在清理旧版本文件...');
       await _cleanupOldVersions();
 
       // 2. 优先检查已下载完成的文件
+      onStatus?.call('正在检查已下载的文件...');
       final existingCompleteFile = await _checkExistingCompleteFile(updateInfo);
       if (existingCompleteFile != null) {
         _logger.log('使用已下载完成的文件: $existingCompleteFile', tag: 'UPDATE');
+        // 如果有hash，需要校验
+        if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
+          onStatus?.call('正在校验文件完整性...');
+        }
         // 直接处理文件（解压等）
         return await _processDownloadedFile(existingCompleteFile, updateInfo);
       }
 
       // 3. 检查未下载完成的文件（断点续传）
+      onStatus?.call('正在检查未完成的下载...');
       final existingIncompleteFile =
           await _checkExistingIncompleteFile(updateInfo);
       String filePath;
       if (existingIncompleteFile != null) {
         // 检查文件是否实际已完成（通过hash验证）
         if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
+          onStatus?.call('正在校验文件完整性...');
           final isValid = await _fileVerificationService.verifyFileHash(
               existingIncompleteFile, updateInfo.fileHash!);
           if (isValid) {
@@ -425,14 +435,17 @@ class UpdateService {
           }
         }
         _logger.log('发现未完成的下载文件，继续下载: $existingIncompleteFile', tag: 'UPDATE');
+        onStatus?.call('准备断点续传...');
         filePath = existingIncompleteFile;
       } else {
         // 4. 开始新下载
         _logger.log('开始新下载', tag: 'UPDATE');
+        onStatus?.call('准备开始下载...');
         filePath = await _fileDownloadService.downloadFile(
           url: updateInfo.downloadUrl,
           fileName: updateInfo.fileName,
           onProgress: onProgress,
+          onStatus: onStatus,
         );
       }
 
