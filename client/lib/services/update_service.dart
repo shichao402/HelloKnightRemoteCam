@@ -124,6 +124,45 @@ class UpdateService {
     return false; // 相等
   }
 
+  /// 比较完整版本号（包含构建号，格式: x.y.z+build）
+  /// 返回 true 如果 version1 >= version2
+  bool _compareFullVersions(String version1, String version2) {
+    // 分离版本号和构建号
+    final v1Parts = version1.split('+');
+    final v2Parts = version2.split('+');
+
+    final v1Version = v1Parts[0];
+    final v2Version = v2Parts[0];
+    final v1Build = v1Parts.length > 1 ? int.tryParse(v1Parts[1]) ?? 0 : 0;
+    final v2Build = v2Parts.length > 1 ? int.tryParse(v2Parts[1]) ?? 0 : 0;
+
+    // 先比较版本号
+    final versionCompare = _compareVersions(v1Version, v2Version);
+    if (versionCompare) return true;
+    if (!_compareVersions(v2Version, v1Version)) {
+      // 版本号相等，比较构建号
+      return v1Build >= v2Build;
+    }
+    return false;
+  }
+
+  /// 从文件名提取版本号（格式: x.y.z+build）
+  /// 例如: HelloKnightRCC_macos_1.0.7+5.zip -> 1.0.7+5
+  String? _extractVersionFromFileName(String fileName) {
+    try {
+      // 匹配模式: _x.y.z+build 或 _x.y.z
+      final regex = RegExp(r'_(\d+\.\d+\.\d+(?:\+\d+)?)');
+      final match = regex.firstMatch(fileName);
+      if (match != null) {
+        return match.group(1);
+      }
+      return null;
+    } catch (e) {
+      _logger.log('从文件名提取版本号失败: $fileName, 错误: $e', tag: 'UPDATE');
+      return null;
+    }
+  }
+
   /// 检查更新
   Future<UpdateCheckResult> checkForUpdate({bool avoidCache = true}) async {
     if (_updateCheckUrl.isEmpty) {
@@ -485,6 +524,133 @@ class UpdateService {
     }
   }
 
+  /// 清理旧版本文件（清理所有<=当前版本的文件）
+  Future<void> _cleanupOldVersions() async {
+    try {
+      final currentVersion = await _versionService.getVersion();
+      _logger.log('开始清理旧版本文件，当前版本: $currentVersion', tag: 'UPDATE');
+
+      final downloadDir = await _getDownloadDirectory();
+      final dir = Directory(downloadDir);
+
+      if (!await dir.exists()) {
+        _logger.log('下载目录不存在，跳过清理', tag: 'UPDATE');
+        return;
+      }
+
+      final files = await dir.list().toList();
+      int cleanedCount = 0;
+
+      for (final fileEntity in files) {
+        if (fileEntity is File) {
+          final fileName = path.basename(fileEntity.path);
+          final fileVersion = _extractVersionFromFileName(fileName);
+
+          if (fileVersion != null) {
+            // 比较版本，如果文件版本 <= 当前版本，则删除
+            if (!_compareFullVersions(fileVersion, currentVersion) ||
+                fileVersion == currentVersion) {
+              try {
+                await fileEntity.delete();
+                _logger.log('已删除旧版本文件: $fileName (版本: $fileVersion)',
+                    tag: 'UPDATE');
+                cleanedCount++;
+
+                // 同时删除对应的解压目录（如果存在）
+                final extractDir = path.join(path.dirname(fileEntity.path),
+                    'extracted_${path.basenameWithoutExtension(fileName)}');
+                final extractDirEntity = Directory(extractDir);
+                if (await extractDirEntity.exists()) {
+                  await extractDirEntity.delete(recursive: true);
+                  _logger.log('已删除解压目录: $extractDir', tag: 'UPDATE');
+                }
+              } catch (e) {
+                _logger.log('删除文件失败: $fileName, 错误: $e', tag: 'UPDATE');
+              }
+            }
+          }
+        }
+      }
+
+      _logger.log('旧版本文件清理完成，共清理 $cleanedCount 个文件', tag: 'UPDATE');
+    } catch (e, stackTrace) {
+      _logger.logError('清理旧版本文件失败', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  /// 检查已存在的文件（已下载完成）
+  /// 返回文件路径如果文件存在且hash校验通过，否则返回null
+  Future<String?> _checkExistingCompleteFile(UpdateInfo updateInfo) async {
+    try {
+      final downloadDir = await _getDownloadDirectory();
+      final filePath = path.join(downloadDir, updateInfo.fileName);
+      final file = File(filePath);
+
+      if (!await file.exists()) {
+        return null;
+      }
+
+      _logger.log('发现已存在的文件: $filePath', tag: 'UPDATE');
+
+      // 检查文件大小是否合理（至少大于0）
+      final fileSize = await file.length();
+      if (fileSize == 0) {
+        _logger.log('文件大小为0，视为未完成下载', tag: 'UPDATE');
+        return null;
+      }
+
+      // 如果有hash，验证文件完整性
+      if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
+        _logger.log('开始验证已存在文件的hash', tag: 'UPDATE');
+        final isValid = await verifyFileHash(filePath, updateInfo.fileHash!);
+        if (isValid) {
+          _logger.log('已存在文件hash校验通过: $filePath', tag: 'UPDATE');
+          return filePath;
+        } else {
+          _logger.log('已存在文件hash校验失败，将重新下载', tag: 'UPDATE');
+          // 删除损坏的文件
+          try {
+            await file.delete();
+          } catch (e) {
+            _logger.log('删除损坏文件失败: $e', tag: 'UPDATE');
+          }
+          return null;
+        }
+      } else {
+        // 没有hash，假设文件完整
+        _logger.log('更新信息中未包含hash，假设已存在文件完整: $filePath', tag: 'UPDATE');
+        return filePath;
+      }
+    } catch (e, stackTrace) {
+      _logger.logError('检查已存在文件失败', error: e, stackTrace: stackTrace);
+      return null;
+    }
+  }
+
+  /// 检查未下载完成的文件（支持断点续传）
+  /// 返回文件路径如果文件存在且可以继续下载，否则返回null
+  /// 注意：此方法不验证hash，hash验证在调用方进行
+  Future<String?> _checkExistingIncompleteFile(UpdateInfo updateInfo) async {
+    try {
+      final downloadDir = await _getDownloadDirectory();
+      final filePath = path.join(downloadDir, updateInfo.fileName);
+      final file = File(filePath);
+
+      if (!await file.exists()) {
+        return null;
+      }
+
+      final fileSize = await file.length();
+      _logger.log('发现已存在的文件: $filePath (大小: $fileSize)', tag: 'UPDATE');
+
+      // 文件存在，可以用于断点续传（hash验证在调用方进行）
+      return filePath;
+    } catch (e, stackTrace) {
+      _logger.logError('检查未完成文件失败', error: e, stackTrace: stackTrace);
+      return null;
+    }
+  }
+
   /// 下载更新文件
   ///
   /// [updateInfo] 更新信息
@@ -498,16 +664,62 @@ class UpdateService {
     try {
       _logger.log('开始下载更新文件: ${updateInfo.fileName}', tag: 'UPDATE');
 
-      final filePath = await _fileDownloadService.downloadFile(
-        url: updateInfo.downloadUrl,
-        fileName: updateInfo.fileName,
-        onProgress: onProgress,
-      );
+      // 1. 清理旧版本文件
+      await _cleanupOldVersions();
+
+      // 2. 优先检查已下载完成的文件
+      final existingCompleteFile = await _checkExistingCompleteFile(updateInfo);
+      if (existingCompleteFile != null) {
+        _logger.log('使用已下载完成的文件: $existingCompleteFile', tag: 'UPDATE');
+        // 直接处理文件（解压等）
+        return await _processDownloadedFile(existingCompleteFile, updateInfo);
+      }
+
+      // 3. 检查未下载完成的文件（断点续传）
+      final existingIncompleteFile =
+          await _checkExistingIncompleteFile(updateInfo);
+      String filePath;
+      if (existingIncompleteFile != null) {
+        // 检查文件是否实际已完成（通过hash验证）
+        if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
+          final isValid = await verifyFileHash(
+              existingIncompleteFile, updateInfo.fileHash!);
+          if (isValid) {
+            _logger.log('未完成文件实际已完整（hash校验通过），直接使用: $existingIncompleteFile',
+                tag: 'UPDATE');
+            return await _processDownloadedFile(
+                existingIncompleteFile, updateInfo);
+          }
+        }
+        _logger.log('发现未完成的下载文件，继续下载: $existingIncompleteFile', tag: 'UPDATE');
+        filePath = existingIncompleteFile;
+      } else {
+        // 4. 开始新下载
+        _logger.log('开始新下载', tag: 'UPDATE');
+        filePath = await _fileDownloadService.downloadFile(
+          url: updateInfo.downloadUrl,
+          fileName: updateInfo.fileName,
+          onProgress: onProgress,
+        );
+      }
 
       _logger.log('更新文件下载完成: $filePath', tag: 'UPDATE');
 
+      // 处理下载完成的文件（校验hash、解压等）
+      return await _processDownloadedFile(filePath, updateInfo);
+    } catch (e, stackTrace) {
+      _logger.logError('下载更新文件失败', error: e, stackTrace: stackTrace);
+      rethrow;
+    }
+  }
+
+  /// 处理下载完成的文件（校验hash、解压等）
+  Future<String?> _processDownloadedFile(
+      String filePath, UpdateInfo updateInfo) async {
+    try {
       // 如果有hash，进行校验
       if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
+        _logger.log('开始校验文件hash: $filePath', tag: 'UPDATE');
         final isValid = await verifyFileHash(filePath, updateInfo.fileHash!);
         if (!isValid) {
           // 删除下载的文件
@@ -518,6 +730,7 @@ class UpdateService {
           }
           throw Exception('文件hash校验失败，下载的文件可能已损坏或被篡改');
         }
+        _logger.log('文件hash校验通过', tag: 'UPDATE');
       } else {
         _logger.log('更新信息中未包含hash，跳过校验', tag: 'UPDATE');
       }
@@ -551,7 +764,7 @@ class UpdateService {
 
       return filePath;
     } catch (e, stackTrace) {
-      _logger.logError('下载更新文件失败', error: e, stackTrace: stackTrace);
+      _logger.logError('处理下载文件失败', error: e, stackTrace: stackTrace);
       rethrow;
     }
   }
