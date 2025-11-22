@@ -432,7 +432,6 @@ A:
 **详细说明请参考：**
 - [GitHub Actions 配置文档](docs/GITHUB_ACTIONS_SETUP.md)
 - [Gitee Release 同步配置](docs/GITEE_SYNC_SETUP.md)
-- [双平台自动推送配置](docs/DUAL_PLATFORM_SETUP.md)
 
 ## 项目文档
 
@@ -442,8 +441,6 @@ A:
 - [版本管理指南](docs/VERSION_MANAGEMENT.md) - 版本号管理详细说明
 - [预览尺寸优化](docs/PREVIEW_SIZE_OPTIMIZATION.md) - 预览尺寸数据流优化
 - [预览旋转实现](docs/PREVIEW_ROTATION.md) - 预览旋转和转置实现文档
-- [双平台自动推送配置](docs/DUAL_PLATFORM_SETUP.md) - GitHub 和 Gitee 双平台自动同步
-- [Gitee Actions 设置](docs/GITEE_ACTIONS_SETUP.md) - Gitee Go CI/CD 配置指南
 - [GitHub Actions 设置](docs/GITHUB_ACTIONS_SETUP.md) - GitHub Actions CI/CD 配置指南
 
 ## 开发规范

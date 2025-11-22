@@ -72,8 +72,8 @@ git push origin v1.0.0-test
 1. 创建标签并推送到 GitHub
 2. GitHub Actions 自动构建
 3. 创建 GitHub Release
-4. **自动同步到 Gitee Release**
-5. 更新配置文件到两个平台
+4. **自动同步到 Gitee Release**（如果配置了 Secrets）
+5. 更新配置文件到 Gitee
 
 ### 手动触发同步
 
@@ -129,13 +129,12 @@ git push origin v1.0.0-test
 ## 优势
 
 ✅ **简单可靠**
-- 不需要配置 Gitee Go
 - 利用 GitHub Actions 的强大构建能力
 - 自动同步，无需手动操作
 
-✅ **双平台支持**
+✅ **GitHub 构建，Gitee 同步**
 - GitHub：完整的 CI/CD 流程
-- Gitee：Release 同步和下载
+- Gitee：Release 同步和下载（可选）
 
 ✅ **无感知使用**
 - 创建 Release 时自动同步
@@ -144,6 +143,5 @@ git push origin v1.0.0-test
 ## 相关文档
 
 - [GitHub Actions 配置文档](./GITHUB_ACTIONS_SETUP.md)
-- [双平台自动推送配置](./DUAL_PLATFORM_SETUP.md)
 - [CI/CD 配置文档](./CI_CD_SETUP.md)
 
