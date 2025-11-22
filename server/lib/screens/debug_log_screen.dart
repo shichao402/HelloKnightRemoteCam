@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared/shared.dart';
 import '../services/logger_service.dart';
 
 class DebugLogScreen extends StatefulWidget {
@@ -85,7 +86,7 @@ class _DebugLogScreenState extends State<DebugLogScreen> {
             icon: const Icon(Icons.copy),
             onPressed: () async {
               final text = logs.map((log) {
-                return '[${log.timeString}] [${log.levelString}] ${log.tag != null ? "[${log.tag}] " : ""}${log.message}';
+                return '[${log.timeString}] [${log.level.levelString}] ${log.tag != null ? "[${log.tag}] " : ""}${log.message}';
               }).join('\n');
               await Clipboard.setData(ClipboardData(text: text));
               if (mounted) {
@@ -118,7 +119,7 @@ class _DebugLogScreenState extends State<DebugLogScreen> {
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
-                        log.levelString,
+                        log.level.levelString,
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 10,

@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared/shared.dart';
 
 class LoggerService {
   static final LoggerService _instance = LoggerService._internal();
@@ -9,11 +10,22 @@ class LoggerService {
   LoggerService._internal();
 
   static const String _debugModeKey = 'debug_mode_enabled';
-  
+
   final List<LogEntry> _logs = [];
   bool _debugEnabled = false; // 默认关闭日志以提高效率
-  File? _logFile;
-  Directory? _logsDir;
+
+  // 使用shared包的LogFileManager
+  late final LogFileManager _logFileManager = LogFileManager(
+    getLogsDirectoryPath: () async {
+      final Directory appDir = await getApplicationSupportDirectory();
+      return path.join(appDir.path, 'logs');
+    },
+    logFilePrefix: 'debug_',
+    logHeaderTitle: '=== Remote Cam Server Debug Log ===',
+    onLog: (message, {tag}) => log(message, tag: tag),
+    onLogError: (message, {error, stackTrace}) =>
+        logError(message, error: error, stackTrace: stackTrace),
+  );
 
   List<LogEntry> get logs => List.unmodifiable(_logs);
   bool get debugEnabled => _debugEnabled;
@@ -24,7 +36,7 @@ class LoggerService {
       // 默认关闭日志（生产环境）
       final prefs = await SharedPreferences.getInstance();
       _debugEnabled = prefs.getBool(_debugModeKey) ?? false; // 默认false
-      
+
       if (_debugEnabled) {
         await _initLogFile();
       }
@@ -43,57 +55,34 @@ class LoggerService {
     _debugEnabled = enabled;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_debugModeKey, enabled);
-    
+
     if (enabled) {
       await _initLogFile();
-    } else {
-      _logFile = null;
     }
   }
 
   // 初始化日志文件（每次启动都创建新文件）
   Future<void> _initLogFile() async {
     try {
-      // Android: 使用应用自己的目录 (/data/data/com.firoyang.helloknightrcc_server/files/)
-      // Mac/iOS: 使用应用沙盒目录
+      // 使用shared包的LogFileManager初始化日志文件
       final Directory appDir = await getApplicationSupportDirectory();
-      
-      // 创建日志目录
-      final String logsDirPath = path.join(appDir.path, 'logs');
-      _logsDir = Directory(logsDirPath);
-      
-      // 确保日志目录存在
-      if (!await _logsDir!.exists()) {
-        await _logsDir!.create(recursive: true);
+      final additionalHeaderInfo = 'App Support Dir: ${appDir.path}';
+
+      final logFile = await _logFileManager.initializeLogFile(
+        additionalHeaderInfo: additionalHeaderInfo,
+      );
+
+      if (logFile != null) {
+        // 写入初始日志
+        log('服务器日志系统初始化成功', tag: 'INIT');
+        log('日志文件: ${logFile.path}', tag: 'INIT');
       }
-      
-      // 清理旧日志（在创建新日志之前）
-      await _cleanOldLogs();
-      
-      // 创建新的日志文件（每次启动都创建新文件）
-      final String timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-      final String filePath = path.join(logsDirPath, 'debug_$timestamp.log');
-      
-      _logFile = File(filePath);
-      
-      // 写入文件头
-      await _logFile!.writeAsString('=== Remote Cam Server Debug Log ===\n');
-      await _logFile!.writeAsString('Started at: ${DateTime.now()}\n');
-      await _logFile!.writeAsString('Platform: ${Platform.operatingSystem}\n');
-      await _logFile!.writeAsString('App Support Dir: ${appDir.path}\n');
-      await _logFile!.writeAsString('Log File: $filePath\n');
-      await _logFile!.writeAsString('=' * 60 + '\n\n');
-      
-      // 写入初始日志
-      log('服务器日志系统初始化成功', tag: 'INIT');
-      log('日志文件: $filePath', tag: 'INIT');
     } catch (e, stackTrace) {
       // 调试模式关闭时不输出错误
       if (_debugEnabled) {
         print('[SERVER-LOGGER] ✗ 初始化日志文件失败: $e');
         print('[SERVER-LOGGER] ✗ 堆栈: $stackTrace');
       }
-      _logFile = null;
     }
   }
 
@@ -103,32 +92,32 @@ class LoggerService {
     if (!_debugEnabled) {
       return;
     }
-    
+
     final entry = LogEntry(
       message: message,
       level: level,
       tag: tag,
       timestamp: DateTime.now(),
     );
-    
+
     _logs.add(entry);
-    
+
     // 只保留最近500条日志（内存中）
     if (_logs.length > 500) {
       _logs.removeAt(0);
     }
-    
+
     // 打印到控制台（仅在调试模式启用时）
-    print('[${entry.levelString}] ${entry.tag != null ? "[${entry.tag}] " : ""}${entry.message}');
-    
-    // 写入文件
-    if (_logFile != null) {
-      _writeToFile(entry);
-    }
+    print(
+        '[${entry.level.levelString}] ${entry.tag != null ? "[${entry.tag}] " : ""}${entry.message}');
+
+    // 写入文件（使用shared包的LogFileManager）
+    _writeToFile(entry);
   }
 
   // HTTP请求日志
-  void logHttpRequest(String method, String path, {Map<String, dynamic>? body}) {
+  void logHttpRequest(String method, String path,
+      {Map<String, dynamic>? body}) {
     // 调试模式关闭时不输出任何日志
     if (!_debugEnabled) {
       return;
@@ -143,7 +132,8 @@ class LoggerService {
     if (!_debugEnabled) {
       return;
     }
-    final message = 'Response $statusCode for $path${body != null ? "\nBody: $body" : ""}';
+    final message =
+        'Response $statusCode for $path${body != null ? "\nBody: $body" : ""}';
     log(message, level: LogLevel.response, tag: 'HTTP');
   }
 
@@ -163,28 +153,20 @@ class LoggerService {
     if (!_debugEnabled) {
       return;
     }
-    final fullMessage = '$message${error != null ? "\nError: $error" : ""}${stackTrace != null ? "\nStack: $stackTrace" : ""}';
+    final fullMessage =
+        '$message${error != null ? "\nError: $error" : ""}${stackTrace != null ? "\nStack: $stackTrace" : ""}';
     log(fullMessage, level: LogLevel.error, tag: 'ERROR');
   }
 
-  // 写入文件
+  // 写入文件（使用shared包的LogFileManager）
   Future<void> _writeToFile(LogEntry entry) async {
-    try {
-      final line = '[${entry.timestamp.toString()}] [${entry.levelString}] ${entry.tag != null ? "[${entry.tag}] " : ""}${entry.message}\n';
-      await _logFile!.writeAsString(line, mode: FileMode.append);
-    } catch (e) {
-      // 调试模式关闭时不输出错误
-      if (_debugEnabled) {
-        print('[SERVER-LOGGER] 写入日志文件失败: $e');
-      }
-      // 如果写入失败，尝试重新初始化
-      _logFile = null;
-    }
+    final line = entry.toLogLine();
+    await _logFileManager.writeLogLine(line);
   }
 
-  // 获取日志文件路径
+  // 获取日志文件路径（使用shared包的LogFileManager）
   Future<String?> getLogFilePath() async {
-    return _logFile?.path;
+    return _logFileManager.logFilePath;
   }
 
   // 清除内存中的日志
@@ -192,155 +174,20 @@ class LoggerService {
     _logs.clear();
   }
 
-  // 获取所有日志文件
+  // 获取所有日志文件（使用shared包的LogFileManager）
   Future<List<File>> getLogFiles() async {
-    try {
-      if (_logsDir == null) {
-        final Directory appDir = await getApplicationSupportDirectory();
-        final String logsDirPath = path.join(appDir.path, 'logs');
-        _logsDir = Directory(logsDirPath);
-      }
-      
-      if (!await _logsDir!.exists()) {
-        return [];
-      }
-      
-      return _logsDir!
-          .listSync()
-          .whereType<File>()
-          .where((file) => file.path.endsWith('.log'))
-          .toList()
-        ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
-    } catch (e) {
-      // 调试模式关闭时不输出错误
-      if (_debugEnabled) {
-        print('[SERVER-LOGGER] 获取日志文件列表失败: $e');
-      }
-      return [];
-    }
+    return await _logFileManager.getLogFiles();
   }
 
-  // 清理旧日志（保留最近10个，单个文件最大10MB，总大小最大50MB）
-  Future<void> _cleanOldLogs() async {
-    try {
-      final files = await getLogFiles();
-      if (files.isEmpty) {
-        return;
-      }
-      
-      // 按修改时间排序（最新的在前）
-      files.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
-      
-      int totalSize = 0;
-      int keptCount = 0;
-      int deletedCount = 0;
-      
-      for (var file in files) {
-        final size = await file.length();
-        
-        // 如果文件超过10MB，删除
-        if (size > 10 * 1024 * 1024) {
-          await file.delete();
-          deletedCount++;
-          continue;
-        }
-        
-        // 如果总大小超过50MB，删除
-        if (totalSize + size > 50 * 1024 * 1024) {
-          await file.delete();
-          deletedCount++;
-          continue;
-        }
-        
-        // 如果保留的文件超过10个，删除
-        if (keptCount >= 10) {
-          await file.delete();
-          deletedCount++;
-          continue;
-        }
-        
-        totalSize += size;
-        keptCount++;
-      }
-      
-      // 调试模式关闭时不输出清理信息
-    } catch (e) {
-      // 调试模式关闭时不输出错误
-    }
-  }
-
-  // 清理旧日志（公开方法，供UI调用）
+  // 清理旧日志（公开方法，供UI调用，使用shared包的LogFileManager）
   Future<void> cleanOldLogs() async {
-    await _cleanOldLogs();
+    await _logFileManager.cleanOldLogs();
   }
 
-  // 清理所有日志（公开方法）
+  // 清理所有日志（公开方法，使用shared包的LogFileManager）
   Future<void> cleanAllLogs() async {
-    try {
-      if (_logsDir == null) {
-        final Directory appDir = await getApplicationSupportDirectory();
-        final String logsDirPath = path.join(appDir.path, 'logs');
-        _logsDir = Directory(logsDirPath);
-      }
-      
-      if (!await _logsDir!.exists()) {
-        return;
-      }
-      
-      final files = await getLogFiles();
-      
-      for (var file in files) {
-        await file.delete();
-      }
-    } catch (e) {
-      // 调试模式关闭时不输出错误
-      rethrow;
-    }
+    await _logFileManager.cleanAllLogs();
   }
 }
 
-enum LogLevel {
-  debug,
-  info,
-  request,
-  response,
-  warning,
-  error,
-}
-
-class LogEntry {
-  final String message;
-  final LogLevel level;
-  final String? tag;
-  final DateTime timestamp;
-
-  LogEntry({
-    required this.message,
-    required this.level,
-    this.tag,
-    required this.timestamp,
-  });
-
-  String get levelString {
-    switch (level) {
-      case LogLevel.debug:
-        return 'DEBUG';
-      case LogLevel.info:
-        return 'INFO';
-      case LogLevel.request:
-        return 'REQ';
-      case LogLevel.response:
-        return 'RES';
-      case LogLevel.warning:
-        return 'WARN';
-      case LogLevel.error:
-        return 'ERROR';
-    }
-  }
-
-  String get timeString {
-    return '${timestamp.hour.toString().padLeft(2, '0')}:'
-        '${timestamp.minute.toString().padLeft(2, '0')}:'
-        '${timestamp.second.toString().padLeft(2, '0')}';
-  }
-}
+// LogLevel 和 LogEntry 已移至 shared 包

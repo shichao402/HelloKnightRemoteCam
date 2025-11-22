@@ -8,6 +8,8 @@ export 'types/log_callbacks.dart';
 export 'models/update_info.dart';
 export 'models/update_check_result.dart';
 export 'models/version_info.dart';
+export 'models/log_level.dart';
+export 'models/log_entry.dart';
 
 // 工具类
 export 'utils/version_utils.dart';
@@ -18,4 +20,5 @@ export 'services/archive_service.dart';
 export 'services/file_verification_service.dart';
 export 'services/update_check_service.dart';
 export 'services/update_download_processor.dart';
+export 'services/log_file_manager.dart';
 
