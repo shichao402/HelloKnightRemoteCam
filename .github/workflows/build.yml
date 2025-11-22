@@ -88,26 +88,24 @@ jobs:
             
             # 尝试设置DMG窗口视图（如果支持图形界面）
             # 注意：在CI环境中可能无法执行AppleScript，但不影响DMG的功能
-            osascript <<EOF 2>/dev/null || true
-            tell application "Finder"
-              tell disk "$VOLUME_NAME"
-                open
-                set current view of container window to icon view
-                set toolbar visible of container window to false
-                set statusbar visible of container window to false
-                set the bounds of container window to {400, 100, 920, 420}
-                set viewOptions to the icon view options of container window
-                set arrangement of viewOptions to not arranged
-                set icon size of viewOptions to 72
-                set position of item "$APP_NAME" of container window to {160, 205}
-                set position of item "Applications" of container window to {360, 205}
-                close
-                open
-                update without registering applications
-                delay 2
-              end tell
-            end tell
-EOF
+            osascript -e 'tell application "Finder"' \
+              -e "  tell disk \"$VOLUME_NAME\"" \
+              -e '    open' \
+              -e '    set current view of container window to icon view' \
+              -e '    set toolbar visible of container window to false' \
+              -e '    set statusbar visible of container window to false' \
+              -e '    set the bounds of container window to {400, 100, 920, 420}' \
+              -e '    set viewOptions to the icon view options of container window' \
+              -e '    set arrangement of viewOptions to not arranged' \
+              -e '    set icon size of viewOptions to 72' \
+              -e "    set position of item \"$APP_NAME\" of container window to {160, 205}" \
+              -e '    set position of item "Applications" of container window to {360, 205}' \
+              -e '    close' \
+              -e '    open' \
+              -e '    update without registering applications' \
+              -e '    delay 2' \
+              -e '  end tell' \
+              -e 'end tell' 2>/dev/null || true
           fi
           
           # 卸载DMG
