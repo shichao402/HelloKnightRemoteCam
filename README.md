@@ -401,31 +401,38 @@ A:
 
 ## CI/CD 和自动发布
 
-项目支持自动构建和发布到 GitHub 和 Gitee 两个平台。
+项目使用 GitHub Actions 自动构建所有平台的应用，并支持同步 Release 到 Gitee。
 
-### 快速配置（一次性）
+### 自动构建和发布
+
+**GitHub Actions：**
+- ✅ 构建 macOS 客户端
+- ✅ 构建 Windows 客户端  
+- ✅ 构建 Android 服务器
+- ✅ 创建 GitHub Release
+- ✅ 生成更新配置文件
+
+**Gitee Release 同步（可选）：**
+- ✅ 自动同步 GitHub Release 到 Gitee
+- ✅ 同步更新配置文件到 Gitee
+
+### 创建 Release
 
 ```bash
-# 1. 配置双远程仓库
-./scripts/setup_dual_remote.sh [gitee_url]
-
-# 2. 安装 Git 配置
-./scripts/install_git_hooks.sh
-```
-
-### 日常使用（完全无感知）
-
-配置完成后，所有操作自动同步到两个平台：
-
-```bash
-# 推送代码（自动推送到 GitHub 和 Gitee）
-git push origin main
-
-# 创建 Release（自动推送到两个平台并触发 CI/CD）
+# 创建 Release（会自动构建并发布）
 ./scripts/create_release.sh 1.0.0
 ```
 
-**详细说明请参考：[双平台自动推送配置指南](docs/DUAL_PLATFORM_SETUP.md)**
+流程：
+1. 创建标签并推送到 GitHub
+2. GitHub Actions 自动构建所有平台
+3. 创建 GitHub Release
+4. 自动同步到 Gitee Release（如果配置了 Secrets）
+
+**详细说明请参考：**
+- [GitHub Actions 配置文档](docs/GITHUB_ACTIONS_SETUP.md)
+- [Gitee Release 同步配置](docs/GITEE_SYNC_SETUP.md)
+- [双平台自动推送配置](docs/DUAL_PLATFORM_SETUP.md)
 
 ## 项目文档
 
