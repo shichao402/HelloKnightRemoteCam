@@ -23,12 +23,29 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Extract version from pubspec.yaml
+      - name: Extract version from tag or pubspec.yaml
         id: get_version
         run: |
           cd client
-          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
-          BUILD_NUMBER=$(grep '^version:' pubspec.yaml | sed 's/.*+//')
+          # 如果是标签触发，从标签提取版本号
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG_VERSION=${GITHUB_REF#refs/tags/v}
+            VERSION=$TAG_VERSION
+            # 从VERSION文件读取build number，如果没有则使用1
+            if [ -f "../../VERSION" ]; then
+              BUILD_NUMBER=$(grep "^CLIENT_VERSION=" ../../VERSION | sed 's/.*+//' || echo "1")
+            else
+              BUILD_NUMBER="1"
+            fi
+            echo "使用标签版本号: $VERSION"
+            # 同步版本号到 pubspec.yaml
+            sed -i '' "s/^version:.*/version: ${VERSION}+${BUILD_NUMBER}/" pubspec.yaml
+          else
+            # 否则从 pubspec.yaml 读取
+            VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
+            BUILD_NUMBER=$(grep '^version:' pubspec.yaml | sed 's/.*+//')
+            echo "使用 pubspec.yaml 版本号: $VERSION"
+          fi
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_OUTPUT
           echo "FULL_VERSION=${VERSION}+${BUILD_NUMBER}" >> $GITHUB_OUTPUT
@@ -92,14 +109,39 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Extract version from pubspec.yaml
+      - name: Extract version from tag or pubspec.yaml
         id: get_version
         shell: powershell
         run: |
           cd client
-          $versionLine = Get-Content pubspec.yaml | Select-String -Pattern '^version:'
-          $version = $versionLine -replace 'version: ', '' -replace '\+.*', ''
-          $buildNumber = $versionLine -replace '.*\+', ''
+          # 如果是标签触发，从标签提取版本号
+          $ref = "${{ github.ref }}"
+          if ($ref -like "refs/tags/v*") {
+            $tagVersion = $ref -replace "refs/tags/v", ""
+            $version = $tagVersion
+            # 从VERSION文件读取build number
+            if (Test-Path "../../VERSION") {
+              $versionLine = Get-Content "../../VERSION" | Select-String -Pattern "^CLIENT_VERSION="
+              if ($versionLine) {
+                $buildNumber = $versionLine -replace ".*\+", ""
+              } else {
+                $buildNumber = "1"
+              }
+            } else {
+              $buildNumber = "1"
+            }
+            Write-Host "使用标签版本号: $version"
+            # 同步版本号到 pubspec.yaml
+            $content = Get-Content pubspec.yaml
+            $content = $content -replace "^version:.*", "version: ${version}+${buildNumber}"
+            $content | Set-Content pubspec.yaml
+          } else {
+            # 否则从 pubspec.yaml 读取
+            $versionLine = Get-Content pubspec.yaml | Select-String -Pattern '^version:'
+            $version = $versionLine -replace 'version: ', '' -replace '\+.*', ''
+            $buildNumber = $versionLine -replace '.*\+', ''
+            Write-Host "使用 pubspec.yaml 版本号: $version"
+          }
           $fullVersion = "${version}+${buildNumber}"
           $tagVersion = "v${version}"
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
