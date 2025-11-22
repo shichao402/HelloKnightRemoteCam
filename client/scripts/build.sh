@@ -70,25 +70,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VERSION_SCRIPT="$PROJECT_ROOT/scripts/version.sh"
 PUBSPEC_FILE="pubspec.yaml"
 
-# 定义还原 pubspec.yaml 的函数
-restore_pubspec() {
-    if [ -f "$PUBSPEC_FILE" ]; then
-        # 检查是否在 git 仓库中，以及文件是否被跟踪
-        if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
-            if git ls-files --error-unmatch "$PUBSPEC_FILE" >/dev/null 2>&1; then
-                echo "还原 pubspec.yaml 文件..."
-                # 优先使用 git restore（Git 2.23+），否则使用 git checkout
-                git restore "$PUBSPEC_FILE" 2>/dev/null || \
-                git checkout -- "$PUBSPEC_FILE" 2>/dev/null || \
-                echo "警告: 无法还原 pubspec.yaml（可能没有更改）"
-                echo "✓ 已尝试还原 pubspec.yaml"
-            fi
-        fi
-    fi
-}
-
-# 设置退出时还原 pubspec.yaml（无论成功或失败）
-trap restore_pubspec EXIT
+# 注意：不再自动还原 pubspec.yaml，保留版本号同步后的状态
 
 if [ -f "$VERSION_SCRIPT" ]; then
     echo "同步客户端版本号到 pubspec.yaml..."
