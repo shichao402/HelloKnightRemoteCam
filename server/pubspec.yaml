@@ -1,7 +1,7 @@
 name: helloknightrcc_server
 description: Remote camera server application
 publish_to: 'none'
-version: 1.0.6+2
+version: 1.0.7+3
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
