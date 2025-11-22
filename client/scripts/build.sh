@@ -74,9 +74,18 @@ PUBSPEC_FILE="pubspec.yaml"
 
 if [ -f "$VERSION_MANAGER" ]; then
     echo "同步客户端版本号到 pubspec.yaml..."
-    python3 "$VERSION_MANAGER" sync client --pubspec "$(pwd)/$PUBSPEC_FILE" || {
-        echo "警告: 版本号同步失败，跳过版本号同步"
-    }
+    # 设置 Python 输出编码为 UTF-8（Windows 兼容）
+    if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "win32" ]] || [[ -n "$WINDIR" ]]; then
+        # Windows 环境
+        PYTHONIOENCODING=utf-8 python "$VERSION_MANAGER" sync client --pubspec "$(pwd)/$PUBSPEC_FILE" || {
+            echo "警告: 版本号同步失败，跳过版本号同步"
+        }
+    else
+        # macOS/Linux 环境
+        python3 "$VERSION_MANAGER" sync client --pubspec "$(pwd)/$PUBSPEC_FILE" || {
+            echo "警告: 版本号同步失败，跳过版本号同步"
+        }
+    fi
 else
     echo "警告: 版本管理模块未找到，跳过版本号同步"
 fi

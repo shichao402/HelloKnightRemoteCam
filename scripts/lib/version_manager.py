@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 统一的版本号管理模块
 所有版本号的读写操作都通过此模块完成
@@ -10,6 +11,25 @@ import re
 import os
 import json
 from typing import Optional, Tuple, Dict, Any
+
+# 修复 Windows 上的编码问题
+if sys.platform == 'win32':
+    # Windows 上设置标准输出为 UTF-8
+    if sys.stdout.encoding != 'utf-8':
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+        except AttributeError:
+            # Python < 3.7 不支持 reconfigure
+            import io
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    
+    if sys.stderr.encoding != 'utf-8':
+        try:
+            sys.stderr.reconfigure(encoding='utf-8')
+        except AttributeError:
+            # Python < 3.7 不支持 reconfigure
+            import io
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 
 class VersionManager:
