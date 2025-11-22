@@ -10,7 +10,7 @@
         "fileName": "HelloKnightRCC_macos_1.0.7+5.zip",
         "fileType": "zip",
         "platform": "macos",
-        "fileHash": "6048c07e0bd7be87c51dc2e768a40f887aa589a3ebd7e1c33bc8533c610d55c2"
+        "fileHash": "918fd418a2f5c713128f3de83d39e3631befea2952240e4bd48563963748ebb3"
       },
       "windows": {
         "version": "1.0.7+5",
@@ -19,7 +19,7 @@
         "fileName": "HelloKnightRCC_windows_1.0.7+5.zip",
         "fileType": "zip",
         "platform": "windows",
-        "fileHash": "8aa2a79f10fee18fdcdf5a7cb280ccb5632e77afaa5e56751307e142c68954a3"
+        "fileHash": "2fbc896756772d9d2ecbc46d6c497f0066aa7e13ef5663be9dfee8178d2a0947"
       }
     }
   },
@@ -34,10 +34,10 @@
         "fileName": "helloknightrcc_server_android_1.0.7+5.zip",
         "fileType": "zip",
         "platform": "android",
-        "fileHash": "5a24273df92b4a6ca779f19717461695451c883a7b28185b30d32ca8c37aae16"
+        "fileHash": "e36a7639650583bd0daed730688a53965559178892e1be4010949e962bf71aa8"
       }
     }
   },
   "updateCheckUrl": "https://raw.githubusercontent.com/shichao402/HelloKnightRemoteCam/main/update_config_github.json",
-  "lastUpdated": "2025-11-22T10:25:45Z"
+  "lastUpdated": "2025-11-22T13:54:09Z"
 }
