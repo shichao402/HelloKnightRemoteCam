@@ -1,7 +1,7 @@
 name: helloknightrcc_server
 description: Remote camera server application
 publish_to: 'none'
-version: 1.0.6+5
+version: 1.0.7+6
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -25,6 +25,7 @@ dependencies:
   url_launcher: ^6.2.5
   open_file: ^3.3.2
   archive: ^3.4.0
+  yaml: ^3.1.2
   
   # Shared code
   shared:
@@ -40,5 +41,5 @@ flutter:
   
   # Assets
   assets:
-    - assets/VERSION
+    - assets/VERSION.yaml
 

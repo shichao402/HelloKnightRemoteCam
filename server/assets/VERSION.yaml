@@ -3,10 +3,10 @@
 # 格式: YAML
 
 client:
-  version: "1.0.6+6"  # 客户端版本号（格式: x.y.z+build）
+  version: "1.0.7+6"  # 客户端版本号（格式: x.y.z+build）
   
 server:
-  version: "1.0.6+6"  # 服务器版本号（格式: x.y.z+build）
+  version: "1.0.7+6"  # 服务器版本号（格式: x.y.z+build）
 
 compatibility:
   # 服务器支持的最小客户端版本（格式: x.y.z，不含构建号）
