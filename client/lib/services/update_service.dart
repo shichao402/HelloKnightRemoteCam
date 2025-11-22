@@ -6,9 +6,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import 'logger_service.dart';
 import 'version_service.dart';
-import 'update_settings_service.dart';
 import 'file_download_service.dart';
 import '../widgets/update_dialog.dart';
 
@@ -70,12 +70,14 @@ class UpdateService {
 
   final ClientLoggerService _logger = ClientLoggerService();
   final VersionService _versionService = VersionService();
-  final UpdateSettingsService _updateSettings = UpdateSettingsService();
   final Dio _dio = Dio();
   final FileDownloadService _fileDownloadService = FileDownloadService();
 
   // 默认更新检查URL（可以从设置中配置）
   String _updateCheckUrl = '';
+  
+  // 内存中的更新信息（不持久化）
+  UpdateInfo? _currentUpdateInfo;
 
   /// 设置更新检查URL
   void setUpdateCheckUrl(String url) {
@@ -229,16 +231,24 @@ class UpdateService {
       
       if (hasUpdate) {
         _logger.log('发现新版本: ${updateInfo.version}', tag: 'UPDATE');
-        // 保存更新信息到本地
-        await _saveUpdateInfo(updateInfo);
+        
+        // 检查是否有旧的更新信息（内存中）
+        if (_currentUpdateInfo != null && _currentUpdateInfo!.version != updateInfo.version) {
+          _logger.log('检测到更新版本变更: ${_currentUpdateInfo!.version} -> ${updateInfo.version}', tag: 'UPDATE');
+          // 清理旧的更新包
+          await _cleanupOldUpdatePackages(_currentUpdateInfo!);
+        }
+        
+        // 仅在内存中保存更新信息（不持久化）
+        _currentUpdateInfo = updateInfo;
         return UpdateCheckResult(
           hasUpdate: true,
           updateInfo: updateInfo,
         );
       } else {
         _logger.log('当前已是最新版本', tag: 'UPDATE');
-        // 清除保存的更新信息
-        await _saveUpdateInfo(null);
+        // 清除内存中的更新信息
+        _currentUpdateInfo = null;
         return UpdateCheckResult(
           hasUpdate: false,
         );
@@ -252,19 +262,14 @@ class UpdateService {
     }
   }
 
-  /// 保存更新信息到本地
-  Future<void> _saveUpdateInfo(UpdateInfo? updateInfo) async {
-    await _updateSettings.saveUpdateInfo(updateInfo);
-  }
-  
-  /// 获取保存的更新信息
+  /// 获取保存的更新信息（从内存中获取，不持久化）
   Future<UpdateInfo?> getSavedUpdateInfo() async {
-    return await _updateSettings.getUpdateInfo();
+    return _currentUpdateInfo;
   }
   
-  /// 检查是否有可用的更新
+  /// 检查是否有可用的更新（检查内存中的状态）
   Future<bool> hasUpdate() async {
-    return await _updateSettings.hasUpdate();
+    return _currentUpdateInfo != null;
   }
   
   /// 计算文件的SHA256 hash
@@ -352,6 +357,110 @@ class UpdateService {
     }
   }
 
+  /// 清理旧的更新包
+  Future<void> _cleanupOldUpdatePackages(UpdateInfo oldUpdateInfo) async {
+    try {
+      _logger.log('开始清理旧的更新包: ${oldUpdateInfo.fileName}', tag: 'UPDATE');
+      
+      // 获取下载目录
+      final downloadDir = await _getDownloadDirectory();
+      
+      // 1. 删除旧的下载文件（已完成的）
+      final oldFilePath = path.join(downloadDir, oldUpdateInfo.fileName);
+      final oldFile = File(oldFilePath);
+      if (await oldFile.exists()) {
+        try {
+          await oldFile.delete();
+          _logger.log('已删除旧的更新文件: $oldFilePath', tag: 'UPDATE');
+        } catch (e) {
+          _logger.log('删除旧更新文件失败: $e', tag: 'UPDATE');
+        }
+      }
+      
+      // 2. 删除未完成的下载文件（可能存在的部分下载）
+      final partialFiles = await Directory(downloadDir)
+          .list()
+          .where((entity) => entity is File && 
+                entity.path.contains(oldUpdateInfo.fileName))
+          .cast<File>()
+          .toList();
+      
+      for (final file in partialFiles) {
+        try {
+          await file.delete();
+          _logger.log('已删除未完成的下载文件: ${file.path}', tag: 'UPDATE');
+        } catch (e) {
+          _logger.log('删除未完成文件失败: $e', tag: 'UPDATE');
+        }
+      }
+      
+      // 3. 删除旧的解压缓存目录
+      final extractDirPattern = 'extracted_${path.basenameWithoutExtension(oldUpdateInfo.fileName)}';
+      final extractDir = path.join(downloadDir, extractDirPattern);
+      final extractDirectory = Directory(extractDir);
+      if (await extractDirectory.exists()) {
+        try {
+          await extractDirectory.delete(recursive: true);
+          _logger.log('已删除旧的解压缓存: $extractDir', tag: 'UPDATE');
+        } catch (e) {
+          _logger.log('删除解压缓存失败: $e', tag: 'UPDATE');
+        }
+      }
+      
+      // 4. 清理所有解压缓存目录（以extracted_开头的目录）
+      try {
+        final downloadDirectory = Directory(downloadDir);
+        if (await downloadDirectory.exists()) {
+          await for (final entity in downloadDirectory.list()) {
+            if (entity is Directory && entity.path.contains('extracted_')) {
+              try {
+                await entity.delete(recursive: true);
+                _logger.log('已清理解压缓存: ${entity.path}', tag: 'UPDATE');
+              } catch (e) {
+                // 忽略删除错误
+              }
+            }
+          }
+        }
+      } catch (e) {
+        _logger.log('清理解压缓存时出错: $e', tag: 'UPDATE');
+      }
+      
+      _logger.log('旧更新包清理完成', tag: 'UPDATE');
+    } catch (e, stackTrace) {
+      _logger.logError('清理旧更新包失败', error: e, stackTrace: stackTrace);
+    }
+  }
+  
+  /// 获取下载目录（通过FileDownloadService的内部方法）
+  Future<String> _getDownloadDirectory() async {
+    // 使用反射或直接复制逻辑，这里我们直接复制逻辑
+    if (Platform.isAndroid) {
+      final directory = await getApplicationDocumentsDirectory();
+      return path.join(directory.path, 'Downloads');
+    } else if (Platform.isIOS) {
+      final directory = await getApplicationDocumentsDirectory();
+      return path.join(directory.path, 'Downloads');
+    } else if (Platform.isMacOS) {
+      final directory = await getDownloadsDirectory();
+      if (directory != null) {
+        return directory.path;
+      }
+      final appDir = await getApplicationSupportDirectory();
+      return path.join(appDir.path, 'Downloads');
+    } else if (Platform.isWindows) {
+      final directory = await getDownloadsDirectory();
+      if (directory != null) {
+        return directory.path;
+      }
+      final appDir = await getApplicationSupportDirectory();
+      return path.join(appDir.path, 'Downloads');
+    } else {
+      final appDir = await getApplicationSupportDirectory();
+      return path.join(appDir.path, 'Downloads');
+    }
+  }
+
   /// 下载更新文件
   /// 
   /// [updateInfo] 更新信息
@@ -389,18 +498,27 @@ class UpdateService {
         _logger.log('更新信息中未包含hash，跳过校验', tag: 'UPDATE');
       }
       
-      // 如果是zip文件，解压
+      // 如果是zip文件，先解压
       if (updateInfo.fileType.toLowerCase() == 'zip') {
+        _logger.log('检测到zip文件，开始解压', tag: 'UPDATE');
         final extractDir = path.join(path.dirname(filePath), 'extracted_${path.basenameWithoutExtension(filePath)}');
         final extractedFilePath = await _extractZipFile(filePath, extractDir);
         
-        // 删除zip文件
+        if (extractedFilePath == null) {
+          throw Exception('解压zip文件失败，未找到可执行文件');
+        }
+        
+        _logger.log('zip文件解压完成: $extractedFilePath', tag: 'UPDATE');
+        
+        // 删除zip文件以节约空间
         try {
           await File(filePath).delete();
+          _logger.log('已删除zip文件以节约空间: $filePath', tag: 'UPDATE');
         } catch (e) {
           _logger.log('删除zip文件失败: $e', tag: 'UPDATE');
         }
         
+        // 返回解压后的文件路径
         return extractedFilePath;
       }
       
