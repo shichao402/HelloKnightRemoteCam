@@ -324,7 +324,7 @@ class UpdateService {
       // 解压所有文件
       String? extractedFilePath;
       String? apkFilePath; // 优先查找APK文件（Android）
-      String? dmgFilePath; // 查找DMG文件（macOS）
+      String? dmgFilePath; // 查找DMG文件（macOS）- GitHub Actions打包的zip中包含dmg
       String? exeFilePath; // 查找EXE文件（Windows）
 
       for (final file in archive) {
@@ -366,6 +366,7 @@ class UpdateService {
       if (Platform.isAndroid) {
         result = apkFilePath ?? extractedFilePath;
       } else if (Platform.isMacOS) {
+        // macOS: GitHub Actions打包的zip中包含dmg文件，优先查找dmg
         result = dmgFilePath ?? extractedFilePath;
       } else if (Platform.isWindows) {
         result = exeFilePath ?? extractedFilePath;

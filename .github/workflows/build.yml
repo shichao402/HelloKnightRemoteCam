@@ -55,12 +55,6 @@ jobs:
           cd client
           ./scripts/build.sh --release --macos
 
-      - name: Archive macOS app (zip)
-        run: |
-          cd client/build/macos/Build/Products/Release
-          zip -r HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip HelloKnightRCC.app
-          mv HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip $GITHUB_WORKSPACE/client/
-
       - name: Create macOS DMG
         run: |
           cd client/build/macos/Build/Products/Release
@@ -83,6 +77,17 @@ jobs:
           
           echo "DMG created: $DMG_NAME"
 
+      - name: Archive macOS DMG (zip)
+        run: |
+          cd $GITHUB_WORKSPACE/client
+          DMG_NAME="HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.dmg"
+          ZIP_NAME="HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip"
+          
+          # 将DMG文件打包成zip（zip包里包含dmg文件）
+          zip "$ZIP_NAME" "$DMG_NAME"
+          
+          echo "macOS ZIP created: $ZIP_NAME (contains DMG file)"
+
       - name: Upload version info
         uses: actions/upload-artifact@v4
         with:
@@ -97,7 +102,6 @@ jobs:
           name: HelloKnightRCC_macos
           path: |
             client/HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip
-            client/HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.dmg
           retention-days: 30
 
 
@@ -496,11 +500,12 @@ jobs:
           echo "  CLIENT_VERSION=$CLIENT_VERSION"
           echo "  SERVER_VERSION=$SERVER_VERSION"
           
-          # macOS文件 - 只使用zip文件（用于更新）
+          # macOS文件 - zip文件（zip包里包含dmg文件）
           MACOS_ZIP=$(find ./artifacts-temp -name "HelloKnightRCC_macos_*.zip" | head -1)
           if [ -n "$MACOS_ZIP" ]; then
             mv "$MACOS_ZIP" "./artifacts/HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
             echo "重命名macOS ZIP: $(basename "$MACOS_ZIP") -> HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
+            echo "注意: macOS ZIP文件包含DMG文件，用户需要解压后打开DMG安装"
           else
             echo "警告: 未找到macOS ZIP文件"
           fi

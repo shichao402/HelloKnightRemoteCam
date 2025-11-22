@@ -4,6 +4,8 @@ import 'package:dio/dio.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:open_file/open_file.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:archive/archive.dart';
+import 'package:path/path.dart' as path;
 import 'logger_service.dart';
 import 'version_service.dart';
 import 'update_settings_service.dart';
@@ -341,13 +343,109 @@ class UpdateService {
       return false;
     }
   }
+
+  /// 请求安装APK权限（Android 8.0+需要）
+  /// 注意：此权限需要通过系统设置页面手动开启，无法通过代码直接请求
+  Future<bool> requestInstallPermission() async {
+    if (!Platform.isAndroid) {
+      return true; // 非Android平台不需要权限
+    }
+    
+    try {
+      _logger.log('检查安装APK权限', tag: 'UPDATE');
+      
+      // 尝试检查权限状态（如果permission_handler支持）
+      try {
+        final status = await Permission.requestInstallPackages.status;
+        if (status.isGranted) {
+          _logger.log('安装APK权限已授予', tag: 'UPDATE');
+          return true;
+        }
+        _logger.log('安装APK权限未授予，将尝试打开文件（系统会引导用户到设置页面）', tag: 'UPDATE');
+      } catch (e) {
+        // permission_handler可能不支持此权限，这是正常的
+        _logger.log('无法检查安装APK权限（可能不支持），将直接尝试打开文件', tag: 'UPDATE');
+      }
+      
+      // 即使权限检查失败，也返回true，让open_file插件处理
+      // open_file插件会引导用户到设置页面开启"允许从此来源安装应用"
+      return true;
+    } catch (e, stackTrace) {
+      _logger.logError('检查安装APK权限失败', error: e, stackTrace: stackTrace);
+      // 即使出错也返回true，让open_file插件尝试打开
+      return true;
+    }
+  }
   
+  /// 解压zip文件
+  Future<String?> _extractZipFile(String zipPath, String extractDir) async {
+    try {
+      _logger.log('开始解压zip文件: $zipPath', tag: 'UPDATE');
+
+      final zipFile = File(zipPath);
+      final bytes = await zipFile.readAsBytes();
+      final archive = ZipDecoder().decodeBytes(bytes);
+
+      // 创建解压目录
+      final extractDirectory = Directory(extractDir);
+      if (!await extractDirectory.exists()) {
+        await extractDirectory.create(recursive: true);
+      }
+
+      // 解压所有文件
+      String? extractedFilePath;
+      String? apkFilePath; // 优先查找APK文件（Android）
+
+      for (final file in archive) {
+        final filePath = path.join(extractDir, file.name);
+
+        if (file.isFile) {
+          final outputFile = File(filePath);
+          await outputFile.create(recursive: true);
+          await outputFile.writeAsBytes(file.content as List<int>);
+
+          // 根据文件扩展名分类查找
+          final ext = path.extension(filePath).toLowerCase();
+          if (ext == '.apk') {
+            apkFilePath = filePath;
+            _logger.log('找到APK文件: $filePath', tag: 'UPDATE');
+          }
+
+          // 记录第一个文件路径（作为备选）
+          if (extractedFilePath == null) {
+            extractedFilePath = filePath;
+          }
+        } else {
+          // 创建目录
+          final dir = Directory(filePath);
+          if (!await dir.exists()) {
+            await dir.create(recursive: true);
+          }
+        }
+      }
+
+      // 根据平台优先返回对应的文件
+      String? result;
+      if (Platform.isAndroid) {
+        result = apkFilePath ?? extractedFilePath;
+      } else {
+        result = apkFilePath ?? extractedFilePath;
+      }
+
+      _logger.log('zip文件解压完成: $extractDir, 返回文件: $result', tag: 'UPDATE');
+      return result;
+    } catch (e, stackTrace) {
+      _logger.logError('解压zip文件失败', error: e, stackTrace: stackTrace);
+      rethrow;
+    }
+  }
+
   /// 下载更新文件
   /// 
   /// [updateInfo] 更新信息
   /// [onProgress] 进度回调 (received, total)
   /// 
-  /// 返回下载文件的路径
+  /// 返回下载文件的路径（如果是zip则返回解压后的文件路径）
   Future<String?> downloadUpdateFile(
     UpdateInfo updateInfo, {
     Function(int received, int total)? onProgress,
@@ -370,6 +468,32 @@ class UpdateService {
       );
       
       _logger.log('更新文件下载完成: $filePath', tag: 'UPDATE');
+
+      // 如果是zip文件，先解压
+      if (updateInfo.fileType.toLowerCase() == 'zip') {
+        _logger.log('检测到zip文件，开始解压', tag: 'UPDATE');
+        final extractDir = path.join(path.dirname(filePath),
+            'extracted_${path.basenameWithoutExtension(filePath)}');
+        final extractedFilePath = await _extractZipFile(filePath, extractDir);
+
+        if (extractedFilePath == null) {
+          throw Exception('解压zip文件失败，未找到可执行文件');
+        }
+
+        _logger.log('zip文件解压完成: $extractedFilePath', tag: 'UPDATE');
+
+        // 删除zip文件以节约空间
+        try {
+          await File(filePath).delete();
+          _logger.log('已删除zip文件以节约空间: $filePath', tag: 'UPDATE');
+        } catch (e) {
+          _logger.log('删除zip文件失败: $e', tag: 'UPDATE');
+        }
+
+        // 返回解压后的文件路径
+        return extractedFilePath;
+      }
+
       return filePath;
     } catch (e, stackTrace) {
       _logger.logError('下载更新文件失败', error: e, stackTrace: stackTrace);
@@ -386,6 +510,18 @@ class UpdateService {
       if (!await file.exists()) {
         _logger.logError('文件不存在', error: 'Path: $filePath');
         return false;
+      }
+
+      // Android平台：如果是APK文件，需要先请求安装权限
+      if (Platform.isAndroid) {
+        final ext = path.extension(filePath).toLowerCase();
+        if (ext == '.apk') {
+          final hasPermission = await requestInstallPermission();
+          if (!hasPermission) {
+            _logger.logError('安装APK权限被拒绝，无法打开APK文件', error: 'Path: $filePath');
+            return false;
+          }
+        }
       }
       
       final result = await OpenFile.open(filePath);

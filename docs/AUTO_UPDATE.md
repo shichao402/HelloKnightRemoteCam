@@ -69,11 +69,17 @@
 ### 发布文件说明
 
 **GitHub Release 中只包含zip文件：**
-- macOS: `HelloKnightRCC_macos_<version>.zip`
-- Windows: `HelloKnightRCC_windows_<version>.zip`
-- Android: `helloknightrcc_server_android_<version>.zip`
+- macOS: `HelloKnightRCC_macos_<version>.zip`（zip包内包含dmg文件，用户解压后打开dmg安装）
+- Windows: `HelloKnightRCC_windows_<version>.zip`（zip包内包含exe安装程序）
+- Android: `helloknightrcc_server_android_<version>.zip`（zip包内包含apk文件）
 
-**注意：** 虽然构建过程中可能生成其他格式的文件（如dmg、exe等），但这些文件**不会上传到Release**，也不会出现在更新列表中。更新列表和Release中**仅包含zip包**。
+**macOS 安装说明：**
+1. 下载 `HelloKnightRCC_macos_<version>.zip`
+2. 解压得到 `HelloKnightRCC_macos_<version>.dmg`
+3. 打开 dmg 文件
+4. 将应用拖动到 Applications 文件夹覆盖现有程序
+
+**注意：** 虽然构建过程中可能生成其他格式的文件，但这些文件**不会单独上传到Release**。更新列表和Release中**仅包含zip包**，zip包内包含相应的安装文件（dmg/exe/apk）。
 
 ## 完整发布流程
 

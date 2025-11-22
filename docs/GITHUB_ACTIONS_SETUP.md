@@ -51,11 +51,17 @@ git push origin v1.0.4
 
 ### GitHub Release
 
-**重要说明：** GitHub Release 中**仅上传zip文件**，其他格式的文件（如dmg、exe等）不会上传到Release。
+**重要说明：** GitHub Release 中**仅上传zip文件**，zip包内包含相应的安装文件。
 
-- macOS: `HelloKnightRCC_macos_<version>.zip`
-- Windows: `HelloKnightRCC_windows_<version>.zip`
-- Android: `helloknightrcc_server_android_<version>.zip`
+- macOS: `HelloKnightRCC_macos_<version>.zip`（zip包内包含dmg文件）
+- Windows: `HelloKnightRCC_windows_<version>.zip`（zip包内包含exe安装程序）
+- Android: `helloknightrcc_server_android_<version>.zip`（zip包内包含apk文件）
+
+**macOS 安装流程：**
+1. 下载zip文件并解压
+2. 得到dmg文件
+3. 打开dmg文件
+4. 将应用拖动到Applications文件夹覆盖现有程序
 
 ## 更新配置文件
 

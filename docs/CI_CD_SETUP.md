@@ -39,6 +39,11 @@ https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.5/Hell
 
 **注意：** 更新配置中**仅包含zip包的下载链接**，不包含其他格式的文件（如dmg、exe等）。
 
+**macOS zip包结构：**
+- zip包内包含dmg文件
+- 用户需要解压zip得到dmg文件
+- 打开dmg文件后，将应用拖动到Applications文件夹覆盖现有程序
+
 ## 客户端配置
 
 客户端和服务端应用默认使用 GitHub 的更新检查 URL：
