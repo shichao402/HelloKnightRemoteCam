@@ -32,18 +32,46 @@ jobs:
           # 始终从 VERSION.yaml 文件读取版本号（唯一数据源）
           if [ -f "VERSION.yaml" ]; then
             CLIENT_VERSION=$(./scripts/version.sh get client)
+            # 验证版本号不为空
+            if [ -z "$CLIENT_VERSION" ]; then
+              echo "错误: 无法从 VERSION.yaml 读取客户端版本号"
+              exit 1
+            fi
             VERSION=$(echo "$CLIENT_VERSION" | sed 's/+.*//')
             BUILD_NUMBER=$(echo "$CLIENT_VERSION" | sed 's/.*+//')
             if [ "$CLIENT_VERSION" == "$VERSION" ]; then
+              BUILD_NUMBER="1"
+            fi
+            # 验证版本号格式（必须包含 major.minor.patch）
+            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "错误: 版本号格式不正确: $VERSION (应为 x.y.z 格式)"
+              exit 1
+            fi
+            # 验证构建号不为空
+            if [ -z "$BUILD_NUMBER" ]; then
               BUILD_NUMBER="1"
             fi
             echo "从 VERSION.yaml 文件读取客户端版本号: $CLIENT_VERSION"
           elif [ -f "VERSION" ]; then
             # 兼容旧格式
             CLIENT_VERSION=$(grep "^CLIENT_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            # 验证版本号不为空
+            if [ -z "$CLIENT_VERSION" ]; then
+              echo "错误: 无法从 VERSION 文件读取客户端版本号"
+              exit 1
+            fi
             VERSION=$(echo "$CLIENT_VERSION" | sed 's/+.*//')
             BUILD_NUMBER=$(echo "$CLIENT_VERSION" | sed 's/.*+//')
             if [ "$CLIENT_VERSION" == "$VERSION" ]; then
+              BUILD_NUMBER="1"
+            fi
+            # 验证版本号格式（必须包含 major.minor.patch）
+            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "错误: 版本号格式不正确: $VERSION (应为 x.y.z 格式)"
+              exit 1
+            fi
+            # 验证构建号不为空
+            if [ -z "$BUILD_NUMBER" ]; then
               BUILD_NUMBER="1"
             fi
             echo "从 VERSION 文件（旧格式）读取客户端版本号: $CLIENT_VERSION"
@@ -190,9 +218,23 @@ jobs:
           # 始终从 VERSION.yaml 文件读取版本号（唯一数据源）
           if (Test-Path "VERSION.yaml") {
             $clientVersion = bash scripts/version.sh get client
+            # 验证版本号不为空
+            if ([string]::IsNullOrWhiteSpace($clientVersion)) {
+              Write-Host "错误: 无法从 VERSION.yaml 读取客户端版本号"
+              exit 1
+            }
             $version = $clientVersion -replace "\+.*", ""
             $buildNumber = $clientVersion -replace ".*\+", ""
             if ($buildNumber -eq $clientVersion) {
+              $buildNumber = "1"
+            }
+            # 验证版本号格式（必须包含 major.minor.patch）
+            if ($version -notmatch '^\d+\.\d+\.\d+$') {
+              Write-Host "错误: 版本号格式不正确: $version (应为 x.y.z 格式)"
+              exit 1
+            }
+            # 验证构建号不为空
+            if ([string]::IsNullOrWhiteSpace($buildNumber)) {
               $buildNumber = "1"
             }
             Write-Host "Reading client version from VERSION.yaml file: $clientVersion"
@@ -201,9 +243,23 @@ jobs:
             $versionLine = Get-Content "VERSION" | Select-String -Pattern "^CLIENT_VERSION="
             if ($versionLine) {
               $clientVersion = $versionLine -replace "CLIENT_VERSION=", "" -replace " ", ""
+              # 验证版本号不为空
+              if ([string]::IsNullOrWhiteSpace($clientVersion)) {
+                Write-Host "错误: 无法从 VERSION 文件读取客户端版本号"
+                exit 1
+              }
               $version = $clientVersion -replace "\+.*", ""
               $buildNumber = $clientVersion -replace ".*\+", ""
               if ($buildNumber -eq $clientVersion) {
+                $buildNumber = "1"
+              }
+              # 验证版本号格式（必须包含 major.minor.patch）
+              if ($version -notmatch '^\d+\.\d+\.\d+$') {
+                Write-Host "错误: 版本号格式不正确: $version (应为 x.y.z 格式)"
+                exit 1
+              }
+              # 验证构建号不为空
+              if ([string]::IsNullOrWhiteSpace($buildNumber)) {
                 $buildNumber = "1"
               }
               Write-Host "Reading client version from VERSION file (old format): $clientVersion"
@@ -360,18 +416,46 @@ jobs:
           # 始终从 VERSION.yaml 文件读取版本号（唯一数据源）
           if [ -f "VERSION.yaml" ]; then
             SERVER_VERSION=$(./scripts/version.sh get server)
+            # 验证版本号不为空
+            if [ -z "$SERVER_VERSION" ]; then
+              echo "错误: 无法从 VERSION.yaml 读取服务器版本号"
+              exit 1
+            fi
             VERSION=$(echo "$SERVER_VERSION" | sed 's/+.*//')
             BUILD_NUMBER=$(echo "$SERVER_VERSION" | sed 's/.*+//')
             if [ "$SERVER_VERSION" == "$VERSION" ]; then
+              BUILD_NUMBER="1"
+            fi
+            # 验证版本号格式（必须包含 major.minor.patch）
+            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "错误: 版本号格式不正确: $VERSION (应为 x.y.z 格式)"
+              exit 1
+            fi
+            # 验证构建号不为空
+            if [ -z "$BUILD_NUMBER" ]; then
               BUILD_NUMBER="1"
             fi
             echo "从 VERSION.yaml 文件读取服务器版本号: $SERVER_VERSION"
           elif [ -f "VERSION" ]; then
             # 兼容旧格式
             SERVER_VERSION=$(grep "^SERVER_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            # 验证版本号不为空
+            if [ -z "$SERVER_VERSION" ]; then
+              echo "错误: 无法从 VERSION 文件读取服务器版本号"
+              exit 1
+            fi
             VERSION=$(echo "$SERVER_VERSION" | sed 's/+.*//')
             BUILD_NUMBER=$(echo "$SERVER_VERSION" | sed 's/.*+//')
             if [ "$SERVER_VERSION" == "$VERSION" ]; then
+              BUILD_NUMBER="1"
+            fi
+            # 验证版本号格式（必须包含 major.minor.patch）
+            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "错误: 版本号格式不正确: $VERSION (应为 x.y.z 格式)"
+              exit 1
+            fi
+            # 验证构建号不为空
+            if [ -z "$BUILD_NUMBER" ]; then
               BUILD_NUMBER="1"
             fi
             echo "从 VERSION 文件（旧格式）读取服务器版本号: $SERVER_VERSION"
