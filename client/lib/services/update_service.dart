@@ -75,7 +75,7 @@ class UpdateService {
 
   // 默认更新检查URL（可以从设置中配置）
   String _updateCheckUrl = '';
-  
+
   // 内存中的更新信息（不持久化）
   UpdateInfo? _currentUpdateInfo;
 
@@ -144,7 +144,7 @@ class UpdateService {
           '_t': timestamp.toString(),
         }).toString();
       }
-      
+
       _logger.log('开始检查更新，URL: $url', tag: 'UPDATE');
 
       // 获取更新配置
@@ -176,17 +176,18 @@ class UpdateService {
         // 如果是字符串，需要手动解析 JSON
         config = jsonDecode(response.data as String) as Map<String, dynamic>;
       } else {
-        _logger.logError('更新检查失败', error: '响应数据格式不正确: ${response.data.runtimeType}');
+        _logger.logError('更新检查失败',
+            error: '响应数据格式不正确: ${response.data.runtimeType}');
         return UpdateCheckResult(
           hasUpdate: false,
           error: '响应数据格式不正确',
         );
       }
-      
+
       // 获取当前版本
       final currentVersion = await _versionService.getVersion();
       final currentVersionNumber = await _versionService.getVersionNumber();
-      
+
       _logger.log('当前版本: $currentVersion', tag: 'UPDATE');
 
       // 获取当前平台
@@ -227,18 +228,22 @@ class UpdateService {
       _logger.log('最新版本: ${updateInfo.version}', tag: 'UPDATE');
 
       // 比较版本
-      final hasUpdate = _compareVersions(updateInfo.versionNumber, currentVersionNumber);
-      
+      final hasUpdate =
+          _compareVersions(updateInfo.versionNumber, currentVersionNumber);
+
       if (hasUpdate) {
         _logger.log('发现新版本: ${updateInfo.version}', tag: 'UPDATE');
-        
+
         // 检查是否有旧的更新信息（内存中）
-        if (_currentUpdateInfo != null && _currentUpdateInfo!.version != updateInfo.version) {
-          _logger.log('检测到更新版本变更: ${_currentUpdateInfo!.version} -> ${updateInfo.version}', tag: 'UPDATE');
+        if (_currentUpdateInfo != null &&
+            _currentUpdateInfo!.version != updateInfo.version) {
+          _logger.log(
+              '检测到更新版本变更: ${_currentUpdateInfo!.version} -> ${updateInfo.version}',
+              tag: 'UPDATE');
           // 清理旧的更新包
           await _cleanupOldUpdatePackages(_currentUpdateInfo!);
         }
-        
+
         // 仅在内存中保存更新信息（不持久化）
         _currentUpdateInfo = updateInfo;
         return UpdateCheckResult(
@@ -266,12 +271,12 @@ class UpdateService {
   Future<UpdateInfo?> getSavedUpdateInfo() async {
     return _currentUpdateInfo;
   }
-  
+
   /// 检查是否有可用的更新（检查内存中的状态）
   Future<bool> hasUpdate() async {
     return _currentUpdateInfo != null;
   }
-  
+
   /// 计算文件的SHA256 hash
   Future<String> _calculateFileHash(String filePath) async {
     final file = File(filePath);
@@ -286,13 +291,14 @@ class UpdateService {
       _logger.log('开始校验文件hash: $filePath', tag: 'UPDATE');
       final actualHash = await _calculateFileHash(filePath);
       final isValid = actualHash.toLowerCase() == expectedHash.toLowerCase();
-      
+
       if (isValid) {
         _logger.log('文件hash校验通过', tag: 'UPDATE');
       } else {
-        _logger.logError('文件hash校验失败', error: '期望: $expectedHash, 实际: $actualHash');
+        _logger.logError('文件hash校验失败',
+            error: '期望: $expectedHash, 实际: $actualHash');
       }
-      
+
       return isValid;
     } catch (e, stackTrace) {
       _logger.logError('校验文件hash失败', error: e, stackTrace: stackTrace);
@@ -304,31 +310,31 @@ class UpdateService {
   Future<String?> _extractZipFile(String zipPath, String extractDir) async {
     try {
       _logger.log('开始解压zip文件: $zipPath', tag: 'UPDATE');
-      
+
       final zipFile = File(zipPath);
       final bytes = await zipFile.readAsBytes();
       final archive = ZipDecoder().decodeBytes(bytes);
-      
+
       // 创建解压目录
       final extractDirectory = Directory(extractDir);
       if (!await extractDirectory.exists()) {
         await extractDirectory.create(recursive: true);
       }
-      
+
       // 解压所有文件
       String? extractedFilePath;
       String? apkFilePath; // 优先查找APK文件（Android）
       String? dmgFilePath; // 查找DMG文件（macOS）
       String? exeFilePath; // 查找EXE文件（Windows）
-      
+
       for (final file in archive) {
         final filePath = path.join(extractDir, file.name);
-        
+
         if (file.isFile) {
           final outputFile = File(filePath);
           await outputFile.create(recursive: true);
           await outputFile.writeAsBytes(file.content as List<int>);
-          
+
           // 根据文件扩展名分类查找
           final ext = path.extension(filePath).toLowerCase();
           if (ext == '.apk') {
@@ -341,7 +347,7 @@ class UpdateService {
             exeFilePath = filePath;
             _logger.log('找到EXE/MSI文件: $filePath', tag: 'UPDATE');
           }
-          
+
           // 记录第一个文件路径（作为备选）
           if (extractedFilePath == null) {
             extractedFilePath = filePath;
@@ -354,7 +360,7 @@ class UpdateService {
           }
         }
       }
-      
+
       // 根据平台优先返回对应的文件
       String? result;
       if (Platform.isAndroid) {
@@ -366,7 +372,7 @@ class UpdateService {
       } else {
         result = apkFilePath ?? dmgFilePath ?? exeFilePath ?? extractedFilePath;
       }
-      
+
       _logger.log('zip文件解压完成: $extractDir, 返回文件: $result', tag: 'UPDATE');
       return result;
     } catch (e, stackTrace) {
@@ -379,10 +385,10 @@ class UpdateService {
   Future<void> _cleanupOldUpdatePackages(UpdateInfo oldUpdateInfo) async {
     try {
       _logger.log('开始清理旧的更新包: ${oldUpdateInfo.fileName}', tag: 'UPDATE');
-      
+
       // 获取下载目录
       final downloadDir = await _getDownloadDirectory();
-      
+
       // 1. 删除旧的下载文件（已完成的）
       final oldFilePath = path.join(downloadDir, oldUpdateInfo.fileName);
       final oldFile = File(oldFilePath);
@@ -394,15 +400,15 @@ class UpdateService {
           _logger.log('删除旧更新文件失败: $e', tag: 'UPDATE');
         }
       }
-      
+
       // 2. 删除未完成的下载文件（可能存在的部分下载）
       final partialFiles = await Directory(downloadDir)
           .list()
-          .where((entity) => entity is File && 
-                entity.path.contains(oldUpdateInfo.fileName))
+          .where((entity) =>
+              entity is File && entity.path.contains(oldUpdateInfo.fileName))
           .cast<File>()
           .toList();
-      
+
       for (final file in partialFiles) {
         try {
           await file.delete();
@@ -411,9 +417,10 @@ class UpdateService {
           _logger.log('删除未完成文件失败: $e', tag: 'UPDATE');
         }
       }
-      
+
       // 3. 删除旧的解压缓存目录
-      final extractDirPattern = 'extracted_${path.basenameWithoutExtension(oldUpdateInfo.fileName)}';
+      final extractDirPattern =
+          'extracted_${path.basenameWithoutExtension(oldUpdateInfo.fileName)}';
       final extractDir = path.join(downloadDir, extractDirPattern);
       final extractDirectory = Directory(extractDir);
       if (await extractDirectory.exists()) {
@@ -424,7 +431,7 @@ class UpdateService {
           _logger.log('删除解压缓存失败: $e', tag: 'UPDATE');
         }
       }
-      
+
       // 4. 清理所有解压缓存目录（以extracted_开头的目录）
       try {
         final downloadDirectory = Directory(downloadDir);
@@ -443,13 +450,13 @@ class UpdateService {
       } catch (e) {
         _logger.log('清理解压缓存时出错: $e', tag: 'UPDATE');
       }
-      
+
       _logger.log('旧更新包清理完成', tag: 'UPDATE');
     } catch (e, stackTrace) {
       _logger.logError('清理旧更新包失败', error: e, stackTrace: stackTrace);
     }
   }
-  
+
   /// 获取下载目录（通过FileDownloadService的内部方法）
   Future<String> _getDownloadDirectory() async {
     // 使用反射或直接复制逻辑，这里我们直接复制逻辑
@@ -480,10 +487,10 @@ class UpdateService {
   }
 
   /// 下载更新文件
-  /// 
+  ///
   /// [updateInfo] 更新信息
   /// [onProgress] 进度回调 (received, total)
-  /// 
+  ///
   /// 返回下载文件的路径（如果是zip则返回解压后的文件路径）
   Future<String?> downloadUpdateFile(
     UpdateInfo updateInfo, {
@@ -491,15 +498,15 @@ class UpdateService {
   }) async {
     try {
       _logger.log('开始下载更新文件: ${updateInfo.fileName}', tag: 'UPDATE');
-      
+
       final filePath = await _fileDownloadService.downloadFile(
         url: updateInfo.downloadUrl,
         fileName: updateInfo.fileName,
         onProgress: onProgress,
       );
-      
+
       _logger.log('更新文件下载完成: $filePath', tag: 'UPDATE');
-      
+
       // 如果有hash，进行校验
       if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
         final isValid = await verifyFileHash(filePath, updateInfo.fileHash!);
@@ -515,19 +522,20 @@ class UpdateService {
       } else {
         _logger.log('更新信息中未包含hash，跳过校验', tag: 'UPDATE');
       }
-      
+
       // 如果是zip文件，先解压
       if (updateInfo.fileType.toLowerCase() == 'zip') {
         _logger.log('检测到zip文件，开始解压', tag: 'UPDATE');
-        final extractDir = path.join(path.dirname(filePath), 'extracted_${path.basenameWithoutExtension(filePath)}');
+        final extractDir = path.join(path.dirname(filePath),
+            'extracted_${path.basenameWithoutExtension(filePath)}');
         final extractedFilePath = await _extractZipFile(filePath, extractDir);
-        
+
         if (extractedFilePath == null) {
           throw Exception('解压zip文件失败，未找到可执行文件');
         }
-        
+
         _logger.log('zip文件解压完成: $extractedFilePath', tag: 'UPDATE');
-        
+
         // 删除zip文件以节约空间
         try {
           await File(filePath).delete();
@@ -535,36 +543,37 @@ class UpdateService {
         } catch (e) {
           _logger.log('删除zip文件失败: $e', tag: 'UPDATE');
         }
-        
+
         // 返回解压后的文件路径
         return extractedFilePath;
       }
-      
+
       return filePath;
     } catch (e, stackTrace) {
       _logger.logError('下载更新文件失败', error: e, stackTrace: stackTrace);
       rethrow;
     }
   }
-  
+
   /// 打开下载的文件
   /// 根据平台和文件类型使用不同的打开方式
   Future<bool> openDownloadedFile(String filePath) async {
     try {
       _logger.log('打开下载的文件: $filePath', tag: 'UPDATE');
-      
+
       final file = File(filePath);
       if (!await file.exists()) {
         _logger.logError('文件不存在', error: 'Path: $filePath');
         return false;
       }
-      
+
       // 根据平台和文件类型选择打开方式
       if (Platform.isWindows) {
         // Windows: 直接打开exe或msi文件
         final ext = path.extension(filePath).toLowerCase();
         if (ext == '.exe' || ext == '.msi') {
-          final result = await Process.run('start', ['', filePath], runInShell: true);
+          final result =
+              await Process.run('start', ['', filePath], runInShell: true);
           if (result.exitCode == 0) {
             _logger.log('已打开Windows安装程序', tag: 'UPDATE');
             return true;
@@ -599,15 +608,16 @@ class UpdateService {
           }
         }
       }
-      
+
       // 默认使用open_file插件打开
       final result = await OpenFile.open(filePath);
-      
+
       if (result.type == ResultType.done) {
         _logger.log('已打开文件', tag: 'UPDATE');
         return true;
       } else {
-        _logger.logError('打开文件失败', error: 'Result: ${result.type}, Message: ${result.message}');
+        _logger.logError('打开文件失败',
+            error: 'Result: ${result.type}, Message: ${result.message}');
         return false;
       }
     } catch (e, stackTrace) {
@@ -627,4 +637,3 @@ class UpdateService {
     );
   }
 }
-
