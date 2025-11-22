@@ -2,14 +2,14 @@
 
 # 版本号管理脚本
 # 用途：管理项目版本号，不依赖外部平台（Git、CI/CD等）
-# 版本号存储在根目录的 VERSION 文件中
+# 版本号存储在根目录的 VERSION.yaml 文件中（YAML格式）
 # 客户端和服务器使用独立的版本号
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-VERSION_FILE="$PROJECT_ROOT/VERSION"
+VERSION_FILE="$PROJECT_ROOT/VERSION.yaml"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -17,6 +17,24 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# 检查 Python3 是否可用
+if ! command -v python3 &> /dev/null; then
+    echo -e "${RED}错误: 需要 Python3 来解析 YAML 文件${NC}" >&2
+    exit 1
+fi
+
+# 检查 PyYAML 是否安装
+if ! python3 -c "import yaml" 2>/dev/null; then
+    echo -e "${YELLOW}警告: PyYAML 未安装，正在尝试安装...${NC}" >&2
+    if python3 -m pip install --user pyyaml 2>/dev/null; then
+        echo -e "${GREEN}PyYAML 安装成功${NC}"
+    else
+        echo -e "${RED}错误: 无法安装 PyYAML${NC}" >&2
+        echo "请手动安装: pip3 install pyyaml 或 python3 -m pip install pyyaml" >&2
+        exit 1
+    fi
+fi
 
 # 显示帮助信息
 show_help() {
@@ -45,16 +63,99 @@ show_help() {
     echo "  $0 sync client                 # 只同步客户端版本号"
 }
 
-# 读取VERSION文件中的配置值
+# 使用 Python 读取 YAML 文件中的配置值
+read_yaml_value() {
+    local key_path=$1
+    python3 <<EOF
+import yaml
+import sys
+
+try:
+    with open('$VERSION_FILE', 'r', encoding='utf-8') as f:
+        data = yaml.safe_load(f)
+    
+    # 支持嵌套路径，如 client.version 或 compatibility.min_client_version
+    keys = '$key_path'.split('.')
+    value = data
+    for key in keys:
+        if isinstance(value, dict) and key in value:
+            value = value[key]
+        else:
+            sys.exit(1)
+    
+    if value is not None:
+        print(value)
+except Exception as e:
+    sys.exit(1)
+EOF
+}
+
+# 使用 Python 写入 YAML 文件中的配置值
+write_yaml_value() {
+    local key_path=$1
+    local value=$2
+    python3 <<EOF
+import yaml
+import sys
+
+try:
+    # 读取现有文件
+    with open('$VERSION_FILE', 'r', encoding='utf-8') as f:
+        data = yaml.safe_load(f) or {}
+    
+    # 支持嵌套路径
+    keys = '$key_path'.split('.')
+    current = data
+    for i, key in enumerate(keys[:-1]):
+        if key not in current:
+            current[key] = {}
+        current = current[key]
+    
+    # 设置值
+    current[keys[-1]] = '$value'
+    
+    # 写回文件，保持格式
+    with open('$VERSION_FILE', 'w', encoding='utf-8') as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+except Exception as e:
+    print(f"错误: {e}", file=sys.stderr)
+    sys.exit(1)
+EOF
+}
+
+# 读取VERSION文件中的配置值（兼容旧格式和新格式）
 read_version_config() {
     local key=$1
-    if [ ! -f "$VERSION_FILE" ]; then
-        echo -e "${RED}错误: VERSION 文件不存在${NC}" >&2
-        exit 1
-    fi
     
-    # 读取配置值（忽略注释和空行）
-    grep "^${key}=" "$VERSION_FILE" | head -1 | cut -d'=' -f2 | tr -d '[:space:]'
+    # 优先使用 YAML 格式
+    if [ -f "$VERSION_FILE" ]; then
+        case "$key" in
+            CLIENT_VERSION)
+                read_yaml_value "client.version" 2>/dev/null || echo ""
+                ;;
+            SERVER_VERSION)
+                read_yaml_value "server.version" 2>/dev/null || echo ""
+                ;;
+            MIN_CLIENT_VERSION)
+                read_yaml_value "compatibility.min_client_version" 2>/dev/null || echo ""
+                ;;
+            MIN_SERVER_VERSION)
+                read_yaml_value "compatibility.min_server_version" 2>/dev/null || echo ""
+                ;;
+            *)
+                echo ""
+                ;;
+        esac
+    else
+        # 兼容旧的 VERSION 文件格式
+        local old_file="$PROJECT_ROOT/VERSION"
+        if [ -f "$old_file" ]; then
+            grep "^${key}=" "$old_file" | head -1 | cut -d'=' -f2 | tr -d '[:space:]'
+        else
+            echo -e "${RED}错误: VERSION.yaml 文件不存在${NC}" >&2
+            exit 1
+        fi
+    fi
 }
 
 # 写入VERSION文件中的配置值
@@ -63,20 +164,28 @@ write_version_config() {
     local value=$2
     
     if [ ! -f "$VERSION_FILE" ]; then
-        echo -e "${RED}错误: VERSION 文件不存在${NC}" >&2
+        echo -e "${RED}错误: VERSION.yaml 文件不存在${NC}" >&2
         exit 1
     fi
     
-    # 如果配置已存在，更新它；否则追加
-    if grep -q "^${key}=" "$VERSION_FILE"; then
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-            sed -i '' "s|^${key}=.*|${key}=${value}|" "$VERSION_FILE"
-        else
-            sed -i "s|^${key}=.*|${key}=${value}|" "$VERSION_FILE"
-        fi
-    else
-        echo "${key}=${value}" >> "$VERSION_FILE"
-    fi
+    case "$key" in
+        CLIENT_VERSION)
+            write_yaml_value "client.version" "$value"
+            ;;
+        SERVER_VERSION)
+            write_yaml_value "server.version" "$value"
+            ;;
+        MIN_CLIENT_VERSION)
+            write_yaml_value "compatibility.min_client_version" "$value"
+            ;;
+        MIN_SERVER_VERSION)
+            write_yaml_value "compatibility.min_server_version" "$value"
+            ;;
+        *)
+            echo -e "${RED}错误: 未知的配置键: $key${NC}" >&2
+            exit 1
+            ;;
+    esac
 }
 
 # 获取版本号
@@ -260,12 +369,19 @@ copy_version_to_assets() {
     # 确保assets目录存在
     mkdir -p "$assets_dir"
     
-    # 复制VERSION文件到assets目录
+    # 复制VERSION.yaml文件到assets目录（保持YAML格式）
     if [ -f "$VERSION_FILE" ]; then
-        cp "$VERSION_FILE" "$assets_dir/VERSION"
-        echo -e "${GREEN}已复制VERSION文件到 server/assets/VERSION${NC}"
+        cp "$VERSION_FILE" "$assets_dir/VERSION.yaml"
+        echo -e "${GREEN}已复制VERSION.yaml文件到 server/assets/VERSION.yaml${NC}"
     else
-        echo -e "${YELLOW}警告: VERSION文件不存在，无法复制到assets${NC}"
+        # 兼容旧格式
+        local old_file="$PROJECT_ROOT/VERSION"
+        if [ -f "$old_file" ]; then
+            cp "$old_file" "$assets_dir/VERSION"
+            echo -e "${GREEN}已复制VERSION文件（旧格式）到 server/assets/VERSION${NC}"
+        else
+            echo -e "${YELLOW}警告: VERSION.yaml文件不存在，无法复制到assets${NC}"
+        fi
     fi
 }
 

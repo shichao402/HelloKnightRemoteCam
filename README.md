@@ -36,7 +36,7 @@ HelloKnightRemoteCam/
 │   ├── create_release.sh         # 发布脚本
 │   └── version.sh                # 版本管理脚本
 │
-└── VERSION         # 版本号配置文件（单一数据源）
+└── VERSION.yaml    # 版本号配置文件（YAML格式，单一数据源）
 ```
 
 ## 核心特性
@@ -185,7 +185,7 @@ scripts\deploy_windows.bat
 
 ## 版本管理
 
-项目使用统一的版本管理系统，版本号存储在根目录的 `VERSION` 文件中。
+项目使用统一的版本管理系统，版本号存储在根目录的 `VERSION.yaml` 文件中（YAML格式）。
 
 ### 查看版本号
 
@@ -214,7 +214,7 @@ scripts\deploy_windows.bat
 ./scripts/version.sh bump server patch
 ```
 
-**注意：** 构建脚本会自动从 `VERSION` 文件同步版本号到 `pubspec.yaml`，无需手动操作。
+**注意：** 构建脚本会自动从 `VERSION.yaml` 文件同步版本号到 `pubspec.yaml`，无需手动操作。
 
 **详细说明请参考：[docs/VERSION_MANAGEMENT.md](docs/VERSION_MANAGEMENT.md)**
 
@@ -313,9 +313,9 @@ CameraSettings(
 
 ### 版本兼容性配置
 
-在 `VERSION` 文件中配置：
-- `MIN_CLIENT_VERSION`: 服务器要求的最小客户端版本
-- `MIN_SERVER_VERSION`: 客户端要求的最小服务器版本
+在 `VERSION.yaml` 文件中配置：
+- `compatibility.min_client_version`: 服务器要求的最小客户端版本
+- `compatibility.min_server_version`: 客户端要求的最小服务器版本
 
 ## 调试指南
 
@@ -396,7 +396,7 @@ A: 在设置中将录像质量调整为"超高"，但会占用更多存储空间
 ### Q: 版本不兼容怎么办？
 A: 
 1. 检查客户端和服务器版本号
-2. 查看 `VERSION` 文件中的最小版本要求
+2. 查看 `VERSION.yaml` 文件中的最小版本要求
 3. 更新到兼容的版本
 
 ## 项目文档

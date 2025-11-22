@@ -14,37 +14,42 @@
 
 ### 版本号存储位置
 
-版本号统一存储在项目根目录的 `VERSION` 文件中，作为单一数据源。
+版本号统一存储在项目根目录的 `VERSION.yaml` 文件中（YAML格式），作为单一数据源。
 
 **客户端和服务器使用独立的版本号：**
 
 ```
 HelloKnightRemoteCam/
-  VERSION          # 版本号配置文件（包含客户端和服务器独立版本号）
+  VERSION.yaml     # 版本号配置文件（YAML格式，包含客户端和服务器独立版本号）
   client/
     pubspec.yaml   # 客户端版本号（自动同步）
   server/
     pubspec.yaml   # 服务器版本号（自动同步）
+    assets/
+      VERSION.yaml # 服务器assets中的版本文件（用于运行时读取）
 ```
 
-### VERSION 文件格式
+### VERSION.yaml 文件格式
 
-```bash
+使用 YAML 格式，更易读易写：
+
+```yaml
 # 版本号配置文件
 # 客户端和服务器使用独立的版本号
+# 格式: YAML
 
-# 客户端版本号
-CLIENT_VERSION=1.0.0+1
+client:
+  version: "1.0.7+6"  # 客户端版本号（格式: x.y.z+build）
+  
+server:
+  version: "1.0.7+6"  # 服务器版本号（格式: x.y.z+build）
 
-# 服务器版本号
-SERVER_VERSION=1.0.0+1
-
-# 版本兼容性配置
-# 服务器支持的最小客户端版本（格式: x.y.z）
-MIN_CLIENT_VERSION=1.0.0
-
-# 客户端支持的最小服务器版本（格式: x.y.z）
-MIN_SERVER_VERSION=1.0.0
+compatibility:
+  # 服务器支持的最小客户端版本（格式: x.y.z，不含构建号）
+  min_client_version: "1.0.6"
+  
+  # 客户端支持的最小服务器版本（格式: x.y.z，不含构建号）
+  min_server_version: "1.0.6"
 ```
 
 ### 版本号管理工具
@@ -93,11 +98,11 @@ MIN_SERVER_VERSION=1.0.0
 
 **构建脚本会自动同步版本号：**
 
-- 执行 `client/scripts/build.sh` 时，会自动从 `VERSION` 文件同步**客户端**版本号到 `client/pubspec.yaml`
-- 执行 `server/scripts/build.sh` 时，会自动从 `VERSION` 文件同步**服务器**版本号到 `server/pubspec.yaml`
+- 执行 `client/scripts/build.sh` 时，会自动从 `VERSION.yaml` 文件同步**客户端**版本号到 `client/pubspec.yaml`
+- 执行 `server/scripts/build.sh` 时，会自动从 `VERSION.yaml` 文件同步**服务器**版本号到 `server/pubspec.yaml`，并复制 `VERSION.yaml` 到 `server/assets/VERSION.yaml`
 - 执行 `client/scripts/deploy.sh` 或 `server/scripts/deploy.sh` 时，也会自动同步对应版本号
 
-**无需手动操作：** 只需更新 `VERSION` 文件，构建时会自动同步。
+**无需手动操作：** 只需更新 `VERSION.yaml` 文件，构建时会自动同步。
 
 ## 版本兼容性检查
 
@@ -115,25 +120,31 @@ MIN_SERVER_VERSION=1.0.0
 
 ### 版本兼容性配置
 
-在 `VERSION` 文件中配置：
+在 `VERSION.yaml` 文件中配置：
 
-- `MIN_CLIENT_VERSION`: 服务器要求的最小客户端版本
-- `MIN_SERVER_VERSION`: 客户端要求的最小服务器版本
+- `compatibility.min_client_version`: 服务器要求的最小客户端版本
+- `compatibility.min_server_version`: 客户端要求的最小服务器版本
 
 **示例：**
 
 如果服务器升级到 2.0.0，要求客户端至少是 1.5.0：
 
-```bash
-SERVER_VERSION=2.0.0+1
-MIN_CLIENT_VERSION=1.5.0
+```yaml
+server:
+  version: "2.0.0+1"
+
+compatibility:
+  min_client_version: "1.5.0"
 ```
 
 如果客户端升级到 2.0.0，要求服务器至少是 1.5.0：
 
-```bash
-CLIENT_VERSION=2.0.0+1
-MIN_SERVER_VERSION=1.5.0
+```yaml
+client:
+  version: "2.0.0+1"
+
+compatibility:
+  min_server_version: "1.5.0"
 ```
 
 ### 版本检查流程
@@ -267,19 +278,21 @@ cd server && ./scripts/deploy.sh --release
 
 ## 版本号一致性
 
-- **单一数据源：** `VERSION` 文件是版本号的唯一来源
+- **单一数据源：** `VERSION.yaml` 文件是版本号的唯一来源
 - **独立管理：** 客户端和服务器版本号独立管理
 - **自动同步：** 构建脚本自动同步到对应的 `pubspec.yaml`
 - **代码读取：** 应用代码通过 `VersionService` 从 `pubspec.yaml` 读取（由 Flutter 的 `package_info_plus` 提供）
+- **运行时读取：** Server 端从 `assets/VERSION.yaml` 读取版本兼容性配置（打包到 APK 中）
 
 ## 注意事项
 
-1. **不要手动编辑 pubspec.yaml 中的版本号**：版本号应该通过 `VERSION` 文件和 `version.sh` 脚本管理
-2. **构建前会自动同步**：执行构建脚本时，版本号会自动从 `VERSION` 文件同步到对应的 `pubspec.yaml`
+1. **不要手动编辑 pubspec.yaml 中的版本号**：版本号应该通过 `VERSION.yaml` 文件和 `version.sh` 脚本管理
+2. **构建前会自动同步**：执行构建脚本时，版本号会自动从 `VERSION.yaml` 文件同步到对应的 `pubspec.yaml`
 3. **版本号格式**：必须遵循 `x.y.z+build` 格式
 4. **版本号服务**：代码中应使用 `VersionService` 读取版本号，而不是硬编码
 5. **版本兼容性**：更新版本时，注意更新最小版本要求，确保旧版本客户端/服务器无法连接（如果需要）
 6. **独立更新**：客户端和服务器可以独立更新版本号，互不影响
+7. **YAML 格式**：使用 YAML 格式更易读易写，所有版本配置都存储在 `VERSION.yaml` 文件中
 
 ## 与 Git 集成（可选）
 
@@ -290,7 +303,7 @@ cd server && ./scripts/deploy.sh --release
 ./scripts/version.sh bump client minor
 
 # 提交版本更新
-git add VERSION client/pubspec.yaml
+git add VERSION.yaml client/pubspec.yaml
 git commit -m "Bump client version to $(./scripts/version.sh get client)"
 
 # 创建标签（可选）
@@ -298,3 +311,13 @@ git tag "client-v$(./scripts/version.sh get client | sed 's/+.*//')"
 ```
 
 **注意：** Git 标签是可选的，版本号管理不依赖 Git。
+
+## YAML 格式的优势
+
+使用 YAML 格式相比旧的 key=value 格式有以下优势：
+
+1. **更易读**：结构化的层次结构，一目了然
+2. **更易写**：支持注释，格式更灵活
+3. **类型安全**：YAML 解析器可以验证数据类型
+4. **扩展性好**：未来可以轻松添加新的配置项
+5. **工具支持**：可以使用标准的 YAML 工具和库

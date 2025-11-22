@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
+import 'package:yaml/yaml.dart';
 import 'logger_service.dart';
 import 'version_service.dart';
 
@@ -102,28 +103,46 @@ class VersionCompatibilityService {
   }
 
   /// 从资源文件读取最小客户端版本要求
-  /// 优先从打包的assets/VERSION文件读取，如果失败则使用默认值
+  /// 优先从打包的assets/VERSION.yaml文件读取，如果失败则使用默认值
+  /// 支持YAML格式和旧格式（向后兼容）
   Future<String?> _readMinClientVersion() async {
     try {
-      // 优先从打包的assets/VERSION文件读取
+      // 优先从打包的assets/VERSION.yaml文件读取（YAML格式）
       try {
-        final content = await rootBundle.loadString('assets/VERSION');
-        final lines = content.split('\n');
-        for (final line in lines) {
-          if (line.trim().startsWith('MIN_CLIENT_VERSION=')) {
-            final version = line.split('=').last.trim();
-            if (version.isNotEmpty && !version.startsWith('#')) {
-              _logger.log('从assets/VERSION文件读取最小客户端版本: $version', tag: 'VERSION_COMPAT');
-              return version;
+        final content = await rootBundle.loadString('assets/VERSION.yaml');
+        try {
+          final yamlDoc = loadYaml(content);
+          if (yamlDoc is Map) {
+            final compatibility = yamlDoc['compatibility'];
+            if (compatibility is Map) {
+              final minVersion = compatibility['min_client_version'];
+              if (minVersion != null && minVersion.toString().isNotEmpty) {
+                final version = minVersion.toString();
+                _logger.log('从assets/VERSION.yaml文件读取最小客户端版本: $version', tag: 'VERSION_COMPAT');
+                return version;
+              }
+            }
+          }
+        } catch (e) {
+          _logger.log('解析YAML失败，尝试旧格式: $e', tag: 'VERSION_COMPAT');
+          // 如果YAML解析失败，尝试旧格式
+          final lines = content.split('\n');
+          for (final line in lines) {
+            if (line.trim().startsWith('MIN_CLIENT_VERSION=')) {
+              final version = line.split('=').last.trim();
+              if (version.isNotEmpty && !version.startsWith('#')) {
+                _logger.log('从assets/VERSION.yaml文件（旧格式）读取最小客户端版本: $version', tag: 'VERSION_COMPAT');
+                return version;
+              }
             }
           }
         }
-        _logger.log('assets/VERSION文件中未找到MIN_CLIENT_VERSION配置', tag: 'VERSION_COMPAT');
+        _logger.log('assets/VERSION.yaml文件中未找到min_client_version配置', tag: 'VERSION_COMPAT');
       } catch (e) {
-        _logger.log('无法从assets读取VERSION文件: $e', tag: 'VERSION_COMPAT');
+        _logger.log('无法从assets读取VERSION.yaml文件: $e', tag: 'VERSION_COMPAT');
       }
       
-      // 备用方案：尝试从应用文档目录向上查找项目根目录的VERSION文件（开发环境）
+      // 备用方案：尝试从应用文档目录向上查找项目根目录的VERSION.yaml文件（开发环境）
       try {
         final appDocDir = await getApplicationDocumentsDirectory();
         Directory? currentDir = Directory(appDocDir.path);
@@ -132,15 +151,48 @@ class VersionCompatibilityService {
         for (int i = 0; i < 10; i++) {
           if (currentDir == null) break;
           
-          final versionFile = File(path.join(currentDir.path, 'VERSION'));
+          // 优先查找 VERSION.yaml
+          var versionFile = File(path.join(currentDir.path, 'VERSION.yaml'));
+          var found = false;
+          
           if (await versionFile.exists()) {
+            found = true;
+          } else {
+            // 兼容旧格式 VERSION
+            versionFile = File(path.join(currentDir.path, 'VERSION'));
+            if (await versionFile.exists()) {
+              found = true;
+            }
+          }
+          
+          if (found) {
             final content = await versionFile.readAsString();
+            
+            // 尝试解析YAML格式
+            try {
+              final yamlDoc = loadYaml(content);
+              if (yamlDoc is Map) {
+                final compatibility = yamlDoc['compatibility'];
+                if (compatibility is Map) {
+                  final minVersion = compatibility['min_client_version'];
+                  if (minVersion != null && minVersion.toString().isNotEmpty) {
+                    final version = minVersion.toString();
+                    _logger.log('从文件系统VERSION.yaml文件读取最小客户端版本: $version', tag: 'VERSION_COMPAT');
+                    return version;
+                  }
+                }
+              }
+            } catch (e) {
+              // YAML解析失败，尝试旧格式
+            }
+            
+            // 旧格式解析
             final lines = content.split('\n');
             for (final line in lines) {
               if (line.trim().startsWith('MIN_CLIENT_VERSION=')) {
                 final version = line.split('=').last.trim();
                 if (version.isNotEmpty && !version.startsWith('#')) {
-                  _logger.log('从文件系统VERSION文件读取最小客户端版本: $version', tag: 'VERSION_COMPAT');
+                  _logger.log('从文件系统VERSION文件（旧格式）读取最小客户端版本: $version', tag: 'VERSION_COMPAT');
                   return version;
                 }
               }
