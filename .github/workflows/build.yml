@@ -11,6 +11,9 @@ on:
 
 env:
   FLUTTER_VERSION: '3.24.0'  # 集中管理 Flutter 版本
+  # 可选：使用国内镜像加速（如果需要，取消注释以下两行）
+  # FLUTTER_STORAGE_BASE_URL: 'https://storage.flutter-io.cn'
+  # PUB_HOSTED_URL: 'https://pub.flutter-io.cn'
 
 jobs:
   build-client-macos:
@@ -30,13 +33,6 @@ jobs:
           restore-keys: |
             python-${{ runner.os }}-pyyaml-
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
-          cache: false
-
       - name: Cache Flutter dependencies
         id: cache_flutter
         uses: actions/cache@v4
@@ -48,6 +44,13 @@ jobs:
           key: flutter-${{ runner.os }}-client-${{ hashFiles('client/pubspec.lock') }}
           restore-keys: |
             flutter-${{ runner.os }}-client-
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true  # 启用内置缓存，自动缓存 pub cache
 
       - name: Extract and sync version
         id: get_version
@@ -198,13 +201,6 @@ jobs:
           restore-keys: |
             python-windows-pyyaml-
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
-          cache: false
-
       - name: Cache Flutter dependencies
         id: cache_flutter
         uses: actions/cache@v4
@@ -216,6 +212,13 @@ jobs:
           key: flutter-windows-client-${{ hashFiles('client/pubspec.lock') }}
           restore-keys: |
             flutter-windows-client-
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true  # 启用内置缓存，自动缓存 pub cache
 
       - name: Extract and sync version
         id: get_version
@@ -367,13 +370,6 @@ jobs:
           java-version: '17'
           cache: 'gradle'  # 启用 Gradle 缓存
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
-          cache: false
-
       - name: Cache Flutter dependencies
         id: cache_flutter
         uses: actions/cache@v4
@@ -385,6 +381,13 @@ jobs:
           key: flutter-${{ runner.os }}-server-${{ hashFiles('server/pubspec.lock') }}
           restore-keys: |
             flutter-${{ runner.os }}-server-
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true  # 启用内置缓存，自动缓存 pub cache
 
       - name: Extract and sync version
         id: get_version
