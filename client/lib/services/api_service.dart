@@ -126,6 +126,24 @@ class ApiService {
           if (responseData != null && responseData['success'] == true) {
             final serverVersion = responseData['serverVersion'] as String?;
             logger.log('认证预检查通过 (服务器版本: $serverVersion)', tag: 'AUTH');
+            
+            // 检查服务器版本是否符合客户端要求的最小版本
+            if (serverVersion != null) {
+              final (isCompatible, reason) = await _versionCompatibilityService.checkServerVersion(serverVersion);
+              if (!isCompatible) {
+                logger.log('服务器版本不兼容: $reason', tag: 'AUTH');
+                final connectionError = ConnectionError(
+                  code: ConnectionErrorCode.serverVersionTooLow,
+                  message: reason ?? '服务器版本过低',
+                  serverVersion: serverVersion,
+                  minRequiredVersion: await _versionCompatibilityService.getMinServerVersion(),
+                  clientVersion: clientVersion,
+                );
+                _lastConnectionError = connectionError;
+                return connectionError;
+              }
+            }
+            
             _lastConnectionError = null; // 清除之前的错误
             return null; // 成功
           }

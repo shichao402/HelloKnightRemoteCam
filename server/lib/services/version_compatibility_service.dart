@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:yaml/yaml.dart';
+import 'package:shared/shared.dart';
 import 'logger_service.dart';
 import 'version_service.dart';
 
@@ -69,23 +70,8 @@ class VersionCompatibilityService {
   /// 比较版本号
   /// 返回 true 如果 version1 >= version2
   bool _compareVersions(String version1, String version2) {
-    final v1Parts = version1.split('.').map((e) => int.parse(e)).toList();
-    final v2Parts = version2.split('.').map((e) => int.parse(e)).toList();
-
-    // 确保两个版本号都有3个部分
-    while (v1Parts.length < 3) {
-      v1Parts.add(0);
-    }
-    while (v2Parts.length < 3) {
-      v2Parts.add(0);
-    }
-
-    for (int i = 0; i < 3; i++) {
-      if (v1Parts[i] > v2Parts[i]) return true;
-      if (v1Parts[i] < v2Parts[i]) return false;
-    }
-
-    return true; // 相等
+    // 使用 shared 包的版本比较工具
+    return VersionUtils.compareVersionsGreaterOrEqual(version1, version2);
   }
 
   /// 获取服务器版本号

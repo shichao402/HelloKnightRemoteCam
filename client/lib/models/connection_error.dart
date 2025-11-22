@@ -6,8 +6,11 @@ enum ConnectionErrorCode {
   /// 网络错误（无法访问服务器）
   networkError,
   
-  /// 版本不兼容
+  /// 版本不兼容（客户端版本过低）
   versionIncompatible,
+  
+  /// 服务器版本过低（服务器版本低于客户端要求）
+  serverVersionTooLow,
   
   /// 认证失败（未来用于用户认证）
   authenticationFailed,
@@ -173,6 +176,11 @@ class ConnectionError {
       case ConnectionErrorCode.versionIncompatible:
         if (minRequiredVersion != null && clientVersion != null) {
           return '版本不兼容\n\n客户端版本: $clientVersion\n要求最小版本: $minRequiredVersion\n\n请升级客户端后重试';
+        }
+        return message;
+      case ConnectionErrorCode.serverVersionTooLow:
+        if (serverVersion != null && minRequiredVersion != null) {
+          return '服务器版本过低\n\n服务器版本: $serverVersion\n要求最小版本: $minRequiredVersion\n\n请升级服务器版本后重试';
         }
         return message;
       case ConnectionErrorCode.authenticationFailed:

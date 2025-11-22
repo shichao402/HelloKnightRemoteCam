@@ -16,6 +16,9 @@ dependencies:
   # Path manipulation
   path: ^1.8.3
   
+  # YAML parsing
+  yaml: ^3.1.2
+  
   # Platform detection
   flutter:
     sdk: flutter

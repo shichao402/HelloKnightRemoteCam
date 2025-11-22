@@ -24,6 +24,28 @@ class VersionUtils {
     return false; // 相等
   }
 
+  /// 比较版本号（大于等于）
+  /// 返回 true 如果 version1 >= version2
+  static bool compareVersionsGreaterOrEqual(String version1, String version2) {
+    final v1Parts = version1.split('.').map((e) => int.parse(e)).toList();
+    final v2Parts = version2.split('.').map((e) => int.parse(e)).toList();
+
+    // 确保两个版本号都有3个部分
+    while (v1Parts.length < 3) {
+      v1Parts.add(0);
+    }
+    while (v2Parts.length < 3) {
+      v2Parts.add(0);
+    }
+
+    for (int i = 0; i < 3; i++) {
+      if (v1Parts[i] > v2Parts[i]) return true;
+      if (v1Parts[i] < v2Parts[i]) return false;
+    }
+
+    return true; // 相等
+  }
+
   /// 比较完整版本号（包含构建号，格式: x.y.z+build）
   /// 返回 true 如果 version1 >= version2
   static bool compareFullVersions(String version1, String version2) {
