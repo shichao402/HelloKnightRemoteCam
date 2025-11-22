@@ -10,6 +10,13 @@
 .svn/
 migrate_working_dir/
 
+# Backup files
+*.backup
+*.bak
+*.orig
+*.save
+*~
+
 # IntelliJ related
 *.iml
 *.ipr
