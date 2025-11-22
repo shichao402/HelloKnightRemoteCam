@@ -3,8 +3,8 @@ name: Build Applications
 on:
   push:
     branches: [ main, master, develop ]
-  tags:
-    - 'v*'  # 当推送版本标签时触发
+    tags:
+      - 'v*'  # 当推送版本标签时触发
   pull_request:
     branches: [ main, master, develop ]
   workflow_dispatch:  # 允许手动触发
@@ -592,22 +592,22 @@ jobs:
           SERVER_VERSION_NUM=$(python3 -c "import json; print(json.load(open('server_version.json'))['version'])")
           SERVER_BUILD_NUMBER=$(python3 -c "import json; print(json.load(open('server_version.json'))['build_number'])")
           SERVER_FULL_VERSION=$(python3 -c "import json; print(json.load(open('server_version.json'))['full_version'])")
-          
-          # 使用客户端版本号生成tag（客户端和服务器版本号应该一致）
-          TAG_VERSION="v${CLIENT_VERSION_NUM}"
-          
+            
+            # 使用客户端版本号生成tag（客户端和服务器版本号应该一致）
+            TAG_VERSION="v${CLIENT_VERSION_NUM}"
+            
           echo "CLIENT_VERSION=${CLIENT_FULL_VERSION}" >> $GITHUB_OUTPUT
-          echo "CLIENT_VERSION_NUM=${CLIENT_VERSION_NUM}" >> $GITHUB_OUTPUT
-          echo "CLIENT_BUILD_NUMBER=${CLIENT_BUILD_NUMBER}" >> $GITHUB_OUTPUT
+            echo "CLIENT_VERSION_NUM=${CLIENT_VERSION_NUM}" >> $GITHUB_OUTPUT
+            echo "CLIENT_BUILD_NUMBER=${CLIENT_BUILD_NUMBER}" >> $GITHUB_OUTPUT
           echo "CLIENT_FULL_VERSION=${CLIENT_FULL_VERSION}" >> $GITHUB_OUTPUT
-          
+            
           echo "SERVER_VERSION=${SERVER_FULL_VERSION}" >> $GITHUB_OUTPUT
-          echo "SERVER_VERSION_NUM=${SERVER_VERSION_NUM}" >> $GITHUB_OUTPUT
-          echo "SERVER_BUILD_NUMBER=${SERVER_BUILD_NUMBER}" >> $GITHUB_OUTPUT
+            echo "SERVER_VERSION_NUM=${SERVER_VERSION_NUM}" >> $GITHUB_OUTPUT
+            echo "SERVER_BUILD_NUMBER=${SERVER_BUILD_NUMBER}" >> $GITHUB_OUTPUT
           echo "SERVER_FULL_VERSION=${SERVER_FULL_VERSION}" >> $GITHUB_OUTPUT
-          
-          echo "TAG_VERSION=${TAG_VERSION}" >> $GITHUB_OUTPUT
-          echo "RELEASE_VERSION=${CLIENT_VERSION_NUM}" >> $GITHUB_OUTPUT
+            
+            echo "TAG_VERSION=${TAG_VERSION}" >> $GITHUB_OUTPUT
+            echo "RELEASE_VERSION=${CLIENT_VERSION_NUM}" >> $GITHUB_OUTPUT
           
           echo "客户端版本: ${CLIENT_FULL_VERSION}"
           echo "服务器版本: ${SERVER_FULL_VERSION}"
