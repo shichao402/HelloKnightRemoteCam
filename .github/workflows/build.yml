@@ -104,6 +104,13 @@ jobs:
             client/HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.dmg
           retention-days: 30
 
+      - name: Upload updated VERSION file
+        uses: actions/upload-artifact@v4
+        with:
+          name: VERSION-client
+          path: VERSION
+          retention-days: 30
+
   build-client-windows:
     name: Build Client Windows
     runs-on: windows-latest
@@ -249,6 +256,13 @@ jobs:
           path: client/HelloKnightRCC_windows_${{ steps.get_version.outputs.FULL_VERSION }}_setup.exe
           retention-days: 30
 
+      - name: Upload updated VERSION file
+        uses: actions/upload-artifact@v4
+        with:
+          name: VERSION-client
+          path: VERSION
+          retention-days: 30
+
   build-server-android:
     name: Build Server Android
     runs-on: ubuntu-latest
@@ -320,6 +334,13 @@ jobs:
         with:
           name: helloknightrcc_server_android
           path: server/helloknightrcc_server_android_${{ steps.get_version.outputs.FULL_VERSION }}.apk
+          retention-days: 30
+
+      - name: Upload updated VERSION file
+        uses: actions/upload-artifact@v4
+        with:
+          name: VERSION-server
+          path: VERSION
           retention-days: 30
 
   create-release:
@@ -504,7 +525,7 @@ jobs:
           echo "GitHub 更新配置文件已生成:"
           cat update_config_github.json
 
-      - name: Commit and Push GitHub Update Config
+      - name: Commit and Push VERSION and Update Config
         run: |
           # 配置 Git
           git config --global user.name "GitHub Actions"
@@ -514,12 +535,14 @@ jobs:
           git fetch origin main
           git checkout -b main origin/main || git checkout main
           
-          # 添加并提交更新配置文件
-          git add update_config_github.json
+          # 添加并提交 VERSION 文件（构建号已递增）和更新配置文件
+          git add VERSION update_config_github.json
           if git diff --staged --quiet; then
             echo "没有更改，跳过提交"
           else
-            git commit -m "发布版本 ${{ steps.get_tag_version.outputs.VERSION }} - 更新 GitHub 自动更新配置"
+            CLIENT_VERSION=$(grep "^CLIENT_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            SERVER_VERSION=$(grep "^SERVER_VERSION=" VERSION | cut -d'=' -f2 | tr -d '[:space:]')
+            git commit -m "构建版本 ${CLIENT_VERSION}/${SERVER_VERSION} - 更新构建号和 GitHub 自动更新配置"
             git push origin main || echo "推送失败，可能已是最新版本"
           fi
 
