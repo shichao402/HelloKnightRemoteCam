@@ -143,13 +143,13 @@ jobs:
               
               # 递增构建号
               $buildNumber = [int]$buildNumber + 1
-              $newClientVersion = "${version}+${buildNumber}"
+              $newClientVersion = "$version+$buildNumber"
               
               # 更新 VERSION 文件
               $content = Get-Content "VERSION"
-              $content = $content -replace "^CLIENT_VERSION=.*", "CLIENT_VERSION=${newClientVersion}"
+              $content = $content -replace "^CLIENT_VERSION=.*", "CLIENT_VERSION=$newClientVersion"
               $content | Set-Content "VERSION"
-              Write-Host "构建号已递增: $clientVersion → $newClientVersion"
+              Write-Host "构建号已递增: $clientVersion -> $newClientVersion"
             } else {
               Write-Host "错误: VERSION 文件中未找到 CLIENT_VERSION"
               exit 1
@@ -161,11 +161,11 @@ jobs:
           # 同步版本号到 pubspec.yaml
           cd client
           $content = Get-Content pubspec.yaml
-          $content = $content -replace "^version:.*", "version: ${version}+${buildNumber}"
+          $fullVersion = "$version+$buildNumber"
+          $content = $content -replace "^version:.*", "version: $fullVersion"
           $content | Set-Content pubspec.yaml
-          Write-Host "已同步版本号到 client/pubspec.yaml: ${version}+${buildNumber}"
-          $fullVersion = "${version}+${buildNumber}"
-          $tagVersion = "v${version}"
+          Write-Host "已同步版本号到 client/pubspec.yaml: $fullVersion"
+          $tagVersion = "v$version"
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
           echo "BUILD_NUMBER=$buildNumber" >> $env:GITHUB_OUTPUT
           echo "FULL_VERSION=$fullVersion" >> $env:GITHUB_OUTPUT
