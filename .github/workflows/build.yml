@@ -21,7 +21,7 @@ jobs:
         with:
           flutter-version: '3.24.0'
           channel: 'stable'
-          cache: true
+          cache: false
 
       - name: Extract version from VERSION.yaml file
         id: get_version
@@ -206,7 +206,9 @@ jobs:
         with:
           flutter-version: '3.24.0'
           channel: 'stable'
-          cache: true
+          cache: false
+          cache-key: 'flutter-windows-stable-3.24.0-${{ hashFiles(''client/pubspec.lock'') }}'
+          cache-path: 'client/.dart_tool'
 
       - name: Extract version from VERSION.yaml file
         id: get_version
@@ -405,7 +407,7 @@ jobs:
         with:
           flutter-version: '3.24.0'
           channel: 'stable'
-          cache: true
+          cache: false
 
       - name: Extract version from VERSION.yaml file
         id: get_version
