@@ -1,0 +1,59 @@
+# Gitee Go 流水线配置文件
+# 格式：使用 triggers 和 stages，而不是 GitHub Actions 的 on 和 jobs
+
+name: Build Applications
+
+triggers:
+  push:
+    branches:
+      include:
+        - main
+        - master
+        - develop
+  tag:
+    include:
+      - 'v*'
+  pull_request:
+    branches:
+      include:
+        - main
+        - master
+        - develop
+
+stages:
+  - stage:
+      name: Build Client macOS
+      steps:
+        - step: shell@1
+          name: Checkout and Build macOS
+          inputs:
+            script: |
+              echo "Building macOS client..."
+              # Gitee Go 会自动 checkout 代码
+              # 这里需要根据 Gitee Go 的实际能力调整
+              # 注意：Gitee Go 可能不支持 macOS runner
+              echo "注意：Gitee Go 可能不支持 macOS 构建，需要调整配置"
+  
+  - stage:
+      name: Build Client Windows
+      steps:
+        - step: shell@1
+          name: Checkout and Build Windows
+          inputs:
+            script: |
+              echo "Building Windows client..."
+              # Gitee Go 可能不支持 Windows runner
+              echo "注意：Gitee Go 可能不支持 Windows 构建，需要调整配置"
+  
+  - stage:
+      name: Build Server Android
+      steps:
+        - step: shell@1
+          name: Checkout and Build Android
+          inputs:
+            script: |
+              echo "Building Android server..."
+              # 安装 Flutter
+              # 构建 Android APK
+              echo "Android 构建步骤需要根据 Gitee Go 的实际能力配置"
+
