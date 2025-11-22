@@ -16,4 +16,6 @@ export 'utils/version_utils.dart';
 export 'services/version_parser_service.dart';
 export 'services/archive_service.dart';
 export 'services/file_verification_service.dart';
+export 'services/update_check_service.dart';
+export 'services/update_download_processor.dart';
 

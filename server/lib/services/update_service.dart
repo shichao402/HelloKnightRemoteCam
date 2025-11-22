@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:open_file/open_file.dart';
@@ -25,9 +24,18 @@ class UpdateService {
   final FileDownloadService _fileDownloadService = FileDownloadService();
   
   // 使用shared包的服务，注入logger回调
-  late final ArchiveService _archiveService = ArchiveService(
-    onLog: (message, {tag}) => _logger.log(message, tag: tag ?? 'ARCHIVE'),
-    onLogError: (message, {error, stackTrace}) => _logger.logError(message, error: error, stackTrace: stackTrace),
+  late final UpdateCheckService _updateCheckService = UpdateCheckService(
+    onLog: (message, {tag}) => _logger.log(message, tag: tag ?? 'UPDATE'),
+    onLogError: (message, {error, stackTrace}) =>
+        _logger.logError(message, error: error, stackTrace: stackTrace),
+    dio: _dio,
+  );
+
+  late final UpdateDownloadProcessor _downloadProcessor =
+      UpdateDownloadProcessor(
+    onLog: (message, {tag}) => _logger.log(message, tag: tag ?? 'UPDATE'),
+    onLogError: (message, {error, stackTrace}) =>
+        _logger.logError(message, error: error, stackTrace: stackTrace),
   );
 
   // 默认更新检查URL（可以从设置中配置）
@@ -50,11 +58,6 @@ class UpdateService {
     }
   }
 
-  /// 比较版本号（使用shared包的VersionUtils）
-  bool _compareVersions(String version1, String version2) {
-    return VersionUtils.compareVersions(version1, version2);
-  }
-
   /// 检查更新
   Future<UpdateCheckResult> checkForUpdate({bool avoidCache = true}) async {
     if (_updateCheckUrl.isEmpty) {
@@ -65,117 +68,30 @@ class UpdateService {
     }
 
     try {
-      // 添加时间戳参数避免缓存
-      String url = _updateCheckUrl;
-      if (avoidCache) {
-        final uri = Uri.parse(url);
-        final timestamp = DateTime.now().millisecondsSinceEpoch;
-        url = uri.replace(queryParameters: {
-          ...uri.queryParameters,
-          '_t': timestamp.toString(),
-        }).toString();
-      }
-      
-      _logger.log('开始检查更新，URL: $url', tag: 'UPDATE');
-
-      // 获取更新配置
-      final response = await _dio.get(
-        url,
-        options: Options(
-          responseType: ResponseType.json,
-          headers: {
-            'Accept': 'application/json',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
-          },
-        ),
-      );
-
-      if (response.statusCode != 200) {
-        _logger.logError('更新检查失败', error: 'HTTP ${response.statusCode}');
-        return UpdateCheckResult(
-          hasUpdate: false,
-          error: '更新检查失败: HTTP ${response.statusCode}',
-        );
-      }
-
-      // 处理响应数据：可能是 Map 或 String
-      Map<String, dynamic> config;
-      if (response.data is Map) {
-        config = response.data as Map<String, dynamic>;
-      } else if (response.data is String) {
-        // 如果是字符串，需要手动解析 JSON
-        config = jsonDecode(response.data as String) as Map<String, dynamic>;
-      } else {
-        _logger.logError('更新检查失败', error: '响应数据格式不正确: ${response.data.runtimeType}');
-        return UpdateCheckResult(
-          hasUpdate: false,
-          error: '响应数据格式不正确',
-        );
-      }
-      
       // 获取当前版本
       final currentVersion = await _versionService.getVersion();
       final currentVersionNumber = await _versionService.getVersionNumber();
       
       _logger.log('当前版本: $currentVersion', tag: 'UPDATE');
 
-      // 获取当前平台
-      final platform = _getCurrentPlatform();
-      _logger.log('当前平台: $platform', tag: 'UPDATE');
+      // 使用shared包的UpdateCheckService检查更新
+      final result = await _updateCheckService.checkForUpdate(
+        updateCheckUrl: _updateCheckUrl,
+        currentVersionNumber: currentVersionNumber,
+        getPlatform: _getCurrentPlatform,
+        target: 'server',
+        avoidCache: avoidCache,
+      );
 
-      // 从配置中获取服务器更新信息
-      final serverConfig = config['server'] as Map<String, dynamic>?;
-      if (serverConfig == null) {
-        _logger.log('配置中未找到服务器信息', tag: 'UPDATE');
-        return UpdateCheckResult(
-          hasUpdate: false,
-          error: '配置中未找到服务器信息',
-        );
-      }
-
-      // 获取平台特定的更新信息
-      final platforms = serverConfig['platforms'] as Map<String, dynamic>?;
-      if (platforms == null) {
-        _logger.log('配置中未找到平台信息', tag: 'UPDATE');
-        return UpdateCheckResult(
-          hasUpdate: false,
-          error: '配置中未找到平台信息',
-        );
-      }
-
-      final platformConfig = platforms[platform] as Map<String, dynamic>?;
-      if (platformConfig == null) {
-        _logger.log('配置中未找到平台 $platform 的信息', tag: 'UPDATE');
-        return UpdateCheckResult(
-          hasUpdate: false,
-          error: '配置中未找到平台 $platform 的信息',
-        );
-      }
-
-      // 解析更新信息
-      final updateInfo = UpdateInfo.fromJson(platformConfig);
-      _logger.log('最新版本: ${updateInfo.version}', tag: 'UPDATE');
-
-      // 比较版本
-      final hasUpdate = _compareVersions(updateInfo.versionNumber, currentVersionNumber);
-      
-      if (hasUpdate) {
-        _logger.log('发现新版本: ${updateInfo.version}', tag: 'UPDATE');
-        // 保存更新信息到本地
-        await _saveUpdateInfo(updateInfo);
-        return UpdateCheckResult(
-          hasUpdate: true,
-          updateInfo: updateInfo,
-        );
+      // 如果发现新版本，保存更新信息到本地
+      if (result.hasUpdate && result.updateInfo != null) {
+        await _saveUpdateInfo(result.updateInfo);
       } else {
-        _logger.log('当前已是最新版本', tag: 'UPDATE');
         // 清除保存的更新信息
         await _saveUpdateInfo(null);
-        return UpdateCheckResult(
-          hasUpdate: false,
-        );
       }
+
+      return result;
     } catch (e, stackTrace) {
       _logger.logError('检查更新失败', error: e, stackTrace: stackTrace);
       return UpdateCheckResult(
@@ -320,10 +236,6 @@ class UpdateService {
     }
   }
   
-  /// 解压zip文件（使用shared包的ArchiveService）
-  Future<String?> _extractZipFile(String zipPath, String extractDir) async {
-    return await _archiveService.extractZipFile(zipPath, extractDir);
-  }
 
   /// 下载更新文件
   /// 
@@ -354,79 +266,12 @@ class UpdateService {
       
       _logger.log('更新文件下载完成: $filePath', tag: 'UPDATE');
 
-      // 如果是zip文件，先检查解压后的文件是否已存在
-      if (updateInfo.fileType.toLowerCase() == 'zip') {
-        final extractDir = path.join(path.dirname(filePath),
-            'extracted_${path.basenameWithoutExtension(filePath)}');
-        
-        // 尝试查找已解压的文件（根据平台查找 apk/dmg/exe）
-        // ArchiveService 会在解压目录中查找所有安装文件，所以我们也需要查找所有可能的文件
-        String? existingExtractedFile;
-        if (Platform.isAndroid) {
-          // 查找所有 .apk 文件
-          final extractDirObj = Directory(extractDir);
-          if (await extractDirObj.exists()) {
-            await for (final entity in extractDirObj.list(recursive: true)) {
-              if (entity is File && path.extension(entity.path).toLowerCase() == '.apk') {
-                existingExtractedFile = entity.path;
-                break;
-              }
-            }
-          }
-        } else if (Platform.isMacOS) {
-          // 查找所有 .dmg 文件
-          final extractDirObj = Directory(extractDir);
-          if (await extractDirObj.exists()) {
-            await for (final entity in extractDirObj.list(recursive: true)) {
-              if (entity is File && path.extension(entity.path).toLowerCase() == '.dmg') {
-                existingExtractedFile = entity.path;
-                break;
-              }
-            }
-          }
-        } else if (Platform.isWindows) {
-          // 查找所有 .exe 或 .msi 文件
-          final extractDirObj = Directory(extractDir);
-          if (await extractDirObj.exists()) {
-            await for (final entity in extractDirObj.list(recursive: true)) {
-              final ext = path.extension(entity.path).toLowerCase();
-              if (entity is File && (ext == '.exe' || ext == '.msi')) {
-                existingExtractedFile = entity.path;
-                break;
-              }
-            }
-          }
-        }
-        
-        if (existingExtractedFile != null) {
-          _logger.log('发现已解压的文件，直接使用: $existingExtractedFile', tag: 'UPDATE');
-          return existingExtractedFile;
-        }
-        
-        _logger.log('检测到zip文件，开始解压', tag: 'UPDATE');
-        final extractedFilePath = await _extractZipFile(filePath, extractDir);
-
-        if (extractedFilePath == null) {
-          // 如果找不到预期的安装文件，返回zip文件路径让系统打开zip文件
-          _logger.log('未找到预期的安装文件，将打开zip文件本身: $filePath', tag: 'UPDATE');
-          return filePath;
-        }
-
-        _logger.log('zip文件解压完成: $extractedFilePath', tag: 'UPDATE');
-
-        // 删除zip文件以节约空间
-        try {
-          await File(filePath).delete();
-          _logger.log('已删除zip文件以节约空间: $filePath', tag: 'UPDATE');
-        } catch (e) {
-          _logger.log('删除zip文件失败: $e', tag: 'UPDATE');
-        }
-
-        // 返回解压后的文件路径
-        return extractedFilePath;
-      }
-
-      return filePath;
+      // 使用shared包的UpdateDownloadProcessor处理文件（hash校验、zip解压等）
+      return await _downloadProcessor.processDownloadedFile(
+        filePath,
+        updateInfo,
+        deleteZipAfterExtract: true,
+      );
     } catch (e, stackTrace) {
       _logger.logError('下载更新文件失败', error: e, stackTrace: stackTrace);
       rethrow;

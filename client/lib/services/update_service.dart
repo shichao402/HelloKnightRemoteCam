@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:open_file/open_file.dart';
@@ -28,15 +27,16 @@ class UpdateService {
   final UpdateFileCleanupService _cleanupService = UpdateFileCleanupService();
 
   // 使用shared包的服务，注入logger回调
-  late final FileVerificationService _fileVerificationService =
-      FileVerificationService(
-    onLog: (message, {tag}) => _logger.log(message, tag: tag ?? 'VERIFY'),
+  late final UpdateCheckService _updateCheckService = UpdateCheckService(
+    onLog: (message, {tag}) => _logger.log(message, tag: tag ?? 'UPDATE'),
     onLogError: (message, {error, stackTrace}) =>
         _logger.logError(message, error: error, stackTrace: stackTrace),
+    dio: _dio,
   );
 
-  late final ArchiveService _archiveService = ArchiveService(
-    onLog: (message, {tag}) => _logger.log(message, tag: tag ?? 'ARCHIVE'),
+  late final UpdateDownloadProcessor _downloadProcessor =
+      UpdateDownloadProcessor(
+    onLog: (message, {tag}) => _logger.log(message, tag: tag ?? 'UPDATE'),
     onLogError: (message, {error, stackTrace}) =>
         _logger.logError(message, error: error, stackTrace: stackTrace),
   );
@@ -80,104 +80,24 @@ class UpdateService {
     }
 
     try {
-      // 添加时间戳参数避免缓存
-      String url = _updateCheckUrl;
-      if (avoidCache) {
-        final uri = Uri.parse(url);
-        final timestamp = DateTime.now().millisecondsSinceEpoch;
-        url = uri.replace(queryParameters: {
-          ...uri.queryParameters,
-          '_t': timestamp.toString(),
-        }).toString();
-      }
-
-      _logger.log('开始检查更新，URL: $url', tag: 'UPDATE');
-
-      // 获取更新配置
-      final response = await _dio.get(
-        url,
-        options: Options(
-          responseType: ResponseType.json,
-          headers: {
-            'Accept': 'application/json',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
-          },
-        ),
-      );
-
-      if (response.statusCode != 200) {
-        _logger.logError('更新检查失败', error: 'HTTP ${response.statusCode}');
-        return UpdateCheckResult(
-          hasUpdate: false,
-          error: '更新检查失败: HTTP ${response.statusCode}',
-        );
-      }
-
-      // 处理响应数据：可能是 Map 或 String
-      Map<String, dynamic> config;
-      if (response.data is Map) {
-        config = response.data as Map<String, dynamic>;
-      } else if (response.data is String) {
-        // 如果是字符串，需要手动解析 JSON
-        config = jsonDecode(response.data as String) as Map<String, dynamic>;
-      } else {
-        _logger.logError('更新检查失败',
-            error: '响应数据格式不正确: ${response.data.runtimeType}');
-        return UpdateCheckResult(
-          hasUpdate: false,
-          error: '响应数据格式不正确',
-        );
-      }
-
       // 获取当前版本
       final currentVersion = await _versionService.getVersion();
       final currentVersionNumber = await _versionService.getVersionNumber();
 
       _logger.log('当前版本: $currentVersion', tag: 'UPDATE');
 
-      // 获取当前平台
-      final platform = _getCurrentPlatform();
-      _logger.log('当前平台: $platform', tag: 'UPDATE');
+      // 使用shared包的UpdateCheckService检查更新
+      final result = await _updateCheckService.checkForUpdate(
+        updateCheckUrl: _updateCheckUrl,
+        currentVersionNumber: currentVersionNumber,
+        getPlatform: _getCurrentPlatform,
+        target: 'client',
+        avoidCache: avoidCache,
+      );
 
-      // 从配置中获取客户端更新信息
-      final clientConfig = config['client'] as Map<String, dynamic>?;
-      if (clientConfig == null) {
-        _logger.log('配置中未找到客户端信息', tag: 'UPDATE');
-        return UpdateCheckResult(
-          hasUpdate: false,
-          error: '配置中未找到客户端信息',
-        );
-      }
-
-      // 获取平台特定的更新信息
-      final platforms = clientConfig['platforms'] as Map<String, dynamic>?;
-      if (platforms == null) {
-        _logger.log('配置中未找到平台信息', tag: 'UPDATE');
-        return UpdateCheckResult(
-          hasUpdate: false,
-          error: '配置中未找到平台信息',
-        );
-      }
-
-      final platformConfig = platforms[platform] as Map<String, dynamic>?;
-      if (platformConfig == null) {
-        _logger.log('配置中未找到平台 $platform 的信息', tag: 'UPDATE');
-        return UpdateCheckResult(
-          hasUpdate: false,
-          error: '配置中未找到平台 $platform 的信息',
-        );
-      }
-
-      // 解析更新信息
-      final updateInfo = UpdateInfo.fromJson(platformConfig);
-      _logger.log('最新版本: ${updateInfo.version}', tag: 'UPDATE');
-
-      // 比较版本（使用工具类）
-      final hasUpdate = VersionUtils.compareVersions(
-          updateInfo.versionNumber, currentVersionNumber);
-
-      if (hasUpdate) {
+      // 如果发现新版本，处理更新信息
+      if (result.hasUpdate && result.updateInfo != null) {
+        final updateInfo = result.updateInfo!;
         _logger.log('发现新版本: ${updateInfo.version}', tag: 'UPDATE');
 
         // 检查是否有旧的更新信息（内存中）
@@ -192,18 +112,12 @@ class UpdateService {
 
         // 仅在内存中保存更新信息（不持久化）
         _currentUpdateInfo = updateInfo;
-        return UpdateCheckResult(
-          hasUpdate: true,
-          updateInfo: updateInfo,
-        );
       } else {
-        _logger.log('当前已是最新版本', tag: 'UPDATE');
         // 清除内存中的更新信息
         _currentUpdateInfo = null;
-        return UpdateCheckResult(
-          hasUpdate: false,
-        );
       }
+
+      return result;
     } catch (e, stackTrace) {
       _logger.logError('检查更新失败', error: e, stackTrace: stackTrace);
       return UpdateCheckResult(
@@ -223,16 +137,6 @@ class UpdateService {
     return _currentUpdateInfo != null;
   }
 
-  /// 校验文件hash（使用FileVerificationService）
-  Future<bool> verifyFileHash(String filePath, String expectedHash) async {
-    return await _fileVerificationService.verifyFileHash(
-        filePath, expectedHash);
-  }
-
-  /// 解压zip文件（使用ArchiveService）
-  Future<String?> _extractZipFile(String zipPath, String extractDir) async {
-    return await _archiveService.extractZipFile(zipPath, extractDir);
-  }
 
   /// 清理旧的更新包
   Future<void> _cleanupOldUpdatePackages(UpdateInfo oldUpdateInfo) async {
@@ -322,18 +226,18 @@ class UpdateService {
       final downloadDir = await _downloadDirService.getDownloadDirectory();
       final filePath = path.join(downloadDir, updateInfo.fileName);
 
-      // 检查文件是否存在且大小合理
-      final fileSize = await _fileVerificationService.checkFileExists(filePath);
+      // 检查文件是否存在且大小合理（使用UpdateDownloadProcessor）
+      final fileSize = await _downloadProcessor.checkFileExists(filePath);
       if (fileSize == null) {
         return null;
       }
 
       _logger.log('发现已存在的文件: $filePath (大小: $fileSize)', tag: 'UPDATE');
 
-      // 如果有hash，验证文件完整性
+      // 如果有hash，验证文件完整性（使用UpdateDownloadProcessor）
       if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
         _logger.log('开始验证已存在文件的hash', tag: 'UPDATE');
-        final isValid = await _fileVerificationService.verifyFileHash(
+        final isValid = await _downloadProcessor.verifyFileHash(
             filePath, updateInfo.fileHash!);
         if (isValid) {
           _logger.log('已存在文件hash校验通过: $filePath', tag: 'UPDATE');
@@ -408,11 +312,8 @@ class UpdateService {
       final existingCompleteFile = await _checkExistingCompleteFile(updateInfo);
       if (existingCompleteFile != null) {
         _logger.log('使用已下载完成的文件: $existingCompleteFile', tag: 'UPDATE');
-        // 如果有hash，需要校验
-        if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
-          onStatus?.call('正在校验文件完整性...');
-        }
-        // 直接处理文件（解压等）
+        // 直接处理文件（hash校验、解压等）
+        onStatus?.call('正在处理文件...');
         return await _processDownloadedFile(existingCompleteFile, updateInfo);
       }
 
@@ -422,10 +323,10 @@ class UpdateService {
           await _checkExistingIncompleteFile(updateInfo);
       String filePath;
       if (existingIncompleteFile != null) {
-        // 检查文件是否实际已完成（通过hash验证）
+        // 检查文件是否实际已完成（通过hash验证，使用UpdateDownloadProcessor）
         if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
           onStatus?.call('正在校验文件完整性...');
-          final isValid = await _fileVerificationService.verifyFileHash(
+          final isValid = await _downloadProcessor.verifyFileHash(
               existingIncompleteFile, updateInfo.fileHash!);
           if (isValid) {
             _logger.log('未完成文件实际已完整（hash校验通过），直接使用: $existingIncompleteFile',
@@ -462,58 +363,12 @@ class UpdateService {
   /// 处理下载完成的文件（校验hash、解压等）
   Future<String?> _processDownloadedFile(
       String filePath, UpdateInfo updateInfo) async {
-    try {
-      // 如果有hash，进行校验（使用FileVerificationService）
-      if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
-        _logger.log('开始校验文件hash: $filePath', tag: 'UPDATE');
-        final isValid = await _fileVerificationService.verifyFileHash(
-            filePath, updateInfo.fileHash!);
-        if (!isValid) {
-          // 删除下载的文件
-          try {
-            await File(filePath).delete();
-          } catch (e) {
-            // 忽略删除错误
-          }
-          throw Exception('文件hash校验失败，下载的文件可能已损坏或被篡改');
-        }
-        _logger.log('文件hash校验通过', tag: 'UPDATE');
-      } else {
-        _logger.log('更新信息中未包含hash，跳过校验', tag: 'UPDATE');
-      }
-
-      // 如果是zip文件，先解压
-      if (updateInfo.fileType.toLowerCase() == 'zip') {
-        _logger.log('检测到zip文件，开始解压', tag: 'UPDATE');
-        final extractDir = path.join(path.dirname(filePath),
-            'extracted_${path.basenameWithoutExtension(filePath)}');
-        final extractedFilePath = await _extractZipFile(filePath, extractDir);
-
-        if (extractedFilePath == null) {
-          // 如果找不到预期的安装文件，直接返回zip文件路径，让用户打开zip文件
-          _logger.log('未找到预期的安装文件，将打开zip文件本身: $filePath', tag: 'UPDATE');
-          return filePath;
-        }
-
-        _logger.log('zip文件解压完成: $extractedFilePath', tag: 'UPDATE');
-
-        // 删除zip文件以节约空间
-        try {
-          await File(filePath).delete();
-          _logger.log('已删除zip文件以节约空间: $filePath', tag: 'UPDATE');
-        } catch (e) {
-          _logger.log('删除zip文件失败: $e', tag: 'UPDATE');
-        }
-
-        // 返回解压后的文件路径
-        return extractedFilePath;
-      }
-
-      return filePath;
-    } catch (e, stackTrace) {
-      _logger.logError('处理下载文件失败', error: e, stackTrace: stackTrace);
-      rethrow;
-    }
+    // 使用shared包的UpdateDownloadProcessor处理文件
+    return await _downloadProcessor.processDownloadedFile(
+      filePath,
+      updateInfo,
+      deleteZipAfterExtract: true,
+    );
   }
 
   /// 打开下载的文件

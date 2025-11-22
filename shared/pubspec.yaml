@@ -13,6 +13,9 @@ dependencies:
   # Crypto for hash verification
   crypto: ^3.0.3
   
+  # HTTP client for update checking
+  dio: ^5.4.0
+  
   # Path manipulation
   path: ^1.8.3
   
