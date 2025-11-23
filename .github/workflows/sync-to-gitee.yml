@@ -25,6 +25,9 @@ jobs:
       contents: read
     steps:
       - name: Check Gitee Secrets
+        env:
+          GITEE_REPO_OWNER: ${{ secrets.GITEE_REPO_OWNER }}
+          GITEE_REPO_NAME: ${{ secrets.GITEE_REPO_NAME }}
         run: |
           echo "🔍 检查 Gitee Secrets 配置..."
           
@@ -39,23 +42,25 @@ jobs:
             echo "✅ GITEE_TOKEN 已配置 (长度: ${TOKEN_LEN}, 前缀: ${TOKEN_PREFIX}..., 后缀: ...${TOKEN_SUFFIX})"
           fi
           
-          # 检查 GITEE_REPO_OWNER（显示明文，因为这只是用户名）
-          if [ -z "${{ secrets.GITEE_REPO_OWNER }}" ]; then
+          # 清理并显示 GITEE_REPO_OWNER（显示完整值，因为这不是敏感信息）
+          GITEE_REPO_OWNER_CLEAN=$(printf '%s' "${GITEE_REPO_OWNER}" | tr -d '\n\r\t' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          if [ -z "${GITEE_REPO_OWNER_CLEAN}" ]; then
             echo "❌ GITEE_REPO_OWNER 未配置"
             exit 1
           else
-            echo "✅ GITEE_REPO_OWNER 已配置: ${{ secrets.GITEE_REPO_OWNER }}"
+            echo "✅ GITEE_REPO_OWNER 已配置: ${GITEE_REPO_OWNER_CLEAN}"
           fi
           
-          # 检查 GITEE_REPO_NAME（显示明文，因为这只是仓库名）
-          if [ -z "${{ secrets.GITEE_REPO_NAME }}" ]; then
+          # 清理并显示 GITEE_REPO_NAME（显示完整值，因为这不是敏感信息）
+          GITEE_REPO_NAME_CLEAN=$(printf '%s' "${GITEE_REPO_NAME}" | tr -d '\n\r\t' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          if [ -z "${GITEE_REPO_NAME_CLEAN}" ]; then
             echo "❌ GITEE_REPO_NAME 未配置"
             exit 1
           else
-            echo "✅ GITEE_REPO_NAME 已配置: ${{ secrets.GITEE_REPO_NAME }}"
+            echo "✅ GITEE_REPO_NAME 已配置: ${GITEE_REPO_NAME_CLEAN}"
           fi
           
-          GITEE_REPO="${{ secrets.GITEE_REPO_OWNER }}/${{ secrets.GITEE_REPO_NAME }}"
+          GITEE_REPO="${GITEE_REPO_OWNER_CLEAN}/${GITEE_REPO_NAME_CLEAN}"
           echo "📦 Gitee 仓库: ${GITEE_REPO}"
           echo "✅ 所有 Gitee Secrets 配置检查通过"
 
@@ -288,16 +293,25 @@ jobs:
           RELEASE_NAME="${{ steps.release_info.outputs.release_name }}"
           RELEASE_BODY="${{ steps.release_info.outputs.release_body }}"
           
-          GITEE_REPO_OWNER_ENCODED=$(echo "${GITEE_REPO_OWNER}" | jq -sRr @uri)
-          GITEE_REPO_NAME_ENCODED=$(echo "${GITEE_REPO_NAME}" | jq -sRr @uri)
+          # 清理并去除换行符、回车符和前后空格
+          GITEE_REPO_OWNER=$(printf '%s' "${GITEE_REPO_OWNER}" | tr -d '\n\r\t' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          GITEE_REPO_NAME=$(printf '%s' "${GITEE_REPO_NAME}" | tr -d '\n\r\t' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          
+          # URL 编码
+          GITEE_REPO_OWNER_ENCODED=$(printf '%s' "${GITEE_REPO_OWNER}" | jq -sRr @uri)
+          GITEE_REPO_NAME_ENCODED=$(printf '%s' "${GITEE_REPO_NAME}" | jq -sRr @uri)
           GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
           
           echo "🚀 创建 Gitee Release..."
           echo "  标签: ${TAG_NAME}"
           echo "  名称: ${RELEASE_NAME}"
           echo "  仓库: ${GITEE_REPO}"
-          echo "  [调试] Owner: ${GITEE_REPO_OWNER}"
-          echo "  [调试] Repo Name: ${GITEE_REPO_NAME}"
+          echo "  Owner: ${GITEE_REPO_OWNER}"
+          echo "  Repo Name: ${GITEE_REPO_NAME}"
+          echo "  Owner (编码后): ${GITEE_REPO_OWNER_ENCODED}"
+          echo "  Repo Name (编码后): ${GITEE_REPO_NAME_ENCODED}"
+          echo "  Owner (编码后): ${GITEE_REPO_OWNER_ENCODED}"
+          echo "  Repo Name (编码后): ${GITEE_REPO_NAME_ENCODED}"
           
           # 首先验证仓库是否存在
           echo "🔍 验证 Gitee 仓库是否存在..."
@@ -440,14 +454,22 @@ jobs:
           GITEE_REPO_NAME: ${{ secrets.GITEE_REPO_NAME }}
         run: |
           TAG_NAME="${{ steps.get_version.outputs.TAG_NAME }}"
-          GITEE_REPO_OWNER_ENCODED=$(echo "${GITEE_REPO_OWNER}" | jq -sRr @uri)
-          GITEE_REPO_NAME_ENCODED=$(echo "${GITEE_REPO_NAME}" | jq -sRr @uri)
-          TAG_NAME_ENCODED=$(echo "${TAG_NAME}" | jq -sRr @uri)
+          
+          # 清理并去除换行符、回车符和前后空格
+          GITEE_REPO_OWNER=$(printf '%s' "${GITEE_REPO_OWNER}" | tr -d '\n\r\t' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          GITEE_REPO_NAME=$(printf '%s' "${GITEE_REPO_NAME}" | tr -d '\n\r\t' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          
+          # URL 编码
+          GITEE_REPO_OWNER_ENCODED=$(printf '%s' "${GITEE_REPO_OWNER}" | jq -sRr @uri)
+          GITEE_REPO_NAME_ENCODED=$(printf '%s' "${GITEE_REPO_NAME}" | jq -sRr @uri)
+          TAG_NAME_ENCODED=$(printf '%s' "${TAG_NAME}" | jq -sRr @uri)
           GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
           
           echo "📤 上传构建产物到 Gitee Release..."
           echo "  标签: ${TAG_NAME}"
           echo "  仓库: ${GITEE_REPO}"
+          echo "  Owner: ${GITEE_REPO_OWNER}"
+          echo "  Repo Name: ${GITEE_REPO_NAME}"
           
           # 首先获取 Release ID（用于上传文件）
           echo "🔍 获取 Gitee Release ID..."
@@ -548,6 +570,16 @@ jobs:
         run: |
           echo "🔄 同步更新配置到 Gitee..."
           
+          # 清理并去除换行符、回车符和前后空格
+          GITEE_REPO_OWNER=$(printf '%s' "${GITEE_REPO_OWNER}" | tr -d '\n\r\t' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          GITEE_REPO_NAME=$(printf '%s' "${GITEE_REPO_NAME}" | tr -d '\n\r\t' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
+          TAG_NAME="${{ steps.get_version.outputs.TAG_NAME }}"
+          
+          echo "  Owner: ${GITEE_REPO_OWNER}"
+          echo "  Repo Name: ${GITEE_REPO_NAME}"
+          echo "  仓库: ${GITEE_REPO}"
+          
           # 确保在 main 分支上
           CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
           echo "  当前分支: ${CURRENT_BRANCH}"
@@ -565,9 +597,6 @@ jobs:
             cat update_config_github.json | jq '.' 2>/dev/null || cat update_config_github.json
             
             # 转换为 Gitee 格式
-            GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
-            TAG_NAME="${{ steps.get_version.outputs.TAG_NAME }}"
-            
             echo ""
             echo "  转换配置为 Gitee 格式..."
             echo "  Gitee 仓库: ${GITEE_REPO}"
