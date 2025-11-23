@@ -602,6 +602,7 @@ jobs:
             artifacts/HelloKnightRCC_macos_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.zip
             artifacts/HelloKnightRCC_windows_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.zip
             artifacts/helloknightrcc_server_android_${{ steps.get_versions.outputs.SERVER_FULL_VERSION }}.zip
+            update_config_github.json
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
@@ -786,50 +787,15 @@ jobs:
                 }
               }
             },
-            "updateCheckUrl": "https://raw.githubusercontent.com/${{ github.repository }}/main/update_config_github.json",
+            "updateCheckUrl": "https://github.com/${{ github.repository }}/releases/download/${TAG_VERSION}/update_config_github.json",
             "lastUpdated": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           }
           EOF
           
           echo "GitHub 更新配置文件已生成:"
           cat update_config_github.json
-
-      - name: Save update config as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: update-config
-          path: update_config_github.json
-          retention-days: 1
-
-      - name: Checkout main branch for config update
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          ref: main
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download update config artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: update-config
-          path: .
-
-      - name: Commit and Push Update Config
-        run: |
-          # 配置 Git
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          
-          # 添加并提交更新配置文件
-          git add update_config_github.json
-          if git diff --staged --quiet; then
-            echo "没有更改，跳过提交"
-          else
-            CLIENT_VERSION=${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}
-            SERVER_VERSION=${{ steps.get_versions.outputs.SERVER_FULL_VERSION }}
-            git commit -m "Release ${CLIENT_VERSION}/${SERVER_VERSION} - 更新 GitHub 自动更新配置"
-            git push origin main || echo "推送失败，可能已是最新版本"
-          fi
+          echo ""
+          echo "✅ 配置文件将上传到 Release: ${TAG_VERSION}/update_config_github.json"
 
       - name: Set job outputs
         id: set_outputs

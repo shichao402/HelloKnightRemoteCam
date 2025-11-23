@@ -67,8 +67,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 需要完整历史记录以推送到 Gitee
-          ref: main  # 切换到 main 分支以获取最新的 update_config_github.json
+          fetch-depth: 1
 
       - name: Extract version from release
         id: get_version
@@ -692,7 +691,15 @@ jobs:
           GITEE_REPO_OWNER_ENCODED=$(printf '%s' "${GITEE_REPO_OWNER}" | jq -sRr @uri)
           GITEE_REPO_NAME_ENCODED=$(printf '%s' "${GITEE_REPO_NAME}" | jq -sRr @uri)
           
-          # 读取 GitHub 的更新配置文件
+          # 从 Release 下载的配置文件中读取（应该已经在 release-assets 目录中）
+          if [ -f "release-assets/update_config_github.json" ]; then
+            # 复制到当前目录以便后续处理
+            cp release-assets/update_config_github.json update_config_github.json
+            echo "✅ 从 Release 中找到配置文件"
+          elif [ -f "update_config_github.json" ]; then
+            echo "✅ 找到配置文件（备用位置）"
+          fi
+          
           if [ -f "update_config_github.json" ]; then
             echo "✅ 找到 GitHub 更新配置文件"
             echo "  文件路径: $(realpath update_config_github.json 2>/dev/null || echo 'update_config_github.json')"
