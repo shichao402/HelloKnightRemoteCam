@@ -298,6 +298,15 @@ download_assets() {
     echo -e "${BLUE}📥 下载构建产物文件...${NC}"
     
     RELEASE_ASSETS_DIR="${TEMP_DIR}/release-assets"
+    
+    # 清空下载目录（如果存在）
+    if [ -d "${RELEASE_ASSETS_DIR}" ]; then
+        echo "  清空下载目录: ${RELEASE_ASSETS_DIR}"
+        rm -rf "${RELEASE_ASSETS_DIR}"/*
+        rm -rf "${RELEASE_ASSETS_DIR}"/.* 2>/dev/null || true  # 删除隐藏文件，忽略错误
+    fi
+    
+    # 创建下载目录
     mkdir -p "${RELEASE_ASSETS_DIR}"
     echo "  目标目录: $(realpath ${RELEASE_ASSETS_DIR})"
     
@@ -322,6 +331,24 @@ download_assets() {
     echo ""
     echo "  文件数量: ${FILE_COUNT}"
     echo "  总大小: ${TOTAL_SIZE}"
+    echo ""
+    
+    # 计算文件 hash
+    echo ""
+    echo -e "${BLUE}📋 计算文件 hash...${NC}"
+    python3 scripts/calculate_file_hashes.py \
+      --input-dir "${RELEASE_ASSETS_DIR}" \
+      --output "${RELEASE_ASSETS_DIR}/file_hashes.json" \
+      --base-name-only
+    
+    if [ -f "${RELEASE_ASSETS_DIR}/file_hashes.json" ]; then
+        echo -e "${GREEN}✅ 文件 hash 列表已生成${NC}"
+        echo "文件内容:"
+        cat "${RELEASE_ASSETS_DIR}/file_hashes.json"
+        echo ""
+    else
+        echo -e "${YELLOW}⚠️  文件 hash 列表生成失败，将使用默认方式计算 hash${NC}"
+    fi
     echo ""
 }
 
@@ -887,17 +914,37 @@ sync_update_config() {
     
     echo ""
     echo "📝 使用统一脚本生成 Gitee 更新配置（单点数据源：build tag 的 VERSION.yaml + 构建产物文件）..."
-    python3 scripts/generate_update_config.py \
-      --client-version "${CLIENT_FULL_VERSION}" \
-      --server-version "${SERVER_FULL_VERSION}" \
-      --macos-file "${MACOS_FILE}" \
-      --windows-file "${WINDOWS_FILE}" \
-      --android-file "${ANDROID_FILE}" \
-      --tag-version "${TAG_NAME}" \
-      --repo-owner "${GITEE_REPO_OWNER}" \
-      --repo-name "${GITEE_REPO_NAME}" \
-      --repo-type gitee \
-      --output "${CONFIG_GITEE_FILE}"
+    
+    # 检查是否存在 hash 文件
+    HASH_FILE="${RELEASE_ASSETS_DIR}/file_hashes.json"
+    if [ -f "$HASH_FILE" ]; then
+        echo -e "${GREEN}✅ 使用已生成的 hash 文件: $HASH_FILE${NC}"
+        python3 scripts/generate_update_config.py \
+          --client-version "${CLIENT_FULL_VERSION}" \
+          --server-version "${SERVER_FULL_VERSION}" \
+          --macos-file "${MACOS_FILE}" \
+          --windows-file "${WINDOWS_FILE}" \
+          --android-file "${ANDROID_FILE}" \
+          --tag-version "${TAG_NAME}" \
+          --repo-owner "${GITEE_REPO_OWNER}" \
+          --repo-name "${GITEE_REPO_NAME}" \
+          --repo-type gitee \
+          --file-hashes "$HASH_FILE" \
+          --output "${CONFIG_GITEE_FILE}"
+    else
+        echo -e "${YELLOW}⚠️  Hash 文件不存在，将重新计算 hash${NC}"
+        python3 scripts/generate_update_config.py \
+          --client-version "${CLIENT_FULL_VERSION}" \
+          --server-version "${SERVER_FULL_VERSION}" \
+          --macos-file "${MACOS_FILE}" \
+          --windows-file "${WINDOWS_FILE}" \
+          --android-file "${ANDROID_FILE}" \
+          --tag-version "${TAG_NAME}" \
+          --repo-owner "${GITEE_REPO_OWNER}" \
+          --repo-name "${GITEE_REPO_NAME}" \
+          --repo-type gitee \
+          --output "${CONFIG_GITEE_FILE}"
+    fi
     
     echo "✅ 已生成 Gitee 更新配置文件"
     

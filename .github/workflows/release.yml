@@ -487,6 +487,22 @@ jobs:
           echo "重命名后的文件列表（仅zip文件）:"
           ls -la artifacts/
 
+      - name: Calculate file hashes
+        run: |
+          echo "📋 计算文件 hash..."
+          
+          # 计算 artifacts 目录中所有文件的 hash
+          python3 scripts/calculate_file_hashes.py \
+            --input-dir artifacts/ \
+            --output artifacts/file_hashes.json \
+            --base-name-only
+          
+          echo ""
+          echo "✅ 文件 hash 列表已生成: artifacts/file_hashes.json"
+          echo "文件内容:"
+          cat artifacts/file_hashes.json
+          echo ""
+
       - name: Verify artifacts exist before creating release
         run: |
           echo "🔍 验证构建产物文件是否存在..."
@@ -587,16 +603,35 @@ jobs:
           # 注意：传入的文件名使用 build 格式，但版本号仍然使用 + 格式（用于版本比较）
           echo ""
           echo "调用工程脚本生成更新配置..."
-          python3 scripts/generate_update_config.py \
-            --client-version "${CLIENT_VERSION}" \
-            --server-version "${SERVER_VERSION}" \
-            --macos-file "artifacts/${MACOS_FILENAME}" \
-            --windows-file "artifacts/${WINDOWS_FILENAME}" \
-            --android-file "artifacts/${ANDROID_FILENAME}" \
-            --tag-version "${TAG_VERSION}" \
-            --repo-owner "${REPO_OWNER}" \
-            --repo-name "${REPO_NAME}" \
-            --output "update_config_github.json"
+          
+          # 检查是否存在 hash 文件
+          HASH_FILE="artifacts/file_hashes.json"
+          if [ -f "$HASH_FILE" ]; then
+            echo "✅ 使用已生成的 hash 文件: $HASH_FILE"
+            python3 scripts/generate_update_config.py \
+              --client-version "${CLIENT_VERSION}" \
+              --server-version "${SERVER_VERSION}" \
+              --macos-file "artifacts/${MACOS_FILENAME}" \
+              --windows-file "artifacts/${WINDOWS_FILENAME}" \
+              --android-file "artifacts/${ANDROID_FILENAME}" \
+              --tag-version "${TAG_VERSION}" \
+              --repo-owner "${REPO_OWNER}" \
+              --repo-name "${REPO_NAME}" \
+              --file-hashes "$HASH_FILE" \
+              --output "update_config_github.json"
+          else
+            echo "⚠️  Hash 文件不存在，将重新计算 hash"
+            python3 scripts/generate_update_config.py \
+              --client-version "${CLIENT_VERSION}" \
+              --server-version "${SERVER_VERSION}" \
+              --macos-file "artifacts/${MACOS_FILENAME}" \
+              --windows-file "artifacts/${WINDOWS_FILENAME}" \
+              --android-file "artifacts/${ANDROID_FILENAME}" \
+              --tag-version "${TAG_VERSION}" \
+              --repo-owner "${REPO_OWNER}" \
+              --repo-name "${REPO_NAME}" \
+              --output "update_config_github.json"
+          fi
           
           echo ""
           echo "GitHub 更新配置文件已生成:"
@@ -754,6 +789,7 @@ jobs:
             artifacts/${{ steps.extract_versions_from_artifacts.outputs.MACOS_FILENAME }}
             artifacts/${{ steps.extract_versions_from_artifacts.outputs.WINDOWS_FILENAME }}
             artifacts/${{ steps.extract_versions_from_artifacts.outputs.ANDROID_FILENAME }}
+            artifacts/file_hashes.json
           # 注意：update_config_github.json 不再上传到版本 Release，而是上传到固定的 UpdateConfig Release
           draft: false
           prerelease: false

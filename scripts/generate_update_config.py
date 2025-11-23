@@ -76,6 +76,7 @@ def generate_update_config(
     base_url: str = None,
     update_check_url: str = None,
     repo_type: str = "github",
+    file_hashes: dict = None,
 ) -> dict:
     """
     生成更新配置 JSON
@@ -104,18 +105,30 @@ def generate_update_config(
     windows_filename = os.path.basename(windows_file)
     android_filename = os.path.basename(android_file)
     
-    # 计算文件 hash
-    print(f"计算 macOS 文件 hash: {macos_file}")
-    macos_hash = calculate_file_hash(macos_file)
-    print(f"  Hash: {macos_hash}")
+    # 计算文件 hash（优先使用提供的 hash 列表）
+    def get_file_hash(file_path: str, file_name: str) -> str:
+        """获取文件 hash，优先从 hash 列表中查找"""
+        if file_hashes:
+            # 先尝试使用完整路径（相对路径）
+            if file_path in file_hashes:
+                hash_value = file_hashes[file_path]
+                print(f"从 hash 列表获取 {file_name} hash: {hash_value}")
+                return hash_value
+            # 再尝试使用文件名
+            if file_name in file_hashes:
+                hash_value = file_hashes[file_name]
+                print(f"从 hash 列表获取 {file_name} hash: {hash_value}")
+                return hash_value
+        
+        # 如果 hash 列表中不存在，计算 hash
+        print(f"计算 {file_name} 文件 hash: {file_path}")
+        hash_value = calculate_file_hash(file_path)
+        print(f"  Hash: {hash_value}")
+        return hash_value
     
-    print(f"计算 Windows 文件 hash: {windows_file}")
-    windows_hash = calculate_file_hash(windows_file)
-    print(f"  Hash: {windows_hash}")
-    
-    print(f"计算 Android 文件 hash: {android_file}")
-    android_hash = calculate_file_hash(android_file)
-    print(f"  Hash: {android_hash}")
+    macos_hash = get_file_hash(macos_file, macos_filename)
+    windows_hash = get_file_hash(windows_file, windows_filename)
+    android_hash = get_file_hash(android_file, android_filename)
     
     # 构建下载 URL（根据 repo_type 使用不同的 URL 前缀）
     if base_url is None:
@@ -246,8 +259,25 @@ def main():
         required=True,
         help="输出文件路径"
     )
+    parser.add_argument(
+        "--file-hashes",
+        help="文件 hash 列表 JSON 文件路径（可选，如果提供则优先使用该文件中的 hash）"
+    )
     
     args = parser.parse_args()
+    
+    # 加载文件 hash 列表（如果提供）
+    file_hashes = None
+    if args.file_hashes and os.path.exists(args.file_hashes):
+        try:
+            with open(args.file_hashes, 'r', encoding='utf-8') as f:
+                file_hashes = json.load(f)
+            print(f"✅ 已加载文件 hash 列表: {args.file_hashes}")
+            print(f"   包含 {len(file_hashes)} 个文件的 hash")
+        except Exception as e:
+            print(f"⚠️  警告: 无法加载文件 hash 列表 {args.file_hashes}: {e}")
+            print("   将重新计算文件 hash")
+            file_hashes = None
     
     try:
         # 验证文件存在
@@ -273,6 +303,7 @@ def main():
             base_url=args.base_url,
             update_check_url=args.update_check_url,
             repo_type=args.repo_type,
+            file_hashes=file_hashes,
         )
         
         # 写入文件
