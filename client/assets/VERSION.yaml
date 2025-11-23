@@ -1,27 +1,12 @@
-# 版本号配置文件
-# 客户端和服务器使用独立的版本号
-# 格式: YAML
-
 client:
-  version: "1.0.7+6"  # 客户端版本号（格式: x.y.z+build）
-  
+  version: 1.0.6+8
 server:
-  version: "1.0.7+6"  # 服务器版本号（格式: x.y.z+build）
-
+  version: 1.0.6+8
 compatibility:
-  # 服务器支持的最小客户端版本（格式: x.y.z，不含构建号）
-  min_client_version: "1.0.6"
-  
-  # 客户端支持的最小服务器版本（格式: x.y.z，不含构建号）
-  min_server_version: "1.0.6"
-
+  min_client_version: 1.0.6
+  min_server_version: 1.0.6
 update:
-  # 更新检查 URL 配置（优先从 Gitee 获取，失败后从 GitHub 获取）
-  # Release 名称: config（固定 Release，包含更新配置文件）
   gitee:
-    # Gitee 更新配置 URL（固定 Release: config）
-    url: "https://gitee.com/firoyang/HelloKnightRemoteCam/releases/download/config/update_config_gitee.json"
+    url: https://gitee.com/firoyang/HelloKnightRemoteCam/releases/download/config/update_config_gitee.json
   github:
-    # GitHub 更新配置 URL（备用）
-    url: "https://raw.githubusercontent.com/shichao402/HelloKnightRemoteCam/main/update_config_github.json"
-
+    url: https://raw.githubusercontent.com/shichao402/HelloKnightRemoteCam/main/update_config_github.json
