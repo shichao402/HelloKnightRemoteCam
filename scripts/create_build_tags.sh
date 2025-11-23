@@ -205,6 +205,84 @@ if [ "$PUSH_TO_REMOTE" = true ]; then
         echo "  - Build Client macOS"
         echo "  - Build Client Windows"
         echo "  - Build Server Android"
+        
+        # 检查是否有对应的 release tag 和 draft release
+        echo ""
+        echo -e "${BLUE}检查是否有相关的 Release...${NC}"
+        
+        # 获取远程仓库信息
+        REMOTE_URL=$(git config --get remote.origin.url 2>/dev/null || echo "")
+        if [[ -n "$REMOTE_URL" ]] && [[ "$REMOTE_URL" == *"github.com"* ]]; then
+            REPO_PATH=$(echo "$REMOTE_URL" | sed -E 's/.*github\.com[:/]([^/]+\/[^/]+)(\.git)?$/\1/' | sed 's/\.git$//')
+            RELEASE_TAG="v${VERSION}"
+            
+            # 检查 GitHub CLI 或 GitHub Token
+            GITHUB_TOKEN=""
+            if command -v gh &> /dev/null; then
+                if gh auth status &> /dev/null; then
+                    GITHUB_TOKEN=$(gh auth token 2>/dev/null || echo "")
+                fi
+            fi
+            
+            if [[ -z "$GITHUB_TOKEN" ]]; then
+                if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+                    GITHUB_TOKEN="${GITHUB_TOKEN}"
+                elif [[ -n "${GH_TOKEN:-}" ]]; then
+                    GITHUB_TOKEN="${GH_TOKEN}"
+                fi
+            fi
+            
+            if [[ -n "$GITHUB_TOKEN" ]] && [[ -n "$REPO_PATH" ]]; then
+                # 检查是否有对应的 release tag（本地或远程）
+                HAS_RELEASE_TAG=false
+                if git rev-parse "$RELEASE_TAG" >/dev/null 2>&1; then
+                    HAS_RELEASE_TAG=true
+                elif git ls-remote --tags origin "$RELEASE_TAG" >/dev/null 2>&1; then
+                    HAS_RELEASE_TAG=true
+                fi
+                
+                if [ "$HAS_RELEASE_TAG" = true ]; then
+                    echo -e "${YELLOW}⚠️  发现对应的 Release 标签: ${RELEASE_TAG}${NC}"
+                    
+                    # 检查是否有 draft release
+                    RELEASES_RESPONSE=$(curl -s -H "Authorization: token ${GITHUB_TOKEN}" \
+                        -H "Accept: application/vnd.github+json" \
+                        "https://api.github.com/repos/${REPO_PATH}/releases?per_page=100" 2>/dev/null)
+                    
+                    if [[ -n "$RELEASES_RESPONSE" ]]; then
+                        DRAFT_INFO=$(echo "$RELEASES_RESPONSE" | python3 -c "
+import sys, json
+try:
+    releases = json.load(sys.stdin)
+    drafts = [r for r in releases if r.get('tag_name') == '${RELEASE_TAG}' and r.get('draft', False)]
+    if drafts:
+        print(f'{len(drafts)}')
+        for d in drafts:
+            print(f'ID: {d[\"id\"]}, Created: {d.get(\"created_at\", \"N/A\")}')
+    else:
+        print('0')
+except Exception as e:
+    print('0')
+" 2>/dev/null || echo "0")
+                        
+                        DRAFT_COUNT=$(echo "$DRAFT_INFO" | head -1)
+                        if [[ "$DRAFT_COUNT" != "0" ]] && [[ -n "$DRAFT_COUNT" ]] && [[ "$DRAFT_COUNT" =~ ^[0-9]+$ ]]; then
+                            echo -e "${YELLOW}⚠️  发现 ${DRAFT_COUNT} 个 draft Release 与标签 ${RELEASE_TAG} 相关${NC}"
+                            echo "$DRAFT_INFO" | tail -n +2 | while read -r line; do
+                                echo "    - $line"
+                            done
+                            echo ""
+                            echo "  提示: 这些 draft Release 将在使用 create_release.sh 创建新 Release 时自动清理"
+                            echo "  或者你可以手动在 GitHub 上删除它们: https://github.com/${REPO_PATH}/releases"
+                        else
+                            echo -e "${GREEN}✓${NC} 未发现 draft Release"
+                        fi
+                    fi
+                else
+                    echo -e "${GREEN}✓${NC} 未发现对应的 Release 标签"
+                fi
+            fi
+        fi
     else
         echo -e "${RED}✗${NC} 推送标签到远程时出错"
         exit 1
