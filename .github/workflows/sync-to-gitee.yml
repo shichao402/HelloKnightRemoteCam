@@ -563,6 +563,7 @@ jobs:
             UPDATE_BODY_JSON=$(echo "${RELEASE_BODY}" | jq -Rs .)
             if [ -n "$TARGET_COMMITISH" ]; then
               REQUEST_BODY=$(echo "{
+                \"tag_name\": \"${TAG_NAME}\",
                 \"name\": \"${RELEASE_NAME}\",
                 \"body\": ${UPDATE_BODY_JSON},
                 \"target_commitish\": \"${TARGET_COMMITISH}\",
@@ -570,6 +571,7 @@ jobs:
               }" | jq -c .)
             else
               REQUEST_BODY=$(echo "{
+                \"tag_name\": \"${TAG_NAME}\",
                 \"name\": \"${RELEASE_NAME}\",
                 \"body\": ${UPDATE_BODY_JSON},
                 \"prerelease\": false
@@ -941,6 +943,7 @@ jobs:
               RELEASE_BODY="This release contains the update configuration file for the application. Updated at $(date -u +'%Y-%m-%d %H:%M:%S')"
               
               UPDATE_RELEASE_BODY=$(echo "{
+                \"tag_name\": \"${CONFIG_RELEASE_TAG}\",
                 \"name\": \"${RELEASE_NAME}\",
                 \"body\": \"${RELEASE_BODY}\",
                 \"target_commitish\": \"${MASTER_COMMIT_SHA}\",
