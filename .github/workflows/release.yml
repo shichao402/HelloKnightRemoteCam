@@ -474,6 +474,7 @@ jobs:
             }
 
       - name: Create Release
+        id: create_release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.get_versions.outputs.TAG_VERSION }}
@@ -496,6 +497,35 @@ jobs:
             artifacts/helloknightrcc_server_android_${{ steps.get_versions.outputs.SERVER_FULL_VERSION }}.zip
           draft: false
           prerelease: false
+
+      - name: Verify Release created successfully
+        run: |
+          TAG_NAME="${{ steps.get_versions.outputs.TAG_VERSION }}"
+          echo "🔍 验证 GitHub Release 是否创建成功..."
+          echo "  标签: ${TAG_NAME}"
+          
+          # 等待一下，确保 Release 完全创建
+          sleep 2
+          
+          # 检查 Release 是否存在
+          RELEASE_INFO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG_NAME}")
+          
+          if echo "${RELEASE_INFO}" | grep -q '"id"'; then
+            RELEASE_ID=$(echo "${RELEASE_INFO}" | jq -r '.id')
+            RELEASE_NAME=$(echo "${RELEASE_INFO}" | jq -r '.name')
+            ASSETS_COUNT=$(echo "${RELEASE_INFO}" | jq -r '.assets | length')
+            echo "✅ GitHub Release 创建成功"
+            echo "  Release ID: ${RELEASE_ID}"
+            echo "  Release 名称: ${RELEASE_NAME}"
+            echo "  构建产物数量: ${ASSETS_COUNT}"
+            echo ""
+            echo "🚀 这将自动触发 Gitee 同步工作流..."
+          else
+            echo "❌ GitHub Release 创建失败或未找到"
+            echo "  响应: ${RELEASE_INFO}"
+            exit 1
+          fi
 
       # 计算文件hash并生成 GitHub 更新配置文件
       - name: Calculate File Hashes and Generate GitHub Update Config

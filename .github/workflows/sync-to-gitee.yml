@@ -20,19 +20,38 @@ jobs:
     steps:
       - name: Check Gitee Secrets
         run: |
+          echo "🔍 检查 Gitee Secrets 配置..."
+          
+          # 检查 GITEE_TOKEN（不显示明文）
           if [ -z "${{ secrets.GITEE_TOKEN }}" ]; then
-            echo "❌ GITEE_TOKEN is not set"
+            echo "❌ GITEE_TOKEN 未配置"
             exit 1
+          else
+            TOKEN_LEN=${#GITEE_TOKEN}
+            TOKEN_PREFIX="${GITEE_TOKEN:0:4}"
+            TOKEN_SUFFIX="${GITEE_TOKEN: -4}"
+            echo "✅ GITEE_TOKEN 已配置 (长度: ${TOKEN_LEN}, 前缀: ${TOKEN_PREFIX}..., 后缀: ...${TOKEN_SUFFIX})"
           fi
+          
+          # 检查 GITEE_REPO_OWNER（显示明文，因为这只是用户名）
           if [ -z "${{ secrets.GITEE_REPO_OWNER }}" ]; then
-            echo "❌ GITEE_REPO_OWNER is not set"
+            echo "❌ GITEE_REPO_OWNER 未配置"
             exit 1
+          else
+            echo "✅ GITEE_REPO_OWNER 已配置: ${{ secrets.GITEE_REPO_OWNER }}"
           fi
+          
+          # 检查 GITEE_REPO_NAME（显示明文，因为这只是仓库名）
           if [ -z "${{ secrets.GITEE_REPO_NAME }}" ]; then
-            echo "❌ GITEE_REPO_NAME is not set"
+            echo "❌ GITEE_REPO_NAME 未配置"
             exit 1
+          else
+            echo "✅ GITEE_REPO_NAME 已配置: ${{ secrets.GITEE_REPO_NAME }}"
           fi
-          echo "✅ All Gitee secrets are configured"
+          
+          GITEE_REPO="${{ secrets.GITEE_REPO_OWNER }}/${{ secrets.GITEE_REPO_NAME }}"
+          echo "📦 Gitee 仓库: ${GITEE_REPO}"
+          echo "✅ 所有 Gitee Secrets 配置检查通过"
 
       - name: Checkout code
         uses: actions/checkout@v4
@@ -43,40 +62,48 @@ jobs:
       - name: Extract version from release
         id: get_version
         run: |
+          echo "🔍 提取 Release 版本信息..."
+          echo "  事件类型: ${{ github.event_name }}"
+          echo "  GITHUB_REF: ${GITHUB_REF}"
+          
           # 如果是手动触发，使用输入的 release_tag
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             TAG_NAME="${{ github.event.inputs.release_tag }}"
-            echo "Manual trigger: using tag ${TAG_NAME}"
+            echo "📌 手动触发: 使用标签 ${TAG_NAME}"
           else
             # 从 release 事件获取 tag 名称
             # release 事件的 GITHUB_REF 格式可能是 refs/tags/v1.0.0
             TAG_NAME=${GITHUB_REF#refs/tags/}
+            echo "  [调试] 从 GITHUB_REF 提取: ${TAG_NAME}"
             
             # 如果没有从 GITHUB_REF 获取到，尝试从环境变量获取
             if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" == "$GITHUB_REF" ]; then
               # release 事件可能使用不同的 ref
               TAG_NAME=${GITHUB_REF#refs/heads/}
+              echo "  [调试] 从 refs/heads/ 提取: ${TAG_NAME}"
             fi
             
             # 如果还是获取不到，从 GitHub API 获取
             if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" == "$GITHUB_REF" ]; then
+              echo "  [调试] 从 GitHub API 获取最新 Release..."
               TAG_NAME=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
                 "https://api.github.com/repos/${{ github.repository }}/releases/latest" | \
                 jq -r '.tag_name // empty')
+              echo "  [调试] API 返回: ${TAG_NAME}"
             fi
           fi
           
           # 确保 TAG_NAME 不为空
           if [ -z "$TAG_NAME" ]; then
-            echo "❌ Failed to get release tag"
+            echo "❌ 无法获取 Release 标签"
             exit 1
           fi
           
           VERSION=${TAG_NAME#v}  # 去掉 v 前缀
           echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_OUTPUT
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Release tag: ${TAG_NAME}"
-          echo "Version: ${VERSION}"
+          echo "✅ Release 标签: ${TAG_NAME}"
+          echo "✅ 版本号: ${VERSION}"
 
       - name: Get Release info
         uses: actions/github-script@v7
@@ -87,11 +114,16 @@ jobs:
             let release;
             const tagName = '${{ steps.get_version.outputs.TAG_NAME }}';
             
+            console.log(`🔍 获取 Release 信息: ${tagName}`);
+            console.log(`  事件类型: ${context.eventName}`);
+            
             if (context.payload.release && context.eventName === 'release') {
               // release 事件直接包含 release 信息
               release = context.payload.release;
+              console.log('✅ 从事件负载获取 Release 信息');
             } else {
               // 手动触发或其他情况，通过 API 获取
+              console.log('📡 通过 GitHub API 获取 Release 信息...');
               try {
                 const { data } = await github.rest.repos.getReleaseByTag({
                   owner: context.repo.owner,
@@ -99,14 +131,27 @@ jobs:
                   tag: tagName
                 });
                 release = data;
+                console.log(`✅ 成功获取 Release 信息 (ID: ${release.id})`);
               } catch (error) {
+                console.error(`❌ 获取 Release 失败: ${error.message}`);
                 core.setFailed(`Failed to get release for tag ${tagName}: ${error.message}`);
                 throw error;
               }
             }
             
             const assets = release.assets || [];
-            console.log(`Found ${assets.length} assets`);
+            console.log(`📦 找到 ${assets.length} 个构建产物:`);
+            assets.forEach((asset, index) => {
+              console.log(`  ${index + 1}. ${asset.name} (${(asset.size / 1024 / 1024).toFixed(2)} MB)`);
+            });
+            
+            // 验证 Release 状态
+            if (release.draft) {
+              console.log('⚠️ 警告: Release 是草稿状态');
+            }
+            if (release.prerelease) {
+              console.log('⚠️ 警告: Release 是预发布版本');
+            }
             
             // 保存 release 信息
             core.setOutput('release_body', release.body || '');
@@ -153,28 +198,54 @@ jobs:
           
           GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
           
-          # 创建 Gitee Release
-          echo "Creating Gitee Release: ${TAG_NAME}"
+          echo "🚀 创建 Gitee Release..."
+          echo "  标签: ${TAG_NAME}"
+          echo "  名称: ${RELEASE_NAME}"
+          echo "  仓库: ${GITEE_REPO}"
           
-          RESPONSE=$(curl -s -X POST \
-            -H "Content-Type: application/json" \
+          # 检查 Release 是否已存在
+          echo "🔍 检查 Gitee Release 是否已存在..."
+          EXISTING_RELEASE=$(curl -s -X GET \
             -H "Authorization: token ${GITEE_TOKEN}" \
-            -d "{
-              \"tag_name\": \"${TAG_NAME}\",
-              \"name\": \"${RELEASE_NAME}\",
-              \"body\": $(echo "${RELEASE_BODY}" | jq -Rs .),
-              \"prerelease\": false
-            }" \
-            "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases")
+            "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases/tags/${TAG_NAME}" || echo "")
           
-          echo "Gitee Release response: ${RESPONSE}"
-          
-          # 检查是否创建成功
-          if echo "${RESPONSE}" | grep -q '"id"'; then
-            echo "✅ Gitee Release created successfully"
+          if echo "${EXISTING_RELEASE}" | grep -q '"id"'; then
+            RELEASE_ID=$(echo "${EXISTING_RELEASE}" | jq -r '.id // empty')
+            echo "⚠️ Gitee Release 已存在 (ID: ${RELEASE_ID})，将更新..."
+            
+            # 更新现有 Release
+            RESPONSE=$(curl -s -X PATCH \
+              -H "Content-Type: application/json" \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              -d "{
+                \"name\": \"${RELEASE_NAME}\",
+                \"body\": $(echo "${RELEASE_BODY}" | jq -Rs .),
+                \"prerelease\": false
+              }" \
+              "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases/${RELEASE_ID}")
           else
-            echo "⚠️ Gitee Release may already exist or failed"
-            echo "Response: ${RESPONSE}"
+            # 创建新 Release
+            RESPONSE=$(curl -s -X POST \
+              -H "Content-Type: application/json" \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              -d "{
+                \"tag_name\": \"${TAG_NAME}\",
+                \"name\": \"${RELEASE_NAME}\",
+                \"body\": $(echo "${RELEASE_BODY}" | jq -Rs .),
+                \"prerelease\": false
+              }" \
+              "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases")
+          fi
+          
+          # 检查响应（不显示完整响应，只显示关键信息）
+          if echo "${RESPONSE}" | grep -q '"id"'; then
+            RELEASE_ID=$(echo "${RESPONSE}" | jq -r '.id // empty')
+            echo "✅ Gitee Release 创建/更新成功 (ID: ${RELEASE_ID})"
+          else
+            ERROR_MSG=$(echo "${RESPONSE}" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "解析错误响应失败")
+            echo "❌ Gitee Release 创建/更新失败: ${ERROR_MSG}"
+            echo "  [调试] 响应状态码: $(echo "${RESPONSE}" | jq -r '.status // "N/A"')"
+            exit 1
           fi
 
       - name: Upload assets to Gitee Release
@@ -186,22 +257,56 @@ jobs:
           TAG_NAME="${{ steps.get_version.outputs.TAG_NAME }}"
           GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
           
-          echo "Uploading assets to Gitee Release..."
+          echo "📤 上传构建产物到 Gitee Release..."
+          echo "  标签: ${TAG_NAME}"
+          echo "  仓库: ${GITEE_REPO}"
+          
+          # 检查文件数量
+          FILE_COUNT=$(find release-assets -type f | wc -l)
+          echo "  找到 ${FILE_COUNT} 个文件需要上传"
+          
+          UPLOAD_SUCCESS=0
+          UPLOAD_FAILED=0
           
           # 上传所有文件
           for file in release-assets/*; do
             if [ -f "$file" ]; then
               filename=$(basename "$file")
-              echo "Uploading ${filename}..."
+              filesize=$(du -h "$file" | cut -f1)
+              echo "  📦 上传 ${filename} (${filesize})..."
               
-              curl -X POST \
+              UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
                 -H "Authorization: token ${GITEE_TOKEN}" \
                 -F "file=@${file}" \
-                "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases/${TAG_NAME}/attach_files" || echo "Upload ${filename} failed or already exists"
+                "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases/${TAG_NAME}/attach_files")
+              
+              HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
+              RESPONSE_BODY=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+              
+              if [ "$HTTP_CODE" -eq 201 ] || [ "$HTTP_CODE" -eq 200 ]; then
+                echo "    ✅ ${filename} 上传成功"
+                UPLOAD_SUCCESS=$((UPLOAD_SUCCESS + 1))
+              elif echo "$RESPONSE_BODY" | grep -q "already exists\|已存在"; then
+                echo "    ⚠️ ${filename} 已存在，跳过"
+                UPLOAD_SUCCESS=$((UPLOAD_SUCCESS + 1))
+              else
+                ERROR_MSG=$(echo "$RESPONSE_BODY" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "HTTP ${HTTP_CODE}")
+                echo "    ❌ ${filename} 上传失败: ${ERROR_MSG}"
+                UPLOAD_FAILED=$((UPLOAD_FAILED + 1))
+              fi
             fi
           done
           
-          echo "✅ Assets upload completed"
+          echo ""
+          echo "📊 上传统计:"
+          echo "  ✅ 成功: ${UPLOAD_SUCCESS}"
+          echo "  ❌ 失败: ${UPLOAD_FAILED}"
+          
+          if [ "$UPLOAD_FAILED" -gt 0 ]; then
+            echo "⚠️ 部分文件上传失败，但继续执行后续步骤"
+          else
+            echo "✅ 所有构建产物上传完成"
+          fi
 
       - name: Sync update config to Gitee
         env:
@@ -209,17 +314,22 @@ jobs:
           GITEE_REPO_OWNER: ${{ secrets.GITEE_REPO_OWNER }}
           GITEE_REPO_NAME: ${{ secrets.GITEE_REPO_NAME }}
         run: |
+          echo "🔄 同步更新配置到 Gitee..."
+          
           # 确保在 main 分支上
           git checkout main || git checkout -b main origin/main
           git pull origin main || true
           
           # 读取 GitHub 的更新配置文件
           if [ -f "update_config_github.json" ]; then
-            echo "Reading GitHub update config..."
+            echo "✅ 找到 GitHub 更新配置文件"
             
             # 转换为 Gitee 格式
             GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
             TAG_NAME="${{ steps.get_version.outputs.TAG_NAME }}"
+            
+            echo "  [调试] Gitee 仓库: ${GITEE_REPO}"
+            echo "  [调试] Release 标签: ${TAG_NAME}"
             
             # 使用 jq 修改 URL
             cat update_config_github.json | jq "
@@ -229,8 +339,8 @@ jobs:
               .server.platforms.android.downloadUrl = (.server.platforms.android.downloadUrl | gsub(\"github.com.*releases\"; \"gitee.com/${GITEE_REPO}/releases\"))
             " > update_config_gitee.json
             
-            echo "Generated Gitee update config:"
-            cat update_config_gitee.json
+            echo "✅ 已生成 Gitee 更新配置文件"
+            echo "  [调试] 更新检查 URL: https://gitee.com/${GITEE_REPO}/raw/main/update_config_gitee.json"
             
             # 提交到 Gitee 仓库
             git config --global user.name "GitHub Actions"
@@ -238,23 +348,36 @@ jobs:
             
             # 添加 Gitee remote（如果还没有）
             if ! git remote get-url gitee >/dev/null 2>&1; then
+              echo "  [调试] 添加 Gitee remote..."
               git remote add gitee https://${GITEE_TOKEN}@gitee.com/${GITEE_REPO}.git
+            else
+              echo "  [调试] Gitee remote 已存在"
             fi
             
             # 切换到 main 分支并推送
+            echo "  [调试] 获取 Gitee main 分支..."
             git fetch gitee main || true
             git checkout -b main gitee/main 2>/dev/null || git checkout main
             
             git add update_config_gitee.json
             if git diff --staged --quiet; then
-              echo "No changes to commit"
+              echo "⚠️ 没有更改需要提交（配置文件可能已是最新）"
             else
+              echo "  [调试] 提交更改..."
               git commit -m "Sync update config from GitHub Release ${TAG_NAME}"
-              git push gitee main || echo "Push failed, may already be up to date"
+              
+              echo "  [调试] 推送到 Gitee..."
+              if git push gitee main; then
+                echo "✅ 更新配置已推送到 Gitee"
+              else
+                echo "⚠️ 推送失败，可能已是最新版本或权限不足"
+                exit 1
+              fi
             fi
             
-            echo "✅ Update config synced to Gitee"
+            echo "✅ 更新配置同步完成"
           else
-            echo "⚠️ update_config_github.json not found, skipping config sync"
+            echo "⚠️ update_config_github.json 未找到，跳过配置同步"
+            exit 1
           fi
 
