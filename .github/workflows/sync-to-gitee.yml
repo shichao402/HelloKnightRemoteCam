@@ -616,55 +616,123 @@ jobs:
           
           echo "  找到 ${FILE_COUNT} 个文件需要上传"
           
+          # 收集所有文件列表
+          FILES=()
+          while IFS= read -r -d '' file; do
+            FILES+=("$file")
+          done < <(find release-assets -type f -print0 2>/dev/null)
+          
+          TOTAL_FILES=${#FILES[@]}
           UPLOAD_SUCCESS=0
           UPLOAD_FAILED=0
+          MAX_RETRIES=3
+          RETRY_DELAY=5
           
-          # 上传所有文件
+          # 上传所有文件（带重试机制）
           UPLOAD_API_BASE_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}/attach_files"
           echo "  上传 API URL: ${UPLOAD_API_BASE_URL}"
+          echo ""
           
-          for file in release-assets/*; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file")
-              filesize=$(du -h "$file" | cut -f1)
-              filepath=$(realpath "$file" 2>/dev/null || echo "$file")
-              echo "  📦 上传 ${filename} (${filesize})..."
-              echo "    文件路径: ${filepath}"
+          FILE_INDEX=0
+          for file in "${FILES[@]}"; do
+            FILE_INDEX=$((FILE_INDEX + 1))
+            filename=$(basename "$file")
+            filesize=$(du -h "$file" | cut -f1)
+            filepath=$(realpath "$file" 2>/dev/null || echo "$file")
+            filesize_bytes=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "0")
+            
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📦 [${FILE_INDEX}/${TOTAL_FILES}] 上传 ${filename}"
+            echo "   文件大小: ${filesize} (${filesize_bytes} bytes)"
+            echo "   文件路径: ${filepath}"
+            echo "   进度: $((FILE_INDEX * 100 / TOTAL_FILES))%"
+            
+            # 重试机制
+            RETRY_COUNT=0
+            UPLOAD_SUCCESS_FLAG=false
+            
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+              if [ $RETRY_COUNT -gt 0 ]; then
+                echo "   ⏳ 重试第 ${RETRY_COUNT}/${MAX_RETRIES} 次（等待 ${RETRY_DELAY} 秒后重试）..."
+                sleep $RETRY_DELAY
+              fi
               
-              UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+              # 使用 curl 上传，显示进度条
+              echo "   📤 开始上传..."
+              UPLOAD_START_TIME=$(date +%s)
+              
+              # 使用 curl 的进度显示（--progress-bar 或 -#）
+              UPLOAD_RESPONSE=$(curl --progress-bar -w "\n%{http_code}" -X POST \
                 -H "Authorization: token ${GITEE_TOKEN}" \
                 -F "file=@${file}" \
-                "${UPLOAD_API_BASE_URL}")
+                "${UPLOAD_API_BASE_URL}" 2>&1)
+              
+              UPLOAD_END_TIME=$(date +%s)
+              UPLOAD_DURATION=$((UPLOAD_END_TIME - UPLOAD_START_TIME))
               
               HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
               RESPONSE_BODY=$(echo "$UPLOAD_RESPONSE" | sed '$d')
               
-              echo "    HTTP 状态码: ${HTTP_CODE}"
+              echo ""
+              echo "   HTTP 状态码: ${HTTP_CODE}"
+              echo "   上传耗时: ${UPLOAD_DURATION} 秒"
               
+              # 检查上传结果
               if [ "$HTTP_CODE" -eq 201 ] || [ "$HTTP_CODE" -eq 200 ]; then
-                echo "    ✅ ${filename} 上传成功"
-                echo "    响应: ${RESPONSE_BODY}"
+                echo "   ✅ ${filename} 上传成功"
                 UPLOAD_SUCCESS=$((UPLOAD_SUCCESS + 1))
-              elif echo "$RESPONSE_BODY" | grep -q "already exists\|已存在"; then
-                echo "    ⚠️ ${filename} 已存在，跳过"
-                echo "    响应: ${RESPONSE_BODY}"
+                UPLOAD_SUCCESS_FLAG=true
+                break
+              elif echo "$RESPONSE_BODY" | grep -qi "already exists\|已存在\|duplicate"; then
+                echo "   ⚠️ ${filename} 已存在，跳过"
                 UPLOAD_SUCCESS=$((UPLOAD_SUCCESS + 1))
+                UPLOAD_SUCCESS_FLAG=true
+                break
               else
                 ERROR_MSG=$(echo "$RESPONSE_BODY" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "HTTP ${HTTP_CODE}")
-                echo "    ❌ ${filename} 上传失败: ${ERROR_MSG}"
-                echo "    完整响应: ${RESPONSE_BODY}"
-                UPLOAD_FAILED=$((UPLOAD_FAILED + 1))
+                echo "   ❌ 上传失败: ${ERROR_MSG}"
+                
+                # 检查是否是可重试的错误
+                if echo "$HTTP_CODE" | grep -qE "^(429|500|502|503|504)$"; then
+                  echo "   ℹ️  检测到可重试的错误（HTTP ${HTTP_CODE}），将重试"
+                  RETRY_COUNT=$((RETRY_COUNT + 1))
+                elif [ "$HTTP_CODE" -eq 401 ] || [ "$HTTP_CODE" -eq 403 ]; then
+                  echo "   ❌ 认证失败（HTTP ${HTTP_CODE}），无法重试"
+                  break
+                elif [ "$HTTP_CODE" -eq 404 ]; then
+                  echo "   ❌ Release 不存在（HTTP ${HTTP_CODE}），无法重试"
+                  break
+                else
+                  RETRY_COUNT=$((RETRY_COUNT + 1))
+                fi
               fi
+            done
+            
+            if [ "$UPLOAD_SUCCESS_FLAG" = false ]; then
+              echo "   ❌ ${filename} 上传失败（已重试 ${MAX_RETRIES} 次）"
+              echo "   完整响应: ${RESPONSE_BODY}"
+              UPLOAD_FAILED=$((UPLOAD_FAILED + 1))
             fi
+            
+            echo ""
           done
           
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           echo "📊 上传统计:"
-          echo "  ✅ 成功: ${UPLOAD_SUCCESS}"
-          echo "  ❌ 失败: ${UPLOAD_FAILED}"
+          echo "  ✅ 成功: ${UPLOAD_SUCCESS}/${TOTAL_FILES}"
+          echo "  ❌ 失败: ${UPLOAD_FAILED}/${TOTAL_FILES}"
+          echo "  完成率: $((UPLOAD_SUCCESS * 100 / TOTAL_FILES))%"
           
           if [ "$UPLOAD_FAILED" -gt 0 ]; then
-            echo "⚠️ 部分文件上传失败，但继续执行后续步骤"
+            echo ""
+            echo "⚠️ 部分文件上传失败"
+            if [ "$UPLOAD_FAILED" -eq "$TOTAL_FILES" ]; then
+              echo "❌ 所有文件上传失败，终止流程"
+              exit 1
+            else
+              echo "⚠️ 继续执行后续步骤"
+            fi
           else
             echo "✅ 所有构建产物上传完成"
           fi
@@ -908,33 +976,75 @@ jobs:
             UPLOAD_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}/attach_files"
             
             FILE_SIZE=$(stat -f%z update_config_gitee.json 2>/dev/null || stat -c%s update_config_gitee.json 2>/dev/null || echo "unknown")
-            echo "  文件大小: ${FILE_SIZE} bytes"
+            FILE_SIZE_BYTES=$(stat -f%z update_config_gitee.json 2>/dev/null || stat -c%s update_config_gitee.json 2>/dev/null || echo "0")
+            echo "  文件大小: ${FILE_SIZE} (${FILE_SIZE_BYTES} bytes)"
             
-            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-              -H "Authorization: token ${GITEE_TOKEN}" \
-              -F "file=@update_config_gitee.json" \
-              -F "name=update_config_gitee.json" \
-              "${UPLOAD_API_URL}")
+            # 重试机制
+            MAX_RETRIES=3
+            RETRY_DELAY=5
+            RETRY_COUNT=0
+            UPLOAD_SUCCESS_FLAG=false
             
-            UPLOAD_HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
-            UPLOAD_BODY_RESPONSE=$(echo "$UPLOAD_RESPONSE" | sed '$d')
-            
-            echo "  响应 HTTP 状态码: ${UPLOAD_HTTP_CODE}"
-            
-            if [ "$UPLOAD_HTTP_CODE" = "200" ] || [ "$UPLOAD_HTTP_CODE" = "201" ]; then
-              ASSET_NAME=$(echo "$UPLOAD_BODY_RESPONSE" | jq -r '.name // empty' 2>/dev/null || echo "")
-              ASSET_URL=$(echo "$UPLOAD_BODY_RESPONSE" | jq -r '.browser_download_url // empty' 2>/dev/null || echo "")
-              echo "✅ 文件上传成功"
-              if [ -n "$ASSET_NAME" ]; then
-                echo "  文件名: ${ASSET_NAME}"
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+              if [ $RETRY_COUNT -gt 0 ]; then
+                echo "  ⏳ 重试第 ${RETRY_COUNT}/${MAX_RETRIES} 次（等待 ${RETRY_DELAY} 秒后重试）..."
+                sleep $RETRY_DELAY
               fi
-              if [ -n "$ASSET_URL" ]; then
-                echo "  下载 URL: ${ASSET_URL}"
+              
+              echo "  📤 开始上传..."
+              UPLOAD_START_TIME=$(date +%s)
+              
+              UPLOAD_RESPONSE=$(curl --progress-bar -w "\n%{http_code}" -X POST \
+                -H "Authorization: token ${GITEE_TOKEN}" \
+                -F "file=@update_config_gitee.json" \
+                -F "name=update_config_gitee.json" \
+                "${UPLOAD_API_URL}" 2>&1)
+              
+              UPLOAD_END_TIME=$(date +%s)
+              UPLOAD_DURATION=$((UPLOAD_END_TIME - UPLOAD_START_TIME))
+              
+              UPLOAD_HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
+              UPLOAD_BODY_RESPONSE=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+              
+              echo ""
+              echo "  响应 HTTP 状态码: ${UPLOAD_HTTP_CODE}"
+              echo "  上传耗时: ${UPLOAD_DURATION} 秒"
+              
+              if [ "$UPLOAD_HTTP_CODE" = "200" ] || [ "$UPLOAD_HTTP_CODE" = "201" ]; then
+                ASSET_NAME=$(echo "$UPLOAD_BODY_RESPONSE" | jq -r '.name // empty' 2>/dev/null || echo "")
+                ASSET_URL=$(echo "$UPLOAD_BODY_RESPONSE" | jq -r '.browser_download_url // empty' 2>/dev/null || echo "")
+                echo "✅ 文件上传成功"
+                if [ -n "$ASSET_NAME" ]; then
+                  echo "  文件名: ${ASSET_NAME}"
+                fi
+                if [ -n "$ASSET_URL" ]; then
+                  echo "  下载 URL: ${ASSET_URL}"
+                fi
+                UPLOAD_SUCCESS_FLAG=true
+                break
+              else
+                ERROR_MSG=$(echo "$UPLOAD_BODY_RESPONSE" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "HTTP ${UPLOAD_HTTP_CODE}")
+                echo "  ❌ 上传失败: ${ERROR_MSG}"
+                
+                # 检查是否是可重试的错误
+                if echo "$UPLOAD_HTTP_CODE" | grep -qE "^(429|500|502|503|504)$"; then
+                  echo "  ℹ️  检测到可重试的错误（HTTP ${UPLOAD_HTTP_CODE}），将重试"
+                  RETRY_COUNT=$((RETRY_COUNT + 1))
+                elif [ "$UPLOAD_HTTP_CODE" -eq 401 ] || [ "$UPLOAD_HTTP_CODE" -eq 403 ]; then
+                  echo "  ❌ 认证失败（HTTP ${UPLOAD_HTTP_CODE}），无法重试"
+                  break
+                elif [ "$UPLOAD_HTTP_CODE" -eq 404 ]; then
+                  echo "  ❌ Release 不存在（HTTP ${UPLOAD_HTTP_CODE}），无法重试"
+                  break
+                else
+                  RETRY_COUNT=$((RETRY_COUNT + 1))
+                fi
               fi
-            else
-              ERROR_MSG=$(echo "$UPLOAD_BODY_RESPONSE" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$UPLOAD_BODY_RESPONSE")
-              echo "❌ 文件上传失败 (HTTP ${UPLOAD_HTTP_CODE})"
-              echo "  错误信息: ${ERROR_MSG}"
+            done
+            
+            if [ "$UPLOAD_SUCCESS_FLAG" = false ]; then
+              echo ""
+              echo "❌ 配置文件上传失败（已重试 ${MAX_RETRIES} 次）"
               echo "  完整响应: ${UPLOAD_BODY_RESPONSE}"
               exit 1
             fi
