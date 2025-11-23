@@ -334,42 +334,7 @@ jobs:
           echo "  Repo Name: ${GITEE_REPO_NAME}"
           echo "  标签 (编码后): ${TAG_NAME_ENCODED}"
           
-          # 获取标签对应的 commit SHA（target_commitish）
-          echo "🔍 获取标签对应的 commit SHA..."
-          TAG_SHA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/git/refs/tags/${TAG_NAME}" | \
-            jq -r '.object.sha // empty')
-          
-          # 如果通过 refs/tags 获取不到，尝试通过 tags API 获取
-          if [ -z "$TAG_SHA" ] || [ "$TAG_SHA" == "null" ]; then
-            echo "  [调试] 通过 refs/tags 未获取到，尝试通过 tags API..."
-            TAG_SHA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/git/tags/${TAG_NAME}" | \
-              jq -r '.object.sha // empty')
-          fi
-          
-          # 如果还是获取不到，尝试获取标签对象指向的 commit
-          if [ -z "$TAG_SHA" ] || [ "$TAG_SHA" == "null" ]; then
-            echo "  [调试] 通过 tags API 未获取到，尝试获取标签指向的 commit..."
-            TAG_INFO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/git/refs/tags/${TAG_NAME}")
-            TAG_OBJECT_SHA=$(echo "$TAG_INFO" | jq -r '.object.sha // empty')
-            if [ -n "$TAG_OBJECT_SHA" ] && [ "$TAG_OBJECT_SHA" != "null" ]; then
-              TAG_OBJECT=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                "https://api.github.com/repos/${{ github.repository }}/git/tags/${TAG_OBJECT_SHA}")
-              TAG_SHA=$(echo "$TAG_OBJECT" | jq -r '.object.sha // empty')
-            fi
-          fi
-          
-          if [ -z "$TAG_SHA" ] || [ "$TAG_SHA" == "null" ]; then
-            echo "⚠️ 警告: 无法获取标签 ${TAG_NAME} 对应的 commit SHA，将使用默认分支"
-            TARGET_COMMITISH=""
-          else
-            TARGET_COMMITISH="${TAG_SHA}"
-            echo "✅ 标签 ${TAG_NAME} 对应的 commit SHA: ${TAG_SHA:0:7}..."
-          fi
-          
-          # 首先验证仓库是否存在
+          # 验证仓库是否存在（获取默认分支信息）
           echo "🔍 验证 Gitee 仓库是否存在..."
           REPO_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}"
           echo "  API URL: ${REPO_API_URL}"
@@ -409,55 +374,29 @@ jobs:
           fi
           echo "  默认分支: ${REPO_DEFAULT_BRANCH}"
           
-          # 如果获取到了 commit SHA，检查该 commit 是否存在于 Gitee 仓库
-          if [ -n "$TARGET_COMMITISH" ] && [ "$TARGET_COMMITISH" != "" ]; then
-            echo "🔍 检查 commit ${TARGET_COMMITISH:0:7}... 是否存在于 Gitee 仓库..."
-            COMMIT_CHECK_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/git/commits/${TARGET_COMMITISH}"
-            echo "  API URL: ${COMMIT_CHECK_API_URL}"
-            
-            COMMIT_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
-              -H "Authorization: token ${GITEE_TOKEN}" \
-              "${COMMIT_CHECK_API_URL}")
-            
-            COMMIT_CHECK_HTTP_CODE=$(echo "$COMMIT_CHECK" | tail -n1)
-            COMMIT_CHECK_BODY=$(echo "$COMMIT_CHECK" | sed '$d')
-            
-            echo "  HTTP 状态码: ${COMMIT_CHECK_HTTP_CODE}"
-            
-            if [ "$COMMIT_CHECK_HTTP_CODE" != "200" ]; then
-              ERROR_MSG=$(echo "$COMMIT_CHECK_BODY" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$COMMIT_CHECK_BODY")
-              echo "⚠️ Commit ${TARGET_COMMITISH:0:7}... 不存在于 Gitee 仓库 (HTTP ${COMMIT_CHECK_HTTP_CODE})"
-              echo "  错误信息: ${ERROR_MSG}"
-              echo ""
-              echo "  尝试使用默认分支 ${REPO_DEFAULT_BRANCH} 的最新 commit..."
-              
-              # 获取默认分支的最新 commit
-              BRANCH_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/branches/${REPO_DEFAULT_BRANCH}"
-              BRANCH_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
-                -H "Authorization: token ${GITEE_TOKEN}" \
-                "${BRANCH_API_URL}")
-              
-              BRANCH_CHECK_HTTP_CODE=$(echo "$BRANCH_CHECK" | tail -n1)
-              BRANCH_CHECK_BODY=$(echo "$BRANCH_CHECK" | sed '$d')
-              
-              if [ "$BRANCH_CHECK_HTTP_CODE" = "200" ]; then
-                BRANCH_COMMIT_SHA=$(echo "$BRANCH_CHECK_BODY" | jq -r '.commit.sha // empty' 2>/dev/null || echo "")
-                if [ -n "$BRANCH_COMMIT_SHA" ]; then
-                  echo "✅ 使用默认分支 ${REPO_DEFAULT_BRANCH} 的最新 commit: ${BRANCH_COMMIT_SHA:0:7}..."
-                  TARGET_COMMITISH="${BRANCH_COMMIT_SHA}"
-                else
-                  echo "⚠️ 无法获取默认分支的 commit，将使用分支名"
-                  TARGET_COMMITISH="${REPO_DEFAULT_BRANCH}"
-                fi
-              else
-                echo "⚠️ 无法获取默认分支信息，将使用分支名"
-                TARGET_COMMITISH="${REPO_DEFAULT_BRANCH}"
-              fi
+          # 获取默认分支的最新 commit SHA（用于创建标签和 Release，不需要检查 GitHub commit）
+          echo ""
+          echo "🔍 获取默认分支 ${REPO_DEFAULT_BRANCH} 的最新 commit..."
+          BRANCH_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/branches/${REPO_DEFAULT_BRANCH}"
+          BRANCH_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
+            -H "Authorization: token ${GITEE_TOKEN}" \
+            "${BRANCH_API_URL}")
+          
+          BRANCH_CHECK_HTTP_CODE=$(echo "$BRANCH_CHECK" | tail -n1)
+          if [ "$BRANCH_CHECK_HTTP_CODE" = "200" ]; then
+            BRANCH_CHECK_BODY=$(echo "$BRANCH_CHECK" | sed '$d')
+            TARGET_COMMITISH=$(echo "$BRANCH_CHECK_BODY" | jq -r '.commit.sha // empty' 2>/dev/null || echo "")
+            if [ -z "$TARGET_COMMITISH" ] || [ "$TARGET_COMMITISH" == "null" ]; then
+              echo "⚠️ 无法获取默认分支的 commit SHA，将使用分支名"
+              TARGET_COMMITISH="${REPO_DEFAULT_BRANCH}"
             else
-              echo "✅ Commit ${TARGET_COMMITISH:0:7}... 存在于 Gitee 仓库"
+              echo "✅ 使用默认分支 ${REPO_DEFAULT_BRANCH} 的最新 commit: ${TARGET_COMMITISH:0:7}..."
             fi
-            echo ""
+          else
+            echo "⚠️ 无法获取默认分支信息，将使用分支名"
+            TARGET_COMMITISH="${REPO_DEFAULT_BRANCH}"
           fi
+          echo ""
           
           # 检查标签是否存在，如果不存在则创建
           echo "🔍 检查 Gitee 标签是否存在..."
@@ -474,17 +413,9 @@ jobs:
           echo "  HTTP 状态码: ${TAG_CHECK_HTTP_CODE}"
           
           if [ "$TAG_CHECK_HTTP_CODE" != "200" ]; then
-            echo "⚠️ 标签 ${TAG_NAME} 不存在，需要创建..."
+            echo "⚠️ 标签 ${TAG_NAME} 不存在，创建标签..."
             
-            # 确保有 commit SHA
-            if [ -z "$TARGET_COMMITISH" ] || [ "$TARGET_COMMITISH" == "" ]; then
-              echo "❌ 错误: 无法创建标签，因为缺少 commit SHA"
-              echo "  请确保标签 ${TAG_NAME} 在 GitHub 中存在"
-              exit 1
-            fi
-            
-            # 创建标签
-            echo "📝 创建 Gitee 标签 ${TAG_NAME}..."
+            # 创建标签（使用默认分支的最新 commit）
             CREATE_TAG_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/tags"
             echo "  创建标签 API URL: ${CREATE_TAG_API_URL}"
             
@@ -510,23 +441,16 @@ jobs:
               echo "✅ 标签 ${TAG_NAME} 创建成功"
             else
               ERROR_MSG=$(echo "$CREATE_TAG_BODY_RESPONSE" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$CREATE_TAG_BODY_RESPONSE")
-              echo "❌ 创建标签失败 (HTTP ${CREATE_TAG_HTTP_CODE})"
-              echo "  错误信息: ${ERROR_MSG}"
-              echo "  完整响应: ${CREATE_TAG_BODY_RESPONSE}"
-              
-              # 如果错误是标签已存在，继续执行
-              if echo "$ERROR_MSG" | grep -qi "已存在\|already exists\|duplicate"; then
-                echo "⚠️ 标签可能已存在，继续执行..."
+              # 如果标签已存在，继续执行
+              if echo "$ERROR_MSG" | grep -qi "已存在\|already exists\|duplicate\|标签名已存在"; then
+                echo "⚠️ 标签已存在，继续执行..."
               else
-                exit 1
+                echo "⚠️ 创建标签失败 (HTTP ${CREATE_TAG_HTTP_CODE})，但继续执行"
+                echo "  错误信息: ${ERROR_MSG}"
               fi
             fi
           else
-            TAG_COMMIT=$(echo "$TAG_CHECK_BODY" | jq -r '.commit.sha // empty' 2>/dev/null || echo "")
             echo "✅ 标签 ${TAG_NAME} 已存在"
-            if [ -n "$TAG_COMMIT" ]; then
-              echo "  标签指向的 commit: ${TAG_COMMIT:0:7}..."
-            fi
           fi
           
           # 检查 Release 是否已存在
@@ -561,22 +485,13 @@ jobs:
             
             # 构建更新请求体
             UPDATE_BODY_JSON=$(echo "${RELEASE_BODY}" | jq -Rs .)
-            if [ -n "$TARGET_COMMITISH" ]; then
-              REQUEST_BODY=$(echo "{
-                \"tag_name\": \"${TAG_NAME}\",
-                \"name\": \"${RELEASE_NAME}\",
-                \"body\": ${UPDATE_BODY_JSON},
-                \"target_commitish\": \"${TARGET_COMMITISH}\",
-                \"prerelease\": false
-              }" | jq -c .)
-            else
-              REQUEST_BODY=$(echo "{
-                \"tag_name\": \"${TAG_NAME}\",
-                \"name\": \"${RELEASE_NAME}\",
-                \"body\": ${UPDATE_BODY_JSON},
-                \"prerelease\": false
-              }" | jq -c .)
-            fi
+            REQUEST_BODY=$(echo "{
+              \"tag_name\": \"${TAG_NAME}\",
+              \"name\": \"${RELEASE_NAME}\",
+              \"body\": ${UPDATE_BODY_JSON},
+              \"target_commitish\": \"${TARGET_COMMITISH}\",
+              \"prerelease\": false
+            }" | jq -c .)
             echo "  请求体: ${REQUEST_BODY}"
             
             RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
@@ -592,22 +507,13 @@ jobs:
             
             # 构建创建请求体
             CREATE_BODY_JSON=$(echo "${RELEASE_BODY}" | jq -Rs .)
-            if [ -n "$TARGET_COMMITISH" ]; then
-              REQUEST_BODY=$(echo "{
-                \"tag_name\": \"${TAG_NAME}\",
-                \"name\": \"${RELEASE_NAME}\",
-                \"body\": ${CREATE_BODY_JSON},
-                \"target_commitish\": \"${TARGET_COMMITISH}\",
-                \"prerelease\": false
-              }" | jq -c .)
-            else
-              REQUEST_BODY=$(echo "{
+            REQUEST_BODY=$(echo "{
               \"tag_name\": \"${TAG_NAME}\",
               \"name\": \"${RELEASE_NAME}\",
-                \"body\": ${CREATE_BODY_JSON},
+              \"body\": ${CREATE_BODY_JSON},
+              \"target_commitish\": \"${TARGET_COMMITISH}\",
               \"prerelease\": false
-              }" | jq -c .)
-            fi
+            }" | jq -c .)
             echo "  请求体: ${REQUEST_BODY}"
             
             RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
