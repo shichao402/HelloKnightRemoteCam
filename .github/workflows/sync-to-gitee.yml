@@ -4,6 +4,12 @@ name: Sync Release to Gitee
 on:
   release:
     types: [published]  # 当 Release 发布时触发
+  workflow_call:  # 允许被其他工作流调用
+    inputs:
+      release_tag:
+        description: '要同步的 Release 标签（例如：v1.0.7）'
+        required: true
+        type: string
   workflow_dispatch:  # 允许手动触发
     inputs:
       release_tag:
@@ -66,8 +72,12 @@ jobs:
           echo "  事件类型: ${{ github.event_name }}"
           echo "  GITHUB_REF: ${GITHUB_REF}"
           
+          # 如果是 workflow_call（被其他工作流调用），使用输入的 release_tag
+          if [ "${{ github.event_name }}" == "workflow_call" ]; then
+            TAG_NAME="${{ inputs.release_tag }}"
+            echo "📌 工作流调用: 使用标签 ${TAG_NAME}"
           # 如果是手动触发，使用输入的 release_tag
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             TAG_NAME="${{ github.event.inputs.release_tag }}"
             echo "📌 手动触发: 使用标签 ${TAG_NAME}"
           else

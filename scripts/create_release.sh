@@ -18,6 +18,8 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+BOLD='\033[1m'
+BLINK='\033[5m'
 NC='\033[0m' # No Color
 
 # 显示帮助信息
@@ -506,7 +508,131 @@ fi
 echo -e "${GREEN}✓ 所有构建产物检查通过${NC}"
 echo ""
 
-echo -e "${BLUE}步骤 6: 触发 Release 工作流...${NC}"
+echo -e "${BLUE}步骤 6: 检查 Release 是否已存在...${NC}"
+RELEASE_TAG="v${VERSION}"
+
+# 检查 Release 是否已存在
+RELEASE_CHECK=$(curl -s -w "\n%{http_code}" \
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "https://api.github.com/repos/${REPO_PATH}/releases/tags/${RELEASE_TAG}")
+
+HTTP_CODE=$(echo "$RELEASE_CHECK" | tail -n1)
+RELEASE_RESPONSE=$(echo "$RELEASE_CHECK" | sed '$d')
+
+if [ "$HTTP_CODE" = "200" ]; then
+    # Release 已存在
+    RELEASE_ID=$(echo "$RELEASE_RESPONSE" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(data.get('id', ''))
+except:
+    print('')
+" 2>/dev/null || echo "")
+    
+    RELEASE_NAME=$(echo "$RELEASE_RESPONSE" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(data.get('name', ''))
+except:
+    print('')
+" 2>/dev/null || echo "")
+    
+    RELEASE_CREATED=$(echo "$RELEASE_RESPONSE" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(data.get('created_at', ''))
+except:
+    print('')
+" 2>/dev/null || echo "")
+    
+    ASSETS_COUNT=$(echo "$RELEASE_RESPONSE" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    assets = data.get('assets', [])
+    print(len(assets))
+except:
+    print(0)
+" 2>/dev/null || echo "0")
+    
+    echo ""
+    echo -e "${BOLD}${RED}${BLINK}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${RED}⚠️  警告: Release ${RELEASE_TAG} 已存在！${NC}"
+    echo -e "${BOLD}${RED}${BLINK}════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${BOLD}Release 信息:${NC}"
+    echo "  标签: ${RELEASE_TAG}"
+    echo "  名称: ${RELEASE_NAME}"
+    echo "  创建时间: ${RELEASE_CREATED}"
+    echo "  构建产物数量: ${ASSETS_COUNT}"
+    echo "  Release ID: ${RELEASE_ID}"
+    echo ""
+    echo -e "${BOLD}${YELLOW}如果继续，工作流将删除现有 Release 并创建新的。${NC}"
+    echo ""
+    echo -e "${BOLD}${RED}是否删除现有 Release 并继续创建新的？${NC}"
+    echo ""
+    read -p "$(echo -e ${BOLD}${RED}请输入 [y/N]: ${NC})" -n 1 -r
+    echo ""
+    
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo ""
+        echo -e "${YELLOW}操作已取消${NC}"
+        exit 0
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}正在删除现有 Release...${NC}"
+    
+    DELETE_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "https://api.github.com/repos/${REPO_PATH}/releases/${RELEASE_ID}")
+    
+    DELETE_HTTP_CODE=$(echo "$DELETE_RESPONSE" | tail -n1)
+    
+    if [ "$DELETE_HTTP_CODE" = "204" ]; then
+        echo -e "${GREEN}✓ Release 已删除${NC}"
+    else
+        echo -e "${RED}✗ 删除 Release 失败 (HTTP ${DELETE_HTTP_CODE})${NC}"
+        echo "  响应: $(echo "$DELETE_RESPONSE" | sed '$d')"
+        echo ""
+        echo -e "${YELLOW}是否继续创建新的 Release？${NC}"
+        read -p "$(echo -e ${BOLD}${YELLOW}请输入 [y/N]: ${NC})" -n 1 -r
+        echo ""
+        
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo ""
+            echo -e "${YELLOW}操作已取消${NC}"
+            exit 0
+        fi
+    fi
+    echo ""
+elif [ "$HTTP_CODE" = "404" ]; then
+    echo -e "${GREEN}✓ Release ${RELEASE_TAG} 不存在，可以创建新的${NC}"
+    echo ""
+else
+    echo -e "${YELLOW}⚠ 检查 Release 状态时出错 (HTTP ${HTTP_CODE})${NC}"
+    echo "  响应: ${RELEASE_RESPONSE}"
+    echo ""
+    echo -e "${YELLOW}是否继续创建 Release？${NC}"
+    read -p "$(echo -e ${BOLD}${YELLOW}请输入 [y/N]: ${NC})" -n 1 -r
+    echo ""
+    
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo ""
+        echo -e "${YELLOW}操作已取消${NC}"
+        exit 0
+    fi
+    echo ""
+fi
+
+echo -e "${BLUE}步骤 7: 触发 Release 工作流...${NC}"
 echo "  版本号: ${VERSION}"
 echo "  仓库路径: ${REPO_PATH}"
 echo ""
