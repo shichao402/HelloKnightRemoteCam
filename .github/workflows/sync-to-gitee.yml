@@ -12,8 +12,8 @@ on:
         type: string
   workflow_dispatch:  # 允许手动触发
     inputs:
-      release_tag:
-        description: '要同步的 Release 标签（例如：v1.0.7），留空则使用最新 Release'
+      version:
+        description: '版本号（例如：1.0.7），留空则使用最新 Release'
         required: false
         type: string
 
@@ -82,10 +82,21 @@ jobs:
             echo "📌 工作流调用: 使用标签 ${TAG_NAME}"
             echo "  [调试] inputs.release_tag 值: '${{ inputs.release_tag }}'"
             echo "  [调试] TAG_NAME 值: '${TAG_NAME}'"
-          # 如果是手动触发，使用输入的 release_tag
+          # 如果是手动触发，使用输入的 version（版本号）
           elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            TAG_NAME="${{ github.event.inputs.release_tag }}"
-            echo "📌 手动触发: 使用标签 ${TAG_NAME:-（未提供，将使用最新）}"
+            INPUT_VERSION="${{ github.event.inputs.version }}"
+            if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "" ]; then
+              # 如果版本号没有 v 前缀，添加 v 前缀
+              if [[ ! "$INPUT_VERSION" =~ ^v ]]; then
+                TAG_NAME="v${INPUT_VERSION}"
+              else
+                TAG_NAME="${INPUT_VERSION}"
+              fi
+              echo "📌 手动触发: 使用版本号 ${INPUT_VERSION}，转换为标签 ${TAG_NAME}"
+            else
+              TAG_NAME=""
+              echo "📌 手动触发: 未提供版本号，将使用最新 Release"
+            fi
           else
             # 从 release 事件获取 tag 名称
             # release 事件的 GITHUB_REF 格式可能是 refs/tags/v1.0.0

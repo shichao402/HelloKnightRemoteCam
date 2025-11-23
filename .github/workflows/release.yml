@@ -976,13 +976,8 @@ jobs:
           echo "✅ 输出已设置:"
           echo "  release_tag: ${TAG_VERSION}"
           echo "  release_version: ${RELEASE_VERSION}"
-
-  sync-to-gitee:
-    name: Sync Release to Gitee
-    needs: create-release
-    if: success()  # 只有在 create-release 成功后才执行
-    uses: ./.github/workflows/sync-to-gitee.yml
-    with:
-      release_tag: ${{ needs.create-release.outputs.release_tag }}
-    secrets: inherit
+          
+          echo ""
+          echo "ℹ️  提示: Gitee 同步已从自动流程中移除（因为同步速度较慢）"
+          echo "  如需同步到 Gitee，请手动触发 sync-to-gitee 工作流，使用版本号: ${RELEASE_VERSION}"
 
