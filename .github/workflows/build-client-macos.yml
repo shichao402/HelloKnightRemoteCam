@@ -90,7 +90,8 @@ jobs:
         run: |
           cd client/build/macos/Build/Products/Release
           APP_NAME="HelloKnightRCC.app"
-          DMG_NAME="HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.dmg"
+          # DMG文件名使用固定命名，不包含版本号（版本信息由ZIP文件名和hash保证）
+          DMG_NAME="HelloKnightRCC_macos.dmg"
           VOLUME_NAME="HelloKnightRCC"
           
           # 创建临时目录用于DMG内容
@@ -158,13 +159,15 @@ jobs:
       - name: Archive macOS DMG (zip)
         run: |
           cd $GITHUB_WORKSPACE/client
-          DMG_NAME="HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.dmg"
+          # DMG文件名使用固定命名
+          DMG_NAME="HelloKnightRCC_macos.dmg"
+          # ZIP文件名包含版本号，用于标识和hash验证
           ZIP_NAME="HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip"
           
-          # 将DMG文件打包成zip（zip包里包含dmg文件）
+          # 将DMG文件打包成zip（zip包里包含固定命名的dmg文件）
           zip "$ZIP_NAME" "$DMG_NAME"
           
-          echo "macOS ZIP created: $ZIP_NAME (contains DMG file)"
+          echo "macOS ZIP created: $ZIP_NAME (contains DMG file with fixed name: $DMG_NAME)"
 
       - name: Upload version info
         uses: actions/upload-artifact@v4

@@ -92,23 +92,25 @@ jobs:
           cd server
           ./scripts/build.sh --release
 
-      - name: Rename APK with version and create zip
+      - name: Rename APK with fixed name and create zip
         run: |
           cd server/build/app/outputs/flutter-apk
-          APK_NAME="helloknightrcc_server_android_${{ steps.get_version.outputs.FULL_VERSION }}.apk"
+          # APK文件名使用固定命名，不包含版本号（版本信息由ZIP文件名和hash保证）
+          APK_NAME="helloknightrcc_server_android.apk"
+          # ZIP文件名包含版本号，用于标识和hash验证
           ZIP_NAME="helloknightrcc_server_android_${{ steps.get_version.outputs.FULL_VERSION }}.zip"
           
-          # 重命名APK
+          # 重命名APK为固定名称
           mv app-release.apk "$APK_NAME"
           
-          # 压缩APK为zip
+          # 压缩APK为zip（zip包里包含固定命名的apk文件）
           zip "$ZIP_NAME" "$APK_NAME"
           
           # 移动到工作区根目录
           mv "$APK_NAME" $GITHUB_WORKSPACE/server/
           mv "$ZIP_NAME" $GITHUB_WORKSPACE/server/
           
-          echo "APK已压缩为zip: $ZIP_NAME"
+          echo "APK已压缩为zip: $ZIP_NAME (contains APK file with fixed name: $APK_NAME)"
 
       - name: Upload version info
         uses: actions/upload-artifact@v4

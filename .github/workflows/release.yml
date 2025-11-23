@@ -405,27 +405,27 @@ jobs:
           MACOS_ZIP=$(find ./artifacts-temp -name "HelloKnightRCC_macos_*.zip" | head -1)
           mv "$MACOS_ZIP" "./artifacts/HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
           echo "重命名macOS ZIP: $(basename "$MACOS_ZIP") -> HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
-          echo "注意: macOS ZIP文件包含DMG文件，用户需要解压后打开DMG安装"
+          echo "注意: macOS ZIP文件包含DMG文件（固定命名），用户需要解压后打开DMG安装"
           
           # Windows文件 - 需要从exe创建zip用于更新
-          # 注意：Windows构建只生成exe，需要将其打包为zip
-          WINDOWS_EXE_COUNT=$(find ./artifacts-temp -name "HelloKnightRCC_windows_*_setup.exe" | wc -l)
+          # 注意：Windows构建只生成exe（固定命名），需要将其打包为zip
+          WINDOWS_EXE_COUNT=$(find ./artifacts-temp -name "HelloKnightRCC_windows_setup.exe" | wc -l)
           if [ "$WINDOWS_EXE_COUNT" -eq 0 ]; then
             echo "错误: 未找到Windows EXE文件"
             exit 1
           elif [ "$WINDOWS_EXE_COUNT" -gt 1 ]; then
             echo "错误: 找到多个Windows EXE文件，请检查构建产物"
-            find ./artifacts-temp -name "HelloKnightRCC_windows_*_setup.exe"
+            find ./artifacts-temp -name "HelloKnightRCC_windows_setup.exe"
             exit 1
           fi
-          WINDOWS_EXE=$(find ./artifacts-temp -name "HelloKnightRCC_windows_*_setup.exe" | head -1)
-          # 将EXE打包为zip用于更新
+          WINDOWS_EXE=$(find ./artifacts-temp -name "HelloKnightRCC_windows_setup.exe" | head -1)
+          # 将EXE打包为zip用于更新（ZIP文件名包含版本号，内部EXE使用固定命名）
           cd artifacts-temp
           zip "../artifacts/HelloKnightRCC_windows_${CLIENT_VERSION}.zip" "$(basename "$WINDOWS_EXE")"
           cd ..
-          echo "已创建Windows更新zip: HelloKnightRCC_windows_${CLIENT_VERSION}.zip"
+          echo "已创建Windows更新zip: HelloKnightRCC_windows_${CLIENT_VERSION}.zip (contains EXE file with fixed name: $(basename "$WINDOWS_EXE"))"
           
-          # Android文件 - 查找并重命名（已经是zip文件）
+          # Android文件 - 查找并重命名（已经是zip文件，内部APK使用固定命名）
           ANDROID_ZIP_COUNT=$(find ./artifacts-temp -name "helloknightrcc_server_android_*.zip" | wc -l)
           if [ "$ANDROID_ZIP_COUNT" -eq 0 ]; then
             echo "错误: 未找到Android ZIP文件"
@@ -438,6 +438,7 @@ jobs:
           ANDROID_ZIP=$(find ./artifacts-temp -name "helloknightrcc_server_android_*.zip" | head -1)
           mv "$ANDROID_ZIP" "./artifacts/helloknightrcc_server_android_${SERVER_VERSION}.zip"
           echo "重命名Android ZIP: $(basename "$ANDROID_ZIP") -> helloknightrcc_server_android_${SERVER_VERSION}.zip"
+          echo "注意: Android ZIP文件包含APK文件（固定命名），用户需要解压后安装APK"
           
           rm -rf ./artifacts-temp
           

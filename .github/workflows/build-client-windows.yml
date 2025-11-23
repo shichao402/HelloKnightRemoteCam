@@ -126,7 +126,8 @@ jobs:
           DefaultDirName={autopf}\HelloKnightRCC
           DefaultGroupName=HelloKnightRCC
           OutputDir=PLACEHOLDER_WORKSPACE_ROOT
-          OutputBaseFilename=HelloKnightRCC_windows_PLACEHOLDER_VERSION_setup
+          # EXE文件名使用固定命名，不包含版本号（版本信息由ZIP文件名和hash保证）
+          OutputBaseFilename=HelloKnightRCC_windows_setup
           Compression=lzma
           SolidCompression=yes
           PrivilegesRequired=admin
@@ -153,8 +154,8 @@ jobs:
       - name: Build Windows installer
         shell: powershell
         run: |
-          $version = "${{ steps.get_version.outputs.FULL_VERSION }}"
-          $installerName = "HelloKnightRCC_windows_${version}_setup.exe"
+          # EXE文件名使用固定命名，不包含版本号
+          $installerName = "HelloKnightRCC_windows_setup.exe"
           # 编译 Inno Setup 脚本
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\setup.iss
           # 安装程序应该在工作区根目录
@@ -178,6 +179,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: HelloKnightRCC_windows
-          path: client/HelloKnightRCC_windows_${{ steps.get_version.outputs.FULL_VERSION }}_setup.exe
+          path: client/HelloKnightRCC_windows_setup.exe
           retention-days: 30
 
