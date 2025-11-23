@@ -1052,6 +1052,7 @@ jobs:
               # --progress-bar: 进度条输出到 stderr（会实时显示，不重定向）
               # -w "%{http_code}": HTTP 状态码输出到 stdout
               # -o: 响应体保存到文件
+              # 注意：只重定向 stdout 到文件，stderr（进度条）直接输出到终端
               curl --progress-bar --show-error \
                 -w "%{http_code}" \
                 -o "${TEMP_RESPONSE_FILE}" \
@@ -1060,7 +1061,7 @@ jobs:
                 -F "file=@update_config_gitee.json" \
                 -F "name=update_config_gitee.json" \
                 "${UPLOAD_API_URL}" \
-                > "${TEMP_HTTP_CODE_FILE}" 2>&1
+                > "${TEMP_HTTP_CODE_FILE}"
               
               CURL_EXIT_CODE=$?
               
