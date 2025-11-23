@@ -206,25 +206,55 @@ jobs:
           RELEASE_NAME="${{ steps.release_info.outputs.release_name }}"
           RELEASE_BODY="${{ steps.release_info.outputs.release_body }}"
           
+          GITEE_REPO_OWNER_ENCODED=$(echo "${GITEE_REPO_OWNER}" | jq -sRr @uri)
+          GITEE_REPO_NAME_ENCODED=$(echo "${GITEE_REPO_NAME}" | jq -sRr @uri)
           GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
           
           echo "🚀 创建 Gitee Release..."
           echo "  标签: ${TAG_NAME}"
           echo "  名称: ${RELEASE_NAME}"
           echo "  仓库: ${GITEE_REPO}"
+          echo "  [调试] Owner: ${GITEE_REPO_OWNER}"
+          echo "  [调试] Repo Name: ${GITEE_REPO_NAME}"
+          
+          # 首先验证仓库是否存在
+          echo "🔍 验证 Gitee 仓库是否存在..."
+          REPO_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
+            -H "Authorization: token ${GITEE_TOKEN}" \
+            "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}")
+          
+          REPO_CHECK_HTTP_CODE=$(echo "$REPO_CHECK" | tail -n1)
+          REPO_CHECK_BODY=$(echo "$REPO_CHECK" | sed '$d')
+          
+          if [ "$REPO_CHECK_HTTP_CODE" != "200" ]; then
+            ERROR_MSG=$(echo "$REPO_CHECK_BODY" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$REPO_CHECK_BODY")
+            echo "❌ Gitee 仓库不存在或无法访问 (HTTP ${REPO_CHECK_HTTP_CODE})"
+            echo "  [调试] 错误信息: ${ERROR_MSG}"
+            echo "  [调试] 请检查："
+            echo "    1. GITEE_REPO_OWNER 是否正确: ${GITEE_REPO_OWNER}"
+            echo "    2. GITEE_REPO_NAME 是否正确: ${GITEE_REPO_NAME}"
+            echo "    3. GITEE_TOKEN 是否有访问该仓库的权限"
+            exit 1
+          fi
+          
+          echo "✅ Gitee 仓库验证通过"
           
           # 检查 Release 是否已存在
           echo "🔍 检查 Gitee Release 是否已存在..."
-          EXISTING_RELEASE=$(curl -s -X GET \
+          TAG_NAME_ENCODED=$(echo "${TAG_NAME}" | jq -sRr @uri)
+          EXISTING_RELEASE=$(curl -s -w "\n%{http_code}" -X GET \
             -H "Authorization: token ${GITEE_TOKEN}" \
-            "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases/tags/${TAG_NAME}" || echo "")
+            "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/tags/${TAG_NAME_ENCODED}")
           
-          if echo "${EXISTING_RELEASE}" | grep -q '"id"'; then
-            RELEASE_ID=$(echo "${EXISTING_RELEASE}" | jq -r '.id // empty')
+          EXISTING_HTTP_CODE=$(echo "$EXISTING_RELEASE" | tail -n1)
+          EXISTING_BODY=$(echo "$EXISTING_RELEASE" | sed '$d')
+          
+          if [ "$EXISTING_HTTP_CODE" = "200" ] && echo "${EXISTING_BODY}" | grep -q '"id"'; then
+            RELEASE_ID=$(echo "${EXISTING_BODY}" | jq -r '.id // empty')
             echo "⚠️ Gitee Release 已存在 (ID: ${RELEASE_ID})，将更新..."
             
             # 更新现有 Release
-            RESPONSE=$(curl -s -X PATCH \
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
               -H "Content-Type: application/json" \
               -H "Authorization: token ${GITEE_TOKEN}" \
               -d "{
@@ -232,10 +262,11 @@ jobs:
                 \"body\": $(echo "${RELEASE_BODY}" | jq -Rs .),
                 \"prerelease\": false
               }" \
-              "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases/${RELEASE_ID}")
+              "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}")
           else
             # 创建新 Release
-            RESPONSE=$(curl -s -X POST \
+            echo "📝 创建新的 Gitee Release..."
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
               -H "Content-Type: application/json" \
               -H "Authorization: token ${GITEE_TOKEN}" \
               -d "{
@@ -244,17 +275,26 @@ jobs:
                 \"body\": $(echo "${RELEASE_BODY}" | jq -Rs .),
                 \"prerelease\": false
               }" \
-              "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases")
+              "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases")
           fi
           
-          # 检查响应（不显示完整响应，只显示关键信息）
-          if echo "${RESPONSE}" | grep -q '"id"'; then
-            RELEASE_ID=$(echo "${RESPONSE}" | jq -r '.id // empty')
-            echo "✅ Gitee Release 创建/更新成功 (ID: ${RELEASE_ID})"
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          RESPONSE_BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          # 检查响应
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+            if echo "${RESPONSE_BODY}" | grep -q '"id"'; then
+              RELEASE_ID=$(echo "${RESPONSE_BODY}" | jq -r '.id // empty')
+              echo "✅ Gitee Release 创建/更新成功 (ID: ${RELEASE_ID})"
+            else
+              echo "⚠️ 响应格式异常，但 HTTP 状态码为 ${HTTP_CODE}"
+              echo "  [调试] 响应内容: ${RESPONSE_BODY}"
+            fi
           else
-            ERROR_MSG=$(echo "${RESPONSE}" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "解析错误响应失败")
-            echo "❌ Gitee Release 创建/更新失败: ${ERROR_MSG}"
-            echo "  [调试] 响应状态码: $(echo "${RESPONSE}" | jq -r '.status // "N/A"')"
+            ERROR_MSG=$(echo "${RESPONSE_BODY}" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "${RESPONSE_BODY}")
+            echo "❌ Gitee Release 创建/更新失败 (HTTP ${HTTP_CODE})"
+            echo "  [调试] 错误信息: ${ERROR_MSG}"
+            echo "  [调试] 完整响应: ${RESPONSE_BODY}"
             exit 1
           fi
 
@@ -265,14 +305,40 @@ jobs:
           GITEE_REPO_NAME: ${{ secrets.GITEE_REPO_NAME }}
         run: |
           TAG_NAME="${{ steps.get_version.outputs.TAG_NAME }}"
+          GITEE_REPO_OWNER_ENCODED=$(echo "${GITEE_REPO_OWNER}" | jq -sRr @uri)
+          GITEE_REPO_NAME_ENCODED=$(echo "${GITEE_REPO_NAME}" | jq -sRr @uri)
+          TAG_NAME_ENCODED=$(echo "${TAG_NAME}" | jq -sRr @uri)
           GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
           
           echo "📤 上传构建产物到 Gitee Release..."
           echo "  标签: ${TAG_NAME}"
           echo "  仓库: ${GITEE_REPO}"
           
+          # 首先获取 Release ID（用于上传文件）
+          echo "🔍 获取 Gitee Release ID..."
+          RELEASE_INFO=$(curl -s -w "\n%{http_code}" -X GET \
+            -H "Authorization: token ${GITEE_TOKEN}" \
+            "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/tags/${TAG_NAME_ENCODED}")
+          
+          RELEASE_INFO_HTTP_CODE=$(echo "$RELEASE_INFO" | tail -n1)
+          RELEASE_INFO_BODY=$(echo "$RELEASE_INFO" | sed '$d')
+          
+          if [ "$RELEASE_INFO_HTTP_CODE" != "200" ] || ! echo "${RELEASE_INFO_BODY}" | grep -q '"id"'; then
+            echo "❌ 无法获取 Gitee Release 信息 (HTTP ${RELEASE_INFO_HTTP_CODE})"
+            echo "  [调试] 响应: ${RELEASE_INFO_BODY}"
+            exit 1
+          fi
+          
+          RELEASE_ID=$(echo "${RELEASE_INFO_BODY}" | jq -r '.id // empty')
+          echo "✅ 找到 Gitee Release (ID: ${RELEASE_ID})"
+          
           # 检查文件数量
-          FILE_COUNT=$(find release-assets -type f | wc -l)
+          FILE_COUNT=$(find release-assets -type f 2>/dev/null | wc -l)
+          if [ "$FILE_COUNT" -eq 0 ]; then
+            echo "⚠️ 未找到需要上传的文件"
+            exit 0
+          fi
+          
           echo "  找到 ${FILE_COUNT} 个文件需要上传"
           
           UPLOAD_SUCCESS=0
@@ -288,7 +354,7 @@ jobs:
               UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
                 -H "Authorization: token ${GITEE_TOKEN}" \
                 -F "file=@${file}" \
-                "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases/${TAG_NAME}/attach_files")
+                "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}/attach_files")
               
               HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
               RESPONSE_BODY=$(echo "$UPLOAD_RESPONSE" | sed '$d')
@@ -302,6 +368,7 @@ jobs:
               else
                 ERROR_MSG=$(echo "$RESPONSE_BODY" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "HTTP ${HTTP_CODE}")
                 echo "    ❌ ${filename} 上传失败: ${ERROR_MSG}"
+                echo "    [调试] 响应: ${RESPONSE_BODY}"
                 UPLOAD_FAILED=$((UPLOAD_FAILED + 1))
               fi
             fi
