@@ -595,7 +595,7 @@ jobs:
                 }
               }
             },
-            "updateCheckUrl": "https://github.com/${{ github.repository }}/releases/download/${TAG_VERSION}/update_config_github.json",
+            "updateCheckUrl": "https://github.com/${{ github.repository }}/releases/download/UpdateConfig/update_config_github.json",
             "lastUpdated": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           }
           EOF
@@ -603,7 +603,7 @@ jobs:
           echo "GitHub 更新配置文件已生成:"
           cat update_config_github.json
           echo ""
-          echo "✅ 配置文件将上传到 Release: ${TAG_VERSION}/update_config_github.json"
+          echo "✅ 配置文件将上传到固定的 Release: UpdateConfig/update_config_github.json"
           
           # 验证配置文件是否存在
           if [ ! -f "update_config_github.json" ]; then
@@ -711,9 +711,9 @@ jobs:
               // 不抛出错误，继续执行
             }
 
-      - name: Verify update_config_github.json exists before creating release
+      - name: Verify update_config_github.json exists
         run: |
-          echo "🔍 创建 Release 前验证 update_config_github.json 是否存在..."
+          echo "🔍 验证 update_config_github.json 是否存在（将上传到 UpdateConfig Release）..."
           if [ ! -f "update_config_github.json" ]; then
             echo "❌ 错误: update_config_github.json 文件不存在！"
             echo "当前目录: $(pwd)"
@@ -731,6 +731,7 @@ jobs:
             exit 1
           fi
           echo "✅ JSON 格式验证通过"
+          echo "ℹ️  配置文件将上传到固定的 UpdateConfig Release"
 
       - name: Create Release
         id: create_release
@@ -754,7 +755,7 @@ jobs:
             artifacts/HelloKnightRCC_macos_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.zip
             artifacts/HelloKnightRCC_windows_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.zip
             artifacts/helloknightrcc_server_android_${{ steps.get_versions.outputs.SERVER_FULL_VERSION }}.zip
-            update_config_github.json
+          # 注意：update_config_github.json 不再上传到版本 Release，而是上传到固定的 UpdateConfig Release
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
@@ -807,34 +808,7 @@ jobs:
             echo "  发布时间: ${RELEASE_PUBLISHED}"
             echo "  构建产物数量: ${ASSETS_COUNT}"
             echo ""
-            
-            # 检查 update_config_github.json 是否在 Release 中
-            echo "🔍 检查 update_config_github.json 是否在 Release 中..."
-            ASSETS=$(echo "${RELEASE_INFO}" | jq -r '.assets[] | "\(.name)|\(.size)"' 2>/dev/null || echo "")
-            
-            CONFIG_FILE_FOUND=false
-            if [ -n "$ASSETS" ]; then
-              echo "$ASSETS" | while IFS='|' read -r asset_name asset_size; do
-                if [ "$asset_name" = "update_config_github.json" ]; then
-                  echo "  ✅ 找到配置文件: ${asset_name} (大小: ${asset_size} bytes)"
-                  CONFIG_FILE_FOUND=true
-                fi
-              done
-              
-              # 检查是否找到配置文件
-              if echo "$ASSETS" | grep -q "update_config_github.json"; then
-                echo "  ✅ update_config_github.json 已成功上传到 Release"
-              else
-                echo "  ❌ 错误: update_config_github.json 未在 Release 中找到！"
-                echo "  已上传的文件列表:"
-                echo "$ASSETS" | while IFS='|' read -r asset_name asset_size; do
-                  echo "    - ${asset_name} (${asset_size} bytes)"
-                done
-                exit 1
-              fi
-            else
-              echo "  ⚠️  无法获取 Release 文件列表"
-            fi
+            echo "ℹ️  注意: update_config_github.json 将上传到固定的 UpdateConfig Release"
           else
             # 如果通过 tag 找不到，尝试列出所有 release 查找（包括 draft）
             echo "⚠️  通过 tag 未找到 Release，尝试查找所有 Release（包括 draft）..."
@@ -864,6 +838,78 @@ jobs:
               echo "  响应: ${RELEASE_INFO}"
               exit 1
             fi
+          fi
+
+      - name: Create or Update UpdateConfig Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: UpdateConfig
+          name: UpdateConfig
+          body: |
+            ## UpdateConfig Release
+            
+            This release contains the update configuration file for the application.
+            
+            The configuration file is automatically updated when a new version is released.
+            
+            **Latest Version**: ${{ steps.get_versions.outputs.RELEASE_VERSION }}
+            **Last Updated**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          files: |
+            update_config_github.json
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+
+      - name: Verify UpdateConfig Release created successfully
+        run: |
+          echo "🔍 验证 UpdateConfig Release 是否创建成功..."
+          
+          # 等待一下，确保 Release 完全创建
+          sleep 5
+          
+          # 检查 UpdateConfig Release 是否存在
+          RELEASE_INFO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/UpdateConfig")
+          
+          if echo "${RELEASE_INFO}" | grep -q '"id"'; then
+            RELEASE_ID=$(echo "${RELEASE_INFO}" | jq -r '.id')
+            RELEASE_NAME=$(echo "${RELEASE_INFO}" | jq -r '.name')
+            RELEASE_DRAFT=$(echo "${RELEASE_INFO}" | jq -r '.draft')
+            ASSETS_COUNT=$(echo "${RELEASE_INFO}" | jq -r '.assets | length')
+            
+            if [ "$RELEASE_DRAFT" = "true" ]; then
+              echo "❌ 错误: UpdateConfig Release 创建为 draft 状态！"
+              exit 1
+            fi
+            
+            echo "✅ UpdateConfig Release 创建成功"
+            echo "  Release ID: ${RELEASE_ID}"
+            echo "  Release 名称: ${RELEASE_NAME}"
+            echo "  状态: published (非 draft)"
+            echo "  文件数量: ${ASSETS_COUNT}"
+            
+            # 检查 update_config_github.json 是否在 Release 中
+            ASSETS=$(echo "${RELEASE_INFO}" | jq -r '.assets[] | "\(.name)|\(.size)"' 2>/dev/null || echo "")
+            if echo "$ASSETS" | grep -q "update_config_github.json"; then
+              echo "  ✅ update_config_github.json 已成功上传到 UpdateConfig Release"
+              echo "$ASSETS" | while IFS='|' read -r asset_name asset_size; do
+                if [ "$asset_name" = "update_config_github.json" ]; then
+                  echo "    文件: ${asset_name} (${asset_size} bytes)"
+                fi
+              done
+            else
+              echo "  ❌ 错误: update_config_github.json 未在 UpdateConfig Release 中找到！"
+              echo "  已上传的文件列表:"
+              echo "$ASSETS" | while IFS='|' read -r asset_name asset_size; do
+                echo "    - ${asset_name} (${asset_size} bytes)"
+              done
+              exit 1
+            fi
+          else
+            echo "❌ UpdateConfig Release 创建失败或未找到"
+            echo "  响应: ${RELEASE_INFO}"
+            exit 1
           fi
 
       - name: Set job outputs
