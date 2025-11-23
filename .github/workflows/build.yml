@@ -19,3 +19,83 @@ jobs:
     name: Build Server Android
     uses: ./.github/workflows/build-server-android.yml
 
+  increment-build-number:
+    name: Increment Build Number
+    runs-on: ubuntu-latest
+    needs: [build-client-macos, build-client-windows, build-server-android]
+    permissions:
+      contents: write  # 需要写入权限以提交和推送代码
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 需要完整历史记录以推送
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/lib/python3.*/site-packages
+          key: python-linux-pyyaml-1.0
+          restore-keys: |
+            python-linux-pyyaml-
+
+      - name: Install PyYAML
+        run: |
+          python3 -m pip install --user pyyaml --quiet || \
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install pyyaml --quiet
+
+      - name: Get current versions
+        id: get_versions
+        run: |
+          CLIENT_VERSION=$(python3 scripts/lib/version_manager.py get client --json | python3 -c "import sys, json; print(json.load(sys.stdin)['full_version'])")
+          SERVER_VERSION=$(python3 scripts/lib/version_manager.py get server --json | python3 -c "import sys, json; print(json.load(sys.stdin)['full_version'])")
+          echo "CLIENT_VERSION=$CLIENT_VERSION" >> $GITHUB_OUTPUT
+          echo "SERVER_VERSION=$SERVER_VERSION" >> $GITHUB_OUTPUT
+          echo "当前客户端版本: $CLIENT_VERSION"
+          echo "当前服务器版本: $SERVER_VERSION"
+
+      - name: Increment build numbers
+        id: increment_build
+        run: |
+          # 增加客户端和服务器构建号
+          python3 scripts/lib/version_manager.py bump client build
+          python3 scripts/lib/version_manager.py bump server build
+          
+          # 重新读取更新后的版本号
+          NEW_CLIENT_VERSION=$(python3 scripts/lib/version_manager.py get client --json | python3 -c "import sys, json; print(json.load(sys.stdin)['full_version'])")
+          NEW_SERVER_VERSION=$(python3 scripts/lib/version_manager.py get server --json | python3 -c "import sys, json; print(json.load(sys.stdin)['full_version'])")
+          
+          echo "NEW_CLIENT_VERSION=$NEW_CLIENT_VERSION" >> $GITHUB_OUTPUT
+          echo "NEW_SERVER_VERSION=$NEW_SERVER_VERSION" >> $GITHUB_OUTPUT
+          echo "新的客户端版本: $NEW_CLIENT_VERSION"
+          echo "新的服务器版本: $NEW_SERVER_VERSION"
+
+      - name: Commit and push build number increment
+        run: |
+          # 配置 Git
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          
+          # 确保在 main 分支上并拉取最新代码
+          git checkout main
+          git pull origin main
+          
+          # 添加更改的文件
+          git add VERSION.yaml
+          
+          # 检查是否有更改
+          if git diff --staged --quiet; then
+            echo "没有更改，跳过提交"
+          else
+            CLIENT_OLD="${{ steps.get_versions.outputs.CLIENT_VERSION }}"
+            SERVER_OLD="${{ steps.get_versions.outputs.SERVER_VERSION }}"
+            CLIENT_NEW="${{ steps.increment_build.outputs.NEW_CLIENT_VERSION }}"
+            SERVER_NEW="${{ steps.increment_build.outputs.NEW_SERVER_VERSION }}"
+            
+            git commit -m "Build: 增加构建号 ${CLIENT_OLD} -> ${CLIENT_NEW}, ${SERVER_OLD} -> ${SERVER_NEW}"
+            git push origin main || echo "推送失败，可能已是最新版本"
+            echo "✅ 构建号已增加并推送"
+          fi
+

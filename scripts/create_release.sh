@@ -55,10 +55,8 @@ done
 
 # 检查版本号参数
 if [ $# -eq 0 ]; then
-    echo -e "${RED}错误: 必须提供版本号参数${NC}"
-    echo ""
     show_help
-    exit 1
+    exit 0
 fi
 
 VERSION=$1
