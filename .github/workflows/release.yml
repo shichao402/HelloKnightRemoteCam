@@ -604,6 +604,27 @@ jobs:
           cat update_config_github.json
           echo ""
           echo "✅ 配置文件将上传到 Release: ${TAG_VERSION}/update_config_github.json"
+          
+          # 验证配置文件是否存在
+          if [ ! -f "update_config_github.json" ]; then
+            echo "❌ 错误: update_config_github.json 文件未生成！"
+            exit 1
+          fi
+          
+          CONFIG_FILE_SIZE=$(stat -f%z update_config_github.json 2>/dev/null || stat -c%s update_config_github.json 2>/dev/null || echo "0")
+          echo "✅ 配置文件已生成，大小: ${CONFIG_FILE_SIZE} bytes"
+          
+          # 验证配置文件内容格式
+          if ! jq empty update_config_github.json 2>/dev/null; then
+            echo "❌ 错误: update_config_github.json 不是有效的 JSON 格式！"
+            exit 1
+          fi
+          echo "✅ 配置文件 JSON 格式验证通过"
+          
+          # 列出当前目录的文件（调试用）
+          echo ""
+          echo "📋 当前目录文件列表:"
+          ls -lah update_config_github.json 2>/dev/null || echo "  ⚠️ update_config_github.json 不存在"
 
       - name: Delete existing Release if exists (including drafts)
         uses: actions/github-script@v7
@@ -690,6 +711,27 @@ jobs:
               // 不抛出错误，继续执行
             }
 
+      - name: Verify update_config_github.json exists before creating release
+        run: |
+          echo "🔍 创建 Release 前验证 update_config_github.json 是否存在..."
+          if [ ! -f "update_config_github.json" ]; then
+            echo "❌ 错误: update_config_github.json 文件不存在！"
+            echo "当前目录: $(pwd)"
+            echo "文件列表:"
+            ls -lah | head -20
+            exit 1
+          fi
+          
+          CONFIG_FILE_SIZE=$(stat -f%z update_config_github.json 2>/dev/null || stat -c%s update_config_github.json 2>/dev/null || echo "0")
+          echo "✅ update_config_github.json 存在，大小: ${CONFIG_FILE_SIZE} bytes"
+          
+          # 验证 JSON 格式
+          if ! jq empty update_config_github.json 2>/dev/null; then
+            echo "❌ 错误: update_config_github.json 不是有效的 JSON 格式！"
+            exit 1
+          fi
+          echo "✅ JSON 格式验证通过"
+
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v1
@@ -765,7 +807,34 @@ jobs:
             echo "  发布时间: ${RELEASE_PUBLISHED}"
             echo "  构建产物数量: ${ASSETS_COUNT}"
             echo ""
-            echo "🚀 这将自动触发 Gitee 同步工作流..."
+            
+            # 检查 update_config_github.json 是否在 Release 中
+            echo "🔍 检查 update_config_github.json 是否在 Release 中..."
+            ASSETS=$(echo "${RELEASE_INFO}" | jq -r '.assets[] | "\(.name)|\(.size)"' 2>/dev/null || echo "")
+            
+            CONFIG_FILE_FOUND=false
+            if [ -n "$ASSETS" ]; then
+              echo "$ASSETS" | while IFS='|' read -r asset_name asset_size; do
+                if [ "$asset_name" = "update_config_github.json" ]; then
+                  echo "  ✅ 找到配置文件: ${asset_name} (大小: ${asset_size} bytes)"
+                  CONFIG_FILE_FOUND=true
+                fi
+              done
+              
+              # 检查是否找到配置文件
+              if echo "$ASSETS" | grep -q "update_config_github.json"; then
+                echo "  ✅ update_config_github.json 已成功上传到 Release"
+              else
+                echo "  ❌ 错误: update_config_github.json 未在 Release 中找到！"
+                echo "  已上传的文件列表:"
+                echo "$ASSETS" | while IFS='|' read -r asset_name asset_size; do
+                  echo "    - ${asset_name} (${asset_size} bytes)"
+                done
+                exit 1
+              fi
+            else
+              echo "  ⚠️  无法获取 Release 文件列表"
+            fi
           else
             # 如果通过 tag 找不到，尝试列出所有 release 查找（包括 draft）
             echo "⚠️  通过 tag 未找到 Release，尝试查找所有 Release（包括 draft）..."
@@ -828,12 +897,13 @@ jobs:
           echo "  release_tag: ${TAG_VERSION}"
           echo "  release_version: ${RELEASE_VERSION}"
 
-  sync-to-gitee:
-    name: Sync Release to Gitee
-    needs: create-release
-    if: success()  # 只有在 create-release 成功后才执行
-    uses: ./.github/workflows/sync-to-gitee.yml
-    with:
-      release_tag: ${{ needs.create-release.outputs.release_tag }}
-    secrets: inherit
+  # 暂时禁用 Gitee 同步，排查 GitHub Release 更新配置问题
+  # sync-to-gitee:
+  #   name: Sync Release to Gitee
+  #   needs: create-release
+  #   if: success()  # 只有在 create-release 成功后才执行
+  #   uses: ./.github/workflows/sync-to-gitee.yml
+  #   with:
+  #     release_tag: ${{ needs.create-release.outputs.release_tag }}
+  #   secrets: inherit
 
