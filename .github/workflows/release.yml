@@ -491,7 +491,7 @@ jobs:
             echo "请检查构建工作流是否成功完成"
             exit 1
           fi
-          
+
           echo ""
           echo "✅ 所有构建产物文件验证通过"
 
@@ -840,6 +840,11 @@ jobs:
             fi
           fi
 
+      - name: Get current timestamp
+        id: get_timestamp
+        run: |
+          echo "timestamp=$(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
       - name: Create or Update UpdateConfig Release
         uses: softprops/action-gh-release@v1
         with:
@@ -853,7 +858,7 @@ jobs:
             The configuration file is automatically updated when a new version is released.
             
             **Latest Version**: ${{ steps.get_versions.outputs.RELEASE_VERSION }}
-            **Last Updated**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+            **Last Updated**: ${{ steps.get_timestamp.outputs.timestamp }}
           files: |
             update_config_github.json
           draft: false
