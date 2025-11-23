@@ -526,7 +526,7 @@ jobs:
           CLIENT_VERSION_NUMBER=${{ steps.extract_versions_from_artifacts.outputs.CLIENT_VERSION_NUM }}
           SERVER_VERSION=${{ steps.extract_versions_from_artifacts.outputs.SERVER_FULL_VERSION }}
           SERVER_VERSION_NUMBER=${{ steps.extract_versions_from_artifacts.outputs.SERVER_VERSION_NUM }}
-          TAG_VERSION=${{ steps.get_versions.outputs.TAG_VERSION }}
+          TAG_VERSION=${{ steps.get_versions_from_tag.outputs.TAG_VERSION }}
           
           # GitHub Releases 下载链接格式（使用内置变量）
           GITHUB_REPO="${{ github.repository }}"
@@ -655,7 +655,7 @@ jobs:
         continue-on-error: true
         with:
           script: |
-            const tagName = '${{ steps.get_versions.outputs.TAG_VERSION }}';
+            const tagName = '${{ steps.get_versions_from_tag.outputs.TAG_VERSION }}';
             console.log(`查找并删除标签为 ${tagName} 的所有 Release（包括 draft）...`);
             
             try {
@@ -761,10 +761,10 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.get_versions.outputs.TAG_VERSION }}
-          name: Release ${{ steps.get_versions.outputs.RELEASE_VERSION }}
+          tag_name: ${{ steps.get_versions_from_tag.outputs.TAG_VERSION }}
+          name: Release ${{ steps.get_versions_from_tag.outputs.RELEASE_VERSION }}
           body: |
-            ## Release ${{ steps.get_versions.outputs.RELEASE_VERSION }}
+            ## Release ${{ steps.get_versions_from_tag.outputs.RELEASE_VERSION }}
 
             ### Client
             - **macOS**: HelloKnightRCC_macos_${{ steps.extract_versions_from_artifacts.outputs.CLIENT_FULL_VERSION }}.zip
@@ -787,7 +787,7 @@ jobs:
 
       - name: Verify Release created successfully (not draft)
         run: |
-          TAG_NAME="${{ steps.get_versions.outputs.TAG_VERSION }}"
+          TAG_NAME="${{ steps.get_versions_from_tag.outputs.TAG_VERSION }}"
           echo "🔍 验证 GitHub Release 是否创建成功（非 draft）..."
           echo "  标签: ${TAG_NAME}"
           
@@ -881,7 +881,7 @@ jobs:
             
             The configuration file is automatically updated when a new version is released.
             
-            **Latest Version**: ${{ steps.get_versions.outputs.RELEASE_VERSION }}
+            **Latest Version**: ${{ steps.get_versions_from_tag.outputs.RELEASE_VERSION }}
             **Last Updated**: ${{ steps.get_timestamp.outputs.timestamp }}
           files: |
             update_config_github.json
@@ -944,8 +944,8 @@ jobs:
       - name: Set job outputs
         id: set_outputs
         run: |
-          TAG_VERSION="${{ steps.get_versions.outputs.TAG_VERSION }}"
-          RELEASE_VERSION="${{ steps.get_versions.outputs.RELEASE_VERSION }}"
+          TAG_VERSION="${{ steps.get_versions_from_tag.outputs.TAG_VERSION }}"
+          RELEASE_VERSION="${{ steps.get_versions_from_tag.outputs.RELEASE_VERSION }}"
           
           # 调试信息
           echo "🔍 设置 job 输出:"

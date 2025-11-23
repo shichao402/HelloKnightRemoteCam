@@ -1094,7 +1094,8 @@ jobs:
             echo ""
             echo "📝 创建配置 Release..."
             
-            RELEASE_NAME="Update Configuration"
+            # 使用和 GitHub 一样的固定 release 名字
+            RELEASE_NAME="UpdateConfig"
             RELEASE_BODY="This release contains the update configuration file for the application."
             
             CREATE_RELEASE_BODY=$(echo "{
