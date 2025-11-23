@@ -53,13 +53,15 @@ class UpdateCheckService {
 
     // 尝试每个 URL，直到成功
     Exception? lastError;
-    String? lastErrorUrl;
 
     for (int i = 0; i < updateCheckUrls.length; i++) {
       final updateCheckUrl = updateCheckUrls[i];
       if (updateCheckUrl.isEmpty) {
         continue;
       }
+
+      // 确定来源名称（在 try 块外定义，以便在 catch 中使用）
+      final sourceName = i == 0 ? 'Gitee' : 'GitHub';
 
       try {
         // 添加时间戳参数避免缓存
@@ -73,7 +75,6 @@ class UpdateCheckService {
           }).toString();
         }
 
-        final sourceName = i == 0 ? 'Gitee' : 'GitHub';
         onLog?.call('开始检查更新 ($sourceName)，URL: $url', tag: 'UPDATE');
 
         // 获取更新配置
@@ -93,7 +94,6 @@ class UpdateCheckService {
           onLogError?.call('更新检查失败 ($sourceName)',
               error: 'HTTP ${response.statusCode}');
           lastError = Exception('HTTP ${response.statusCode}');
-          lastErrorUrl = url;
           continue; // 尝试下一个 URL
         }
 
@@ -108,7 +108,6 @@ class UpdateCheckService {
           onLogError?.call('更新检查失败 ($sourceName)',
               error: '响应数据格式不正确: ${response.data.runtimeType}');
           lastError = Exception('响应数据格式不正确');
-          lastErrorUrl = url;
           continue; // 尝试下一个 URL
         }
 
@@ -121,7 +120,6 @@ class UpdateCheckService {
         if (targetConfig == null) {
           onLog?.call('配置中未找到 $target 信息', tag: 'UPDATE');
           lastError = Exception('配置中未找到 $target 信息');
-          lastErrorUrl = url;
           continue; // 尝试下一个 URL
         }
 
@@ -130,7 +128,6 @@ class UpdateCheckService {
         if (platforms == null) {
           onLog?.call('配置中未找到平台信息', tag: 'UPDATE');
           lastError = Exception('配置中未找到平台信息');
-          lastErrorUrl = url;
           continue; // 尝试下一个 URL
         }
 
@@ -138,7 +135,6 @@ class UpdateCheckService {
         if (platformConfig == null) {
           onLog?.call('配置中未找到平台 $platform 的信息', tag: 'UPDATE');
           lastError = Exception('配置中未找到平台 $platform 的信息');
-          lastErrorUrl = url;
           continue; // 尝试下一个 URL
         }
 
@@ -167,7 +163,6 @@ class UpdateCheckService {
         onLogError?.call('检查更新失败 ($sourceName)',
             error: e, stackTrace: stackTrace);
         lastError = e is Exception ? e : Exception(e.toString());
-        lastErrorUrl = updateCheckUrl;
         // 继续尝试下一个 URL
       }
     }
