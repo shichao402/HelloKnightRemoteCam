@@ -19,7 +19,7 @@
         "fileName": "HelloKnightRCC_windows_1.0.7+8.zip",
         "fileType": "zip",
         "platform": "windows",
-        "fileHash": "59daf66e41a030fdb9e21cd13b33a1565ac973a81f36a7319c952ec434d13fac"
+        "fileHash": "055de296abac95b52eecfba3c31076dbf812d8c3bb924d870f13fc4928b86b85"
       }
     }
   },
@@ -39,5 +39,5 @@
     }
   },
   "updateCheckUrl": "https://raw.githubusercontent.com/shichao402/HelloKnightRemoteCam/main/update_config_github.json",
-  "lastUpdated": "2025-11-23T07:23:36Z"
+  "lastUpdated": "2025-11-23T07:29:14Z"
 }
