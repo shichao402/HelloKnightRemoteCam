@@ -68,16 +68,28 @@ class VersionUtils {
     return false;
   }
 
-  /// 从文件名提取版本号（格式: x.y.z+build）
-  /// 例如: HelloKnightRCC_macos_1.0.7+5.zip -> 1.0.7+5
+  /// 从文件名提取版本号（格式: x.y.z+build 或 x.y.zbuild）
+  /// 例如: 
+  ///   HelloKnightRCC_macos_1.0.7+5.zip -> 1.0.7+5
+  ///   HelloKnightRCC_macos_1.0.7build10.zip -> 1.0.7+10
   static String? extractVersionFromFileName(String fileName) {
     try {
-      // 匹配模式: _x.y.z+build 或 _x.y.z
-      final regex = RegExp(r'_(\d+\.\d+\.\d+(?:\+\d+)?)');
-      final match = regex.firstMatch(fileName);
-      if (match != null) {
-        return match.group(1);
+      // 先尝试匹配 build 格式: _x.y.zbuildN
+      final buildRegex = RegExp(r'_(\d+\.\d+\.\d+)build(\d+)');
+      final buildMatch = buildRegex.firstMatch(fileName);
+      if (buildMatch != null) {
+        final version = buildMatch.group(1);
+        final build = buildMatch.group(2);
+        return '$version+$build';
       }
+      
+      // 再尝试匹配 + 格式: _x.y.z+N 或 _x.y.z
+      final plusRegex = RegExp(r'_(\d+\.\d+\.\d+(?:\+\d+)?)');
+      final plusMatch = plusRegex.firstMatch(fileName);
+      if (plusMatch != null) {
+        return plusMatch.group(1);
+      }
+      
       return null;
     } catch (e) {
       return null;

@@ -112,13 +112,14 @@ class UpdateService {
       _logger.log('当前版本: $currentVersion', tag: 'UPDATE');
       _logger.log('当前版本号(不含构建号): $currentVersionNumber', tag: 'UPDATE');
       _logger.log('当前平台: ${_getCurrentPlatform()}', tag: 'UPDATE');
-      _logger.log('更新检查 URL 列表 (共 ${_updateCheckUrls.length} 个):',
+      _logger.log('更新检查 URL 列表 (共 ${_updateCheckUrls.length} 个，将并行检查):',
           tag: 'UPDATE');
       for (int i = 0; i < _updateCheckUrls.length; i++) {
         final url = _updateCheckUrls[i];
         final sourceName = url.contains('gitee.com') ? 'Gitee' : 'GitHub';
         _logger.log('  ${i + 1}. $sourceName: $url', tag: 'UPDATE');
       }
+      _logger.log('开始并行检查所有更新源...', tag: 'UPDATE');
 
       // 使用shared包的UpdateCheckService检查更新（支持多个 URL）
       final result = await _updateCheckService.checkForUpdate(
@@ -132,11 +133,22 @@ class UpdateService {
       // 如果发现新版本，处理更新信息
       if (result.hasUpdate && result.updateInfo != null) {
         final updateInfo = result.updateInfo!;
+
+        // 判断下载来源（从 downloadUrl 判断）
+        String downloadSource = 'Unknown';
+        if (updateInfo.downloadUrl.contains('gitee.com')) {
+          downloadSource = 'Gitee';
+        } else if (updateInfo.downloadUrl.contains('github.com')) {
+          downloadSource = 'GitHub';
+        }
+
         _logger.log('发现新版本: ${updateInfo.version}', tag: 'UPDATE');
+        _logger.log('最终选择的下载源: $downloadSource', tag: 'UPDATE');
         _logger.log('更新信息已保存到内存:', tag: 'UPDATE');
         _logger.log('  版本号: ${updateInfo.version}', tag: 'UPDATE');
         _logger.log('  版本号(不含构建号): ${updateInfo.versionNumber}', tag: 'UPDATE');
         _logger.log('  下载 URL: ${updateInfo.downloadUrl}', tag: 'UPDATE');
+        _logger.log('  下载来源: $downloadSource', tag: 'UPDATE');
         _logger.log('  文件名: ${updateInfo.fileName}', tag: 'UPDATE');
         _logger.log('  文件类型: ${updateInfo.fileType}', tag: 'UPDATE');
         _logger.log('  平台: ${updateInfo.platform}', tag: 'UPDATE');
@@ -264,34 +276,43 @@ class UpdateService {
     await _cleanupService.cleanupOldVersions();
   }
 
+  /// 公开的清理旧版本文件方法（供外部调用，如启动时清理）
+  Future<void> cleanupOldVersions() async {
+    await _cleanupService.cleanupOldVersions();
+  }
+
   /// 检查已存在的文件（已下载完成）
-  /// 返回文件路径如果文件存在且hash校验通过，否则返回null
+  /// 只检查 zip 文件，如果存在且 hash 校验通过，返回文件路径（将重新解压）
+  /// 如果文件不存在或 hash 校验失败，返回 null
   Future<String?> _checkExistingCompleteFile(UpdateInfo updateInfo) async {
     try {
       final downloadDir = await _downloadDirService.getDownloadDirectory();
       final filePath = path.join(downloadDir, updateInfo.fileName);
 
-      // 检查文件是否存在且大小合理（使用UpdateDownloadProcessor）
+      // 检查 zip 文件是否存在
       final fileSize = await _downloadProcessor.checkFileExists(filePath);
       if (fileSize == null) {
+        _logger.log('zip 文件不存在: $filePath', tag: 'UPDATE');
         return null;
       }
 
-      _logger.log('发现已存在的文件: $filePath (大小: $fileSize)', tag: 'UPDATE');
+      _logger.log('发现已存在的 zip 文件: $filePath (大小: $fileSize)', tag: 'UPDATE');
 
       // 如果有hash，验证文件完整性（使用UpdateDownloadProcessor）
       if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
-        _logger.log('开始验证已存在文件的hash', tag: 'UPDATE');
+        _logger.log('开始验证已存在 zip 文件的hash', tag: 'UPDATE');
         final isValid = await _downloadProcessor.verifyFileHash(
             filePath, updateInfo.fileHash!);
         if (isValid) {
-          _logger.log('已存在文件hash校验通过: $filePath', tag: 'UPDATE');
+          _logger.log('已存在 zip 文件hash校验通过: $filePath', tag: 'UPDATE');
+          _logger.log('将重新解压 zip 文件', tag: 'UPDATE');
           return filePath;
         } else {
-          _logger.log('已存在文件hash校验失败，将重新下载', tag: 'UPDATE');
+          _logger.log('已存在 zip 文件hash校验失败，将重新下载', tag: 'UPDATE');
           // 删除损坏的文件
           try {
             await File(filePath).delete();
+            _logger.log('已删除损坏的 zip 文件', tag: 'UPDATE');
           } catch (e) {
             _logger.log('删除损坏文件失败: $e', tag: 'UPDATE');
           }
@@ -299,7 +320,8 @@ class UpdateService {
         }
       } else {
         // 没有hash，假设文件完整
-        _logger.log('更新信息中未包含hash，假设已存在文件完整: $filePath', tag: 'UPDATE');
+        _logger.log('更新信息中未包含hash，假设已存在 zip 文件完整: $filePath', tag: 'UPDATE');
+        _logger.log('将重新解压 zip 文件', tag: 'UPDATE');
         return filePath;
       }
     } catch (e, stackTrace) {
@@ -536,10 +558,11 @@ class UpdateService {
   Future<String?> _processDownloadedFile(
       String filePath, UpdateInfo updateInfo) async {
     // 使用shared包的UpdateDownloadProcessor处理文件
+    // 不删除 zip 文件，保留以便后续可以重新解压
     return await _downloadProcessor.processDownloadedFile(
       filePath,
       updateInfo,
-      deleteZipAfterExtract: true,
+      deleteZipAfterExtract: false,
     );
   }
 

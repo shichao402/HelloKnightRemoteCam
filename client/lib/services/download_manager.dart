@@ -160,8 +160,6 @@ class DownloadManager {
       
       // 记录响应状态码和所有响应头
       _logger.log('HEAD响应状态码: ${response.statusCode}', tag: 'DOWNLOAD');
-      _logger.log('HEAD响应头: ${response.headers.map}', tag: 'DOWNLOAD');
-      
       // 尝试多种方式获取Content-Length
       String? contentLengthStr;
       

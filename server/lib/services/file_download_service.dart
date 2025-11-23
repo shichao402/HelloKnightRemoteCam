@@ -105,10 +105,16 @@ class FileDownloadService {
   }
 
   /// 获取下载目录
+  /// 使用应用专属子目录，避免与其他应用冲突
   Future<String> _getDownloadDirectory() async {
-    // 使用系统临时目录作为下载目录
+    // 使用系统临时目录作为基础目录
     final tempDir = await getTemporaryDirectory();
-    return path.join(tempDir.path, 'Downloads');
+    // 创建应用专属子目录：com.firoyang.helloknightrcc_server
+    // Updates 目录用于存放更新文件
+    final downloadDir = path.join(tempDir.path, 'com.firoyang.helloknightrcc_server', 'Updates');
+    // 确保目录存在
+    await Directory(downloadDir).create(recursive: true);
+    return downloadDir;
   }
 }
 

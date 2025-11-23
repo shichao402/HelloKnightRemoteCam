@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:dio/dio.dart';
 import '../models/update_info.dart';
@@ -105,67 +106,67 @@ class UpdateCheckService {
       ));
     }
 
-    // 等待所有请求完成
-    final results = await Future.wait(futures);
-
-    // 收集所有成功的结果（有更新的）
-    final List<_CheckResult> successfulResults = [];
-    Exception? lastError;
-
-    onLog?.call('检查结果汇总:', tag: 'UPDATE');
-    for (final result in results) {
-      if (result.error != null) {
-        onLogError?.call('${result.sourceName} 检查失败', error: result.error);
-        lastError = result.error;
-        continue;
-      }
-      if (result.updateInfo != null) {
-        if (result.hasUpdate) {
-          onLog?.call('  ${result.sourceName}: 发现新版本 ${result.updateInfo!.version}', tag: 'UPDATE');
-          successfulResults.add(result);
-        } else {
-          onLog?.call('  ${result.sourceName}: 版本 ${result.updateInfo!.version} 不高于当前版本', tag: 'UPDATE');
-        }
-      }
+    if (futures.isEmpty) {
+      return UpdateCheckResult(
+        hasUpdate: false,
+        error: '没有有效的更新检查URL',
+      );
     }
 
-    // 如果有成功的结果，选择最佳的一个
-    if (successfulResults.isNotEmpty) {
-      // 按版本号排序，选择版本号最高的
-      // 如果版本号相同，优先选择 Gitee（因为在国内更快）
-      successfulResults.sort((a, b) {
-        final aVersion = a.updateInfo!.versionNumber;
-        final bVersion = b.updateInfo!.versionNumber;
-        
-        // 比较版本号
-        final bGreaterThanA = VersionUtils.compareVersions(bVersion, aVersion);
-        final aGreaterThanB = VersionUtils.compareVersions(aVersion, bVersion);
-        
-        if (bGreaterThanA) {
-          // b > a，b 应该在前面（降序）
-          return 1;
-        } else if (aGreaterThanB) {
-          // a > b，a 应该在前面（降序）
-          return -1;
-        } else {
-          // 版本号相同，优先选择 Gitee
-          if (a.sourceName == 'Gitee' && b.sourceName != 'Gitee') {
-            return -1; // a (Gitee) 在前面
-          } else if (b.sourceName == 'Gitee' && a.sourceName != 'Gitee') {
-            return 1; // b (Gitee) 在前面
-          } else {
-            return 0; // 相等
+    // 使用 Future.any 等待第一个成功的结果（有更新的）
+    // 哪个更快回来就用哪个
+    onLog?.call('等待第一个成功的更新检查结果...', tag: 'UPDATE');
+    
+    _CheckResult? firstSuccessfulResult;
+    Exception? lastError;
+    final List<_CheckResult> allResults = [];
+    
+    // 等待第一个有更新的结果，或者所有请求完成
+    try {
+      // 创建一个 Completer 来跟踪第一个成功的结果
+      final completer = Completer<_CheckResult?>();
+      int completedCount = 0;
+      
+      for (final future in futures) {
+        future.then((result) {
+          completedCount++;
+          allResults.add(result);
+          
+          // 如果这是第一个有更新的结果，且还没有设置过，就使用它
+          if (result.error == null && 
+              result.updateInfo != null && 
+              result.hasUpdate && 
+              !completer.isCompleted) {
+            onLog?.call('${result.sourceName} 最先返回，发现新版本: ${result.updateInfo!.version}', tag: 'UPDATE');
+            completer.complete(result);
           }
-        }
-      });
+          
+          // 如果所有请求都完成了，但还没有成功的结果，完成 completer
+          if (completedCount == futures.length && !completer.isCompleted) {
+            completer.complete(null);
+          }
+        }).catchError((error) {
+          completedCount++;
+          // 如果所有请求都失败了，完成 completer
+          if (completedCount == futures.length && !completer.isCompleted) {
+            completer.complete(null);
+          }
+        });
+      }
+      
+      firstSuccessfulResult = await completer.future;
+    } catch (e) {
+      onLogError?.call('等待更新检查结果时出错', error: e);
+    }
 
-      final bestResult = successfulResults.first;
-      final updateInfo = bestResult.updateInfo!;
+    // 如果第一个成功的结果有更新，直接使用它
+    if (firstSuccessfulResult != null) {
+      final updateInfo = firstSuccessfulResult.updateInfo!;
       onLog?.call(
-          '发现新版本: ${updateInfo.version} (来源: ${bestResult.sourceName})',
+          '使用最先返回的结果: ${updateInfo.version} (来源: ${firstSuccessfulResult.sourceName})',
           tag: 'UPDATE');
       onLog?.call(
-          '更新信息详情 (来源: ${bestResult.sourceName}):', tag: 'UPDATE');
+          '更新信息详情 (来源: ${firstSuccessfulResult.sourceName}):', tag: 'UPDATE');
       onLog?.call('  版本号: ${updateInfo.version}', tag: 'UPDATE');
       onLog?.call('  版本号(不含构建号): ${updateInfo.versionNumber}', tag: 'UPDATE');
       onLog?.call('  下载 URL: ${updateInfo.downloadUrl}', tag: 'UPDATE');
@@ -186,22 +187,35 @@ class UpdateCheckService {
       );
     }
 
-    // 检查是否有成功但无更新的结果
-    final noUpdateResults = results.where((r) => r.error == null && !r.hasUpdate);
-    if (noUpdateResults.isNotEmpty) {
-      onLog?.call('当前已是最新版本', tag: 'UPDATE');
-      // 记录所有检查过的来源
-      for (final result in noUpdateResults) {
-        if (result.updateInfo != null) {
+    // 如果没有成功的结果，等待所有请求完成，检查是否有无更新的结果
+    onLog?.call('等待所有更新检查完成...', tag: 'UPDATE');
+    final results = await Future.wait(futures);
+    
+    // 收集所有结果
+    final List<_CheckResult> noUpdateResults = [];
+    for (final result in results) {
+      if (result.error != null) {
+        onLogError?.call('${result.sourceName} 检查失败', error: result.error);
+        lastError = result.error;
+      } else if (result.updateInfo != null) {
+        if (result.hasUpdate) {
+          // 这种情况不应该发生，因为应该已经被 firstSuccessfulResult 处理了
+          onLog?.call('  ${result.sourceName}: 发现新版本 ${result.updateInfo!.version}', tag: 'UPDATE');
+        } else {
           onLog?.call('  ${result.sourceName}: 版本 ${result.updateInfo!.version} 不高于当前版本', tag: 'UPDATE');
+          noUpdateResults.add(result);
         }
       }
+    }
+
+    if (noUpdateResults.isNotEmpty) {
+      onLog?.call('所有更新源检查完成，当前已是最新版本', tag: 'UPDATE');
       return UpdateCheckResult(
         hasUpdate: false,
       );
     }
 
-    // 所有 URL 都失败了
+    // 所有检查都失败
     onLogError?.call('所有更新检查 URL 都失败', error: lastError);
     return UpdateCheckResult(
       hasUpdate: false,

@@ -16,9 +16,10 @@ class DownloadSettingsService {
       return customPath;
     }
     
-    // 默认路径：使用系统临时目录
+    // 默认路径：使用系统临时目录下的应用专属子目录
+    // Downloads 目录用于存放用户下载的文件（与更新文件目录区分）
     final tempDir = await getTemporaryDirectory();
-    return path.join(tempDir.path, 'downloads');
+    return path.join(tempDir.path, 'com.example.remoteCamClient', 'Downloads');
   }
   
   /// 设置下载路径
@@ -30,7 +31,7 @@ class DownloadSettingsService {
   /// 重置为默认路径
   Future<String> resetToDefaultPath() async {
     final tempDir = await getTemporaryDirectory();
-    final defaultPath = path.join(tempDir.path, 'downloads');
+    final defaultPath = path.join(tempDir.path, 'com.example.remoteCamClient', 'Downloads');
     await setDownloadPath(defaultPath);
     return defaultPath;
   }
@@ -38,7 +39,7 @@ class DownloadSettingsService {
   /// 获取默认路径
   Future<String> getDefaultPath() async {
     final tempDir = await getTemporaryDirectory();
-    return path.join(tempDir.path, 'downloads');
+    return path.join(tempDir.path, 'com.example.remoteCamClient', 'Downloads');
   }
   
   /// 验证路径是否有效

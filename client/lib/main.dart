@@ -80,6 +80,10 @@ Future<void> _checkForUpdateOnStartup(
   try {
     logger.log('启动时开始检查更新', tag: 'UPDATE');
 
+    // 先清理旧版本文件
+    logger.log('启动时清理旧版本文件', tag: 'UPDATE');
+    await updateService.cleanupOldVersions();
+
     // 始终从网络检查更新
     final result = await updateService.checkForUpdate(avoidCache: true);
 

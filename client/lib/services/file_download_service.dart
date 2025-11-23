@@ -69,7 +69,16 @@ class FileDownloadService {
     Function(String status)? onStatus,
   }) async {
     try {
+      // 判断下载来源
+      String downloadSource = 'Unknown';
+      if (url.contains('gitee.com')) {
+        downloadSource = 'Gitee';
+      } else if (url.contains('github.com')) {
+        downloadSource = 'GitHub';
+      }
+
       _logger.log('开始下载文件: $url', tag: 'DOWNLOAD');
+      _logger.log('下载来源: $downloadSource', tag: 'DOWNLOAD');
 
       // 获取下载目录（使用DownloadDirectoryService）
       final downloadDir = await _downloadDirService.getDownloadDirectory();
@@ -146,7 +155,16 @@ class FileDownloadService {
       final file = File(task.filePath);
       final fileExists = await file.exists();
 
+      // 判断下载来源
+      String downloadSource = 'Unknown';
+      if (task.url.contains('gitee.com')) {
+        downloadSource = 'Gitee';
+      } else if (task.url.contains('github.com')) {
+        downloadSource = 'GitHub';
+      }
+
       _logger.log('=== 开始下载任务 ===', tag: 'DOWNLOAD');
+      _logger.log('下载来源: $downloadSource', tag: 'DOWNLOAD');
       _logger.log('URL: ${task.url}', tag: 'DOWNLOAD');
       _logger.log('文件路径: ${task.filePath}', tag: 'DOWNLOAD');
       _logger.log('文件是否存在: $fileExists', tag: 'DOWNLOAD');
@@ -159,10 +177,6 @@ class FileDownloadService {
         _logger.log('HEAD 请求 URL: ${task.url}', tag: 'DOWNLOAD');
         final headResponse = await _dio.head(task.url);
         _logger.log('HEAD 响应状态码: ${headResponse.statusCode}', tag: 'DOWNLOAD');
-        _logger.log(
-            'HEAD 响应 Content-Type: ${headResponse.headers.value('content-type')}',
-            tag: 'DOWNLOAD');
-        _logger.log('HEAD 响应头: ${headResponse.headers}', tag: 'DOWNLOAD');
 
         // 检查响应状态码
         if (headResponse.statusCode != null &&
@@ -217,8 +231,6 @@ class FileDownloadService {
         _logger.log('全新下载，不使用 Range 头', tag: 'DOWNLOAD');
         task.onStatus?.call('正在连接服务器...');
       }
-
-      _logger.log('请求头: $headers', tag: 'DOWNLOAD');
 
       // 用于跟踪实际下载的总大小
       // 注意：当使用断点续传时，Dio回调中的total是Range响应的Content-Length（剩余部分大小）

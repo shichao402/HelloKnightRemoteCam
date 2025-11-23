@@ -166,11 +166,9 @@ class ClientLoggerService {
       return;
     }
     final paramsStr = params != null ? '\n参数: $params' : '';
-    final headersStr =
-        headers != null && headers.isNotEmpty ? '\n请求头: $headers' : '';
     final bodyStr = body != null ? '\n请求体: $body' : '';
     log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', tag: 'API');
-    log('→ API调用: $method $endpoint$paramsStr$headersStr$bodyStr', tag: 'API');
+    log('→ API调用: $method $endpoint$paramsStr$bodyStr', tag: 'API');
   }
 
   // API响应日志（增强版，记录更多详情）
