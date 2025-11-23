@@ -16,9 +16,9 @@ class DownloadSettingsService {
       return customPath;
     }
     
-    // 默认路径：使用Application Support目录（本地路径，不在iCloud）
-    final directory = await getApplicationSupportDirectory();
-    return path.join(directory.path, 'downloads');
+    // 默认路径：使用系统临时目录
+    final tempDir = await getTemporaryDirectory();
+    return path.join(tempDir.path, 'downloads');
   }
   
   /// 设置下载路径
@@ -29,16 +29,16 @@ class DownloadSettingsService {
   
   /// 重置为默认路径
   Future<String> resetToDefaultPath() async {
-    final directory = await getApplicationSupportDirectory();
-    final defaultPath = path.join(directory.path, 'downloads');
+    final tempDir = await getTemporaryDirectory();
+    final defaultPath = path.join(tempDir.path, 'downloads');
     await setDownloadPath(defaultPath);
     return defaultPath;
   }
   
   /// 获取默认路径
   Future<String> getDefaultPath() async {
-    final directory = await getApplicationSupportDirectory();
-    return path.join(directory.path, 'downloads');
+    final tempDir = await getTemporaryDirectory();
+    return path.join(tempDir.path, 'downloads');
   }
   
   /// 验证路径是否有效

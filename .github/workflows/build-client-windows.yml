@@ -73,13 +73,17 @@ jobs:
           
           # 解析 JSON 输出并设置 GitHub Actions 输出
           $versionInfo = Get-Content version_output.json | ConvertFrom-Json
+          # 生成用于文件名的版本号（将 + 替换为 build，避免URL特殊字符问题）
+          $fullVersionFilename = $versionInfo.full_version -replace '\+', 'build'
           echo "VERSION=$($versionInfo.version)" >> $env:GITHUB_OUTPUT
           echo "BUILD_NUMBER=$($versionInfo.build_number)" >> $env:GITHUB_OUTPUT
           echo "FULL_VERSION=$($versionInfo.full_version)" >> $env:GITHUB_OUTPUT
+          echo "FULL_VERSION_FILENAME=$fullVersionFilename" >> $env:GITHUB_OUTPUT
           echo "TAG_VERSION=$($versionInfo.tag_version)" >> $env:GITHUB_OUTPUT
           Write-Host "Version: $($versionInfo.version)"
           Write-Host "Build Number: $($versionInfo.build_number)"
           Write-Host "Full Version: $($versionInfo.full_version)"
+          Write-Host "Full Version (Filename): $fullVersionFilename"
 
       - name: Build Windows app
         run: |

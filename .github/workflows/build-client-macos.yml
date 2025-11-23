@@ -73,13 +73,18 @@ jobs:
           FULL_VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['full_version'])")
           TAG_VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['tag_version'])")
           
+          # 生成用于文件名的版本号（将 + 替换为 build，避免URL特殊字符问题）
+          FULL_VERSION_FILENAME=$(echo "${FULL_VERSION}" | sed 's/+/build/')
+          
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_OUTPUT
           echo "FULL_VERSION=$FULL_VERSION" >> $GITHUB_OUTPUT
+          echo "FULL_VERSION_FILENAME=$FULL_VERSION_FILENAME" >> $GITHUB_OUTPUT
           echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
           echo "Build Number: $BUILD_NUMBER"
           echo "Full Version: $FULL_VERSION"
+          echo "Full Version (Filename): $FULL_VERSION_FILENAME"
 
       - name: Build macOS app
         run: |
@@ -162,7 +167,8 @@ jobs:
           # DMG文件名使用固定命名
           DMG_NAME="HelloKnightRCC_macos.dmg"
           # ZIP文件名包含版本号，用于标识和hash验证
-          ZIP_NAME="HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip"
+          # 使用文件名格式的版本号（+ 替换为 build，避免URL特殊字符问题）
+          ZIP_NAME="HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION_FILENAME }}.zip"
           
           # 将DMG文件打包成zip（zip包里包含固定命名的dmg文件）
           zip "$ZIP_NAME" "$DMG_NAME"
@@ -183,6 +189,6 @@ jobs:
         with:
           name: HelloKnightRCC_macos
           path: |
-            client/HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip
+            client/HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION_FILENAME }}.zip
           retention-days: 30
 

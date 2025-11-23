@@ -425,10 +425,15 @@ jobs:
             exit 1
           fi
           MACOS_ZIP=$(find ./artifacts-temp -name "HelloKnightRCC_macos_*.zip" | head -1)
-          # 使用从文件名提取的版本号
-          CLIENT_VERSION="${CLIENT_FULL_VERSION}"
-          mv "$MACOS_ZIP" "./artifacts/HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
-          echo "重命名macOS ZIP: $(basename "$MACOS_ZIP") -> HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
+          # 构建产物文件名已经使用了 build 格式（从构建工作流生成）
+          # 直接使用构建产物的文件名，不需要重命名
+          MACOS_FILENAME=$(basename "$MACOS_ZIP")
+          mv "$MACOS_ZIP" "./artifacts/${MACOS_FILENAME}"
+          echo "macOS ZIP文件名: ${MACOS_FILENAME}"
+          echo "注意: macOS ZIP文件包含DMG文件（固定命名），用户需要解压后打开DMG安装"
+          
+          # 保存文件名供后续步骤使用
+          echo "MACOS_FILENAME=${MACOS_FILENAME}" >> $GITHUB_OUTPUT
           echo "注意: macOS ZIP文件包含DMG文件（固定命名），用户需要解压后打开DMG安装"
           
           # Windows文件 - 需要从exe创建zip用于更新
@@ -443,11 +448,17 @@ jobs:
             exit 1
           fi
           WINDOWS_EXE=$(find ./artifacts-temp -name "HelloKnightRCC_windows_setup.exe" | head -1)
-          # 将EXE打包为zip用于更新（ZIP文件名包含版本号，内部EXE使用固定命名）
+          # 将EXE打包为zip用于更新（ZIP文件名使用 build 格式，避免URL特殊字符问题）
+          # 生成文件名格式的版本号（+ 替换为 build）
+          CLIENT_VERSION_FILENAME=$(echo "${CLIENT_FULL_VERSION}" | sed 's/+/build/')
           cd artifacts-temp
-          zip "../artifacts/HelloKnightRCC_windows_${CLIENT_VERSION}.zip" "$(basename "$WINDOWS_EXE")"
+          zip "../artifacts/HelloKnightRCC_windows_${CLIENT_VERSION_FILENAME}.zip" "$(basename "$WINDOWS_EXE")"
           cd ..
-          echo "已创建Windows更新zip: HelloKnightRCC_windows_${CLIENT_VERSION}.zip (contains EXE file with fixed name: $(basename "$WINDOWS_EXE"))"
+          WINDOWS_FILENAME="HelloKnightRCC_windows_${CLIENT_VERSION_FILENAME}.zip"
+          echo "已创建Windows更新zip: ${WINDOWS_FILENAME} (contains EXE file with fixed name: $(basename "$WINDOWS_EXE"))"
+          
+          # 保存文件名供后续步骤使用
+          echo "WINDOWS_FILENAME=${WINDOWS_FILENAME}" >> $GITHUB_OUTPUT
           
           # Android文件 - 查找并重命名（已经是zip文件，内部APK使用固定命名）
           ANDROID_ZIP_COUNT=$(find ./artifacts-temp -name "helloknightrcc_server_android_*.zip" | wc -l)
@@ -460,11 +471,15 @@ jobs:
             exit 1
           fi
           ANDROID_ZIP=$(find ./artifacts-temp -name "helloknightrcc_server_android_*.zip" | head -1)
-          # 使用从文件名提取的版本号
-          SERVER_VERSION="${SERVER_FULL_VERSION}"
-          mv "$ANDROID_ZIP" "./artifacts/helloknightrcc_server_android_${SERVER_VERSION}.zip"
-          echo "重命名Android ZIP: $(basename "$ANDROID_ZIP") -> helloknightrcc_server_android_${SERVER_VERSION}.zip"
+          # 构建产物文件名已经使用了 build 格式（从构建工作流生成）
+          # 直接使用构建产物的文件名，不需要重命名
+          ANDROID_FILENAME=$(basename "$ANDROID_ZIP")
+          mv "$ANDROID_ZIP" "./artifacts/${ANDROID_FILENAME}"
+          echo "Android ZIP文件名: ${ANDROID_FILENAME}"
           echo "注意: Android ZIP文件包含APK文件（固定命名），用户需要解压后安装APK"
+          
+          # 保存文件名供后续步骤使用
+          echo "ANDROID_FILENAME=${ANDROID_FILENAME}" >> $GITHUB_OUTPUT
           
           rm -rf ./artifacts-temp
           
@@ -476,13 +491,19 @@ jobs:
         run: |
           echo "🔍 验证构建产物文件是否存在..."
           
-          # 使用从构建产物文件名提取的版本号
-          CLIENT_VERSION="${{ steps.extract_versions_from_artifacts.outputs.CLIENT_FULL_VERSION }}"
-          SERVER_VERSION="${{ steps.extract_versions_from_artifacts.outputs.SERVER_FULL_VERSION }}"
+          # 使用实际文件名（从 extract_versions_from_artifacts 步骤获取）
+          MACOS_FILENAME="${{ steps.extract_versions_from_artifacts.outputs.MACOS_FILENAME }}"
+          WINDOWS_FILENAME="${{ steps.extract_versions_from_artifacts.outputs.WINDOWS_FILENAME }}"
+          ANDROID_FILENAME="${{ steps.extract_versions_from_artifacts.outputs.ANDROID_FILENAME }}"
           
-          MACOS_FILE="artifacts/HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
-          WINDOWS_FILE="artifacts/HelloKnightRCC_windows_${CLIENT_VERSION}.zip"
-          ANDROID_FILE="artifacts/helloknightrcc_server_android_${SERVER_VERSION}.zip"
+          echo "使用实际文件名:"
+          echo "  macOS: ${MACOS_FILENAME}"
+          echo "  Windows: ${WINDOWS_FILENAME}"
+          echo "  Android: ${ANDROID_FILENAME}"
+          
+          MACOS_FILE="artifacts/${MACOS_FILENAME}"
+          WINDOWS_FILE="artifacts/${WINDOWS_FILENAME}"
+          ANDROID_FILE="artifacts/${ANDROID_FILENAME}"
           
           ALL_FILES_EXIST=true
           
@@ -531,46 +552,47 @@ jobs:
           SERVER_VERSION=${{ steps.extract_versions_from_artifacts.outputs.SERVER_FULL_VERSION }}
           TAG_VERSION=${{ steps.get_versions_from_tag.outputs.TAG_VERSION }}
           
+          # 使用实际文件名（从 extract_versions_from_artifacts 步骤获取）
+          MACOS_FILENAME="${{ steps.extract_versions_from_artifacts.outputs.MACOS_FILENAME }}"
+          WINDOWS_FILENAME="${{ steps.extract_versions_from_artifacts.outputs.WINDOWS_FILENAME }}"
+          ANDROID_FILENAME="${{ steps.extract_versions_from_artifacts.outputs.ANDROID_FILENAME }}"
+          
           # GitHub Releases 下载链接格式（使用内置变量）
           GITHUB_REPO="${{ github.repository }}"
           REPO_OWNER=$(echo "${GITHUB_REPO}" | cut -d'/' -f1)
           REPO_NAME=$(echo "${GITHUB_REPO}" | cut -d'/' -f2)
           
-          # 使用传递的版本号构建文件名（直接使用zip文件，不创建_update.zip）
-          MACOS_UPDATE_FILE="HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
-          WINDOWS_UPDATE_FILE="HelloKnightRCC_windows_${CLIENT_VERSION}.zip"
-          ANDROID_FILE="helloknightrcc_server_android_${SERVER_VERSION}.zip"
-          
-          echo "使用更新文件名（基于传递的版本号，仅zip文件）:"
-          echo "  macOS: $MACOS_UPDATE_FILE"
-          echo "  Windows: $WINDOWS_UPDATE_FILE"
-          echo "  Android: $ANDROID_FILE"
+          echo "使用实际文件名（build 格式，避免URL特殊字符问题）:"
+          echo "  macOS: $MACOS_FILENAME"
+          echo "  Windows: $WINDOWS_FILENAME"
+          echo "  Android: $ANDROID_FILENAME"
           
           # 验证文件是否存在
-          if [ ! -f "artifacts/$MACOS_UPDATE_FILE" ]; then
-            echo "错误: macOS更新文件不存在: artifacts/$MACOS_UPDATE_FILE"
+          if [ ! -f "artifacts/$MACOS_FILENAME" ]; then
+            echo "错误: macOS更新文件不存在: artifacts/$MACOS_FILENAME"
             exit 1
           fi
           
-          if [ ! -f "artifacts/$WINDOWS_UPDATE_FILE" ]; then
-            echo "错误: Windows更新文件不存在: artifacts/$WINDOWS_UPDATE_FILE"
+          if [ ! -f "artifacts/$WINDOWS_FILENAME" ]; then
+            echo "错误: Windows更新文件不存在: artifacts/$WINDOWS_FILENAME"
             exit 1
           fi
           
-          if [ ! -f "artifacts/$ANDROID_FILE" ]; then
-            echo "错误: Android文件不存在: artifacts/$ANDROID_FILE"
+          if [ ! -f "artifacts/$ANDROID_FILENAME" ]; then
+            echo "错误: Android文件不存在: artifacts/$ANDROID_FILENAME"
             exit 1
           fi
           
           # 调用工程脚本生成更新配置
+          # 注意：传入的文件名使用 build 格式，但版本号仍然使用 + 格式（用于版本比较）
           echo ""
           echo "调用工程脚本生成更新配置..."
           python3 scripts/generate_update_config.py \
             --client-version "${CLIENT_VERSION}" \
             --server-version "${SERVER_VERSION}" \
-            --macos-file "artifacts/${MACOS_UPDATE_FILE}" \
-            --windows-file "artifacts/${WINDOWS_UPDATE_FILE}" \
-            --android-file "artifacts/${ANDROID_FILE}" \
+            --macos-file "artifacts/${MACOS_FILENAME}" \
+            --windows-file "artifacts/${WINDOWS_FILENAME}" \
+            --android-file "artifacts/${ANDROID_FILENAME}" \
             --tag-version "${TAG_VERSION}" \
             --repo-owner "${REPO_OWNER}" \
             --repo-name "${REPO_NAME}" \
@@ -720,18 +742,18 @@ jobs:
             ## Release ${{ steps.get_versions_from_tag.outputs.RELEASE_VERSION }}
 
             ### Client
-            - **macOS**: HelloKnightRCC_macos_${{ steps.extract_versions_from_artifacts.outputs.CLIENT_FULL_VERSION }}.zip
-            - **Windows**: HelloKnightRCC_windows_${{ steps.extract_versions_from_artifacts.outputs.CLIENT_FULL_VERSION }}.zip
+            - **macOS**: ${{ steps.extract_versions_from_artifacts.outputs.MACOS_FILENAME }}
+            - **Windows**: ${{ steps.extract_versions_from_artifacts.outputs.WINDOWS_FILENAME }}
 
             ### Server
-            - **Android**: helloknightrcc_server_android_${{ steps.extract_versions_from_artifacts.outputs.SERVER_FULL_VERSION }}.zip
+            - **Android**: ${{ steps.extract_versions_from_artifacts.outputs.ANDROID_FILENAME }}
 
             ### Changes
             - See commit history for details
           files: |
-            artifacts/HelloKnightRCC_macos_${{ steps.extract_versions_from_artifacts.outputs.CLIENT_FULL_VERSION }}.zip
-            artifacts/HelloKnightRCC_windows_${{ steps.extract_versions_from_artifacts.outputs.CLIENT_FULL_VERSION }}.zip
-            artifacts/helloknightrcc_server_android_${{ steps.extract_versions_from_artifacts.outputs.SERVER_FULL_VERSION }}.zip
+            artifacts/${{ steps.extract_versions_from_artifacts.outputs.MACOS_FILENAME }}
+            artifacts/${{ steps.extract_versions_from_artifacts.outputs.WINDOWS_FILENAME }}
+            artifacts/${{ steps.extract_versions_from_artifacts.outputs.ANDROID_FILENAME }}
           # 注意：update_config_github.json 不再上传到版本 Release，而是上传到固定的 UpdateConfig Release
           draft: false
           prerelease: false

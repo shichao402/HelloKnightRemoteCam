@@ -20,47 +20,9 @@ class DownloadDirectoryService {
     }
 
     try {
-      String downloadDir;
-      
-      if (Platform.isAndroid) {
-        // Android: 使用应用外部存储目录
-        final directory = await getExternalStorageDirectory();
-        if (directory != null) {
-          downloadDir = path.join(directory.path, 'Downloads');
-        } else {
-          // 如果外部存储不可用，使用应用内部目录
-          final appDir = await getApplicationDocumentsDirectory();
-          downloadDir = path.join(appDir.path, 'Downloads');
-        }
-      } else if (Platform.isIOS) {
-        // iOS: 使用应用文档目录
-        final directory = await getApplicationDocumentsDirectory();
-        downloadDir = path.join(directory.path, 'Downloads');
-      } else if (Platform.isMacOS) {
-        // macOS: 使用用户下载目录
-        final directory = await getDownloadsDirectory();
-        if (directory != null) {
-          downloadDir = directory.path;
-        } else {
-          // 如果不可用，使用应用支持目录
-          final appDir = await getApplicationSupportDirectory();
-          downloadDir = path.join(appDir.path, 'Downloads');
-        }
-      } else if (Platform.isWindows) {
-        // Windows: 使用用户下载目录
-        final directory = await getDownloadsDirectory();
-        if (directory != null) {
-          downloadDir = directory.path;
-        } else {
-          // 如果不可用，使用应用数据目录
-          final appDir = await getApplicationSupportDirectory();
-          downloadDir = path.join(appDir.path, 'Downloads');
-        }
-      } else {
-        // 其他平台：使用应用支持目录
-        final appDir = await getApplicationSupportDirectory();
-        downloadDir = path.join(appDir.path, 'Downloads');
-      }
+      // 使用系统临时目录作为下载目录
+      final tempDir = await getTemporaryDirectory();
+      final downloadDir = path.join(tempDir.path, 'Downloads');
 
       // 确保目录存在
       await Directory(downloadDir).create(recursive: true);
@@ -70,9 +32,9 @@ class DownloadDirectoryService {
       return downloadDir;
     } catch (e, stackTrace) {
       _logger.logError('获取下载目录失败', error: e, stackTrace: stackTrace);
-      // 返回默认目录
-      final appDir = await getApplicationSupportDirectory();
-      final defaultDir = path.join(appDir.path, 'Downloads');
+      // 返回默认目录（系统临时目录）
+      final tempDir = await getTemporaryDirectory();
+      final defaultDir = path.join(tempDir.path, 'Downloads');
       await Directory(defaultDir).create(recursive: true);
       return defaultDir;
     }

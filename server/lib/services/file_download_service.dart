@@ -106,24 +106,9 @@ class FileDownloadService {
 
   /// 获取下载目录
   Future<String> _getDownloadDirectory() async {
-    if (Platform.isAndroid) {
-      // Android: 使用应用外部存储目录
-      final directory = await getExternalStorageDirectory();
-      if (directory != null) {
-        return path.join(directory.path, 'Downloads');
-      }
-      // 如果外部存储不可用，使用应用内部目录
-      final appDir = await getApplicationDocumentsDirectory();
-      return path.join(appDir.path, 'Downloads');
-    } else if (Platform.isIOS) {
-      // iOS: 使用应用文档目录
-      final directory = await getApplicationDocumentsDirectory();
-      return path.join(directory.path, 'Downloads');
-    } else {
-      // 其他平台：使用应用支持目录
-      final appDir = await getApplicationSupportDirectory();
-      return path.join(appDir.path, 'Downloads');
-    }
+    // 使用系统临时目录作为下载目录
+    final tempDir = await getTemporaryDirectory();
+    return path.join(tempDir.path, 'Downloads');
   }
 }
 
