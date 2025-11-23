@@ -267,18 +267,34 @@ get_release_info() {
     
     if [ -z "$GITHUB_TOKEN" ]; then
         echo -e "${YELLOW}⚠️  GITHUB_TOKEN 未设置，使用公开 API...${NC}"
-        RELEASE_INFO=$(curl -s \
-            "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${TAG_NAME}")
+        echo "  请求 URL: https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${TAG_NAME}"
+        echo "  正在请求 GitHub API..."
+        RELEASE_INFO=$(curl -s --max-time 30 --connect-timeout 10 \
+            "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${TAG_NAME}" 2>&1)
+        CURL_EXIT_CODE=$?
     else
-        RELEASE_INFO=$(curl -s -H "Authorization: token ${GITHUB_TOKEN}" \
+        echo "  正在请求 GitHub API..."
+        RELEASE_INFO=$(curl -s --max-time 30 --connect-timeout 10 \
+            -H "Authorization: token ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${TAG_NAME}")
+            "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${TAG_NAME}" 2>&1)
+        CURL_EXIT_CODE=$?
+    fi
+    
+    echo "  curl 退出码: ${CURL_EXIT_CODE}"
+    
+    # 检查 curl 是否成功
+    if [ $CURL_EXIT_CODE -ne 0 ]; then
+        echo -e "${RED}❌ 网络请求失败 (curl 退出码: ${CURL_EXIT_CODE})${NC}"
+        echo "  请检查网络连接或 GitHub API 是否可访问"
+        exit 1
     fi
     
     # 检查是否获取成功
     if ! echo "$RELEASE_INFO" | jq -e '.id' > /dev/null 2>&1; then
         echo -e "${RED}❌ 无法获取 Release 信息${NC}"
         echo "  响应: $RELEASE_INFO"
+        echo "  请检查 Release 标签 ${TAG_NAME} 是否存在"
         exit 1
     fi
     
@@ -295,6 +311,24 @@ get_release_info() {
 
 # 下载构建产物
 download_assets() {
+    # 检查是否需要跳过下载
+    if [ "${SKIP_DOWNLOAD_ASSETS:-false}" = "true" ]; then
+        echo -e "${GREEN}✅ 跳过下载构建产物（hash 已匹配）${NC}"
+        echo ""
+        echo "📋 使用已下载的 hash 文件..."
+        RELEASE_ASSETS_DIR="${TEMP_DIR}/release-assets"
+        mkdir -p "${RELEASE_ASSETS_DIR}"
+        
+        # 确保 hash 文件存在（应该已经在 check_hashes_before_download 中复制了）
+        if [ ! -f "${RELEASE_ASSETS_DIR}/file_hashes.json" ]; then
+            echo -e "${YELLOW}⚠️  Hash 文件不存在，需要重新下载${NC}"
+            export SKIP_DOWNLOAD_ASSETS=false
+        else
+            echo "✅ Hash 文件已就绪"
+            return 0
+        fi
+    fi
+    
     echo -e "${BLUE}📥 下载构建产物文件...${NC}"
     
     RELEASE_ASSETS_DIR="${TEMP_DIR}/release-assets"
@@ -458,6 +492,13 @@ extract_version_from_build_tag() {
 
 # 创建 Gitee Release
 create_gitee_release() {
+    # 检查是否需要跳过创建 Release（如果 hash 匹配，Release 已存在且内容一致）
+    if [ "${SKIP_UPLOAD_ASSETS:-false}" = "true" ]; then
+        echo -e "${GREEN}✅ 跳过创建 Gitee Release（文件已是最新版本，Release 已存在）${NC}"
+        echo ""
+        return 0
+    fi
+    
     echo -e "${BLUE}🚀 创建 Gitee Release...${NC}"
     
     # URL 编码
@@ -531,10 +572,13 @@ create_gitee_release() {
         fi
     fi
     
-    # 检查并删除所有匹配tag的Release
-    echo ""
-    echo "🔍 检查并删除所有匹配tag的Gitee Release..."
-    DELETED_COUNT=0
+    # 检查并删除所有匹配tag的Release（仅在需要上传时）
+    if [ "${SKIP_UPLOAD_ASSETS:-false}" = "true" ]; then
+        echo "✅ Release 已存在且文件一致，跳过删除操作"
+    else
+        echo ""
+        echo "🔍 检查并删除所有匹配tag的Gitee Release..."
+        DELETED_COUNT=0
     PAGE=1
     PER_PAGE=100
     
@@ -590,13 +634,14 @@ create_gitee_release() {
             break
         fi
         PAGE=$((PAGE + 1))
-    done
-    
-    if [ "$DELETED_COUNT" -gt 0 ]; then
-        echo "✅ 共删除了 ${DELETED_COUNT} 个匹配tag的Release"
-        sleep 3
-    else
-        echo "✅ 未找到需要删除的Release，将创建新的Release"
+        done
+        
+        if [ "$DELETED_COUNT" -gt 0 ]; then
+            echo "✅ 共删除了 ${DELETED_COUNT} 个匹配tag的Release"
+            sleep 3
+        else
+            echo "✅ 未找到需要删除的Release，将创建新的Release"
+        fi
     fi
     
     # 确保标签存在
@@ -684,8 +729,380 @@ create_gitee_release() {
     echo ""
 }
 
+# 提前检查两个平台的 hash 列表，决定是否需要下载和上传
+check_hashes_before_download() {
+    echo -e "${BLUE}🔍 提前检查两个平台的 hash 列表...${NC}"
+    
+    # URL 编码
+    GITEE_REPO_OWNER_ENCODED=$(printf '%s' "${GITEE_REPO_OWNER}" | jq -sRr @uri)
+    GITEE_REPO_NAME_ENCODED=$(printf '%s' "${GITEE_REPO_NAME}" | jq -sRr @uri)
+    TAG_NAME_ENCODED=$(printf '%s' "${TAG_NAME}" | jq -sRr @uri)
+    
+    # 初始化变量
+    export SKIP_DOWNLOAD_ASSETS=false
+    export SKIP_UPLOAD_ASSETS=false
+    
+    # 1. 检查 Gitee Release 是否存在
+    echo ""
+    echo "📋 步骤 1: 检查 Gitee Release..."
+    RELEASE_CHECK_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/tags/${TAG_NAME_ENCODED}"
+    
+    RELEASE_CHECK=$(curl -s --max-time 30 --connect-timeout 10 -w "\n%{http_code}" -X GET \
+        -H "Authorization: token ${GITEE_TOKEN}" \
+        "${RELEASE_CHECK_API_URL}")
+    
+    RELEASE_CHECK_HTTP_CODE=$(echo "$RELEASE_CHECK" | tail -n1)
+    RELEASE_CHECK_BODY=$(echo "$RELEASE_CHECK" | sed '$d')
+    
+    if [ "$RELEASE_CHECK_HTTP_CODE" != "200" ]; then
+        echo "✅ Gitee Release 不存在，需要下载和上传所有文件"
+        return 0
+    fi
+    
+    RELEASE_ID=$(echo "$RELEASE_CHECK_BODY" | jq -r '.id // empty' 2>/dev/null || echo "")
+    
+    if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" == "null" ]; then
+        echo "⚠️  无法获取 Release ID，需要下载和上传所有文件"
+        return 0
+    fi
+    
+    echo "✅ Gitee Release 已存在 (ID: ${RELEASE_ID})"
+    
+    # 2. 从 Gitee Release 下载 file_hashes.json
+    echo ""
+    echo "📋 步骤 2: 从 Gitee Release 下载 file_hashes.json..."
+    ASSETS_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}/attach_files"
+    
+    ASSETS_RESPONSE=$(curl -s --max-time 30 --connect-timeout 10 -w "\n%{http_code}" -X GET \
+        -H "Authorization: token ${GITEE_TOKEN}" \
+        "${ASSETS_API_URL}")
+    
+    ASSETS_HTTP_CODE=$(echo "$ASSETS_RESPONSE" | tail -n1)
+    ASSETS_BODY=$(echo "$ASSETS_RESPONSE" | sed '$d')
+    
+    if [ "$ASSETS_HTTP_CODE" != "200" ]; then
+        echo "⚠️  无法获取 Gitee Release assets，需要下载和上传所有文件"
+        return 0
+    fi
+    
+    GITEE_HASH_FILE_URL=$(echo "$ASSETS_BODY" | jq -r '.[] | select(.name == "file_hashes.json") | .browser_download_url' 2>/dev/null || echo "")
+    
+    if [ -z "$GITEE_HASH_FILE_URL" ]; then
+        echo "⚠️  Gitee Release 中没有 file_hashes.json，需要下载和上传所有文件"
+        return 0
+    fi
+    
+    GITEE_HASH_FILE="${TEMP_DIR}/gitee_file_hashes.json"
+    download_result=$(curl -s --max-time 30 --connect-timeout 10 -w "\n%{http_code}" -L \
+        -H "Authorization: token ${GITEE_TOKEN}" \
+        -o "$GITEE_HASH_FILE" \
+        "$GITEE_HASH_FILE_URL")
+    
+    download_http_code=$(echo "$download_result" | tail -n1)
+    
+    if [ "$download_http_code" != "200" ] || [ ! -f "$GITEE_HASH_FILE" ]; then
+        echo "⚠️  下载 Gitee file_hashes.json 失败，需要下载和上传所有文件"
+        rm -f "$GITEE_HASH_FILE"
+        return 0
+    fi
+    
+    if ! jq empty "$GITEE_HASH_FILE" 2>/dev/null; then
+        echo "⚠️  Gitee file_hashes.json 格式无效，需要下载和上传所有文件"
+        rm -f "$GITEE_HASH_FILE"
+        return 0
+    fi
+    
+    echo "✅ 已下载 Gitee file_hashes.json"
+    
+    # 3. 从 GitHub Release 下载 file_hashes.json
+    echo ""
+    echo "📋 步骤 3: 从 GitHub Release 下载 file_hashes.json..."
+    
+    # 从之前获取的 RELEASE_INFO 中查找 file_hashes.json
+    GITHUB_HASH_FILE_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name == "file_hashes.json") | .browser_download_url' 2>/dev/null || echo "")
+    
+    if [ -z "$GITHUB_HASH_FILE_URL" ]; then
+        echo "⚠️  GitHub Release 中没有 file_hashes.json，需要下载和上传所有文件"
+        rm -f "$GITEE_HASH_FILE"
+        return 0
+    fi
+    
+    GITHUB_HASH_FILE="${TEMP_DIR}/github_file_hashes.json"
+    
+    if [ -n "$GITHUB_TOKEN" ]; then
+        download_result=$(curl -s --max-time 30 --connect-timeout 10 -w "\n%{http_code}" -L \
+            -H "Authorization: token ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -o "$GITHUB_HASH_FILE" \
+            "$GITHUB_HASH_FILE_URL")
+    else
+        download_result=$(curl -s --max-time 30 --connect-timeout 10 -w "\n%{http_code}" -L \
+            -o "$GITHUB_HASH_FILE" \
+            "$GITHUB_HASH_FILE_URL")
+    fi
+    
+    download_http_code=$(echo "$download_result" | tail -n1)
+    
+    if [ "$download_http_code" != "200" ] || [ ! -f "$GITHUB_HASH_FILE" ]; then
+        echo "⚠️  下载 GitHub file_hashes.json 失败，需要下载和上传所有文件"
+        rm -f "$GITEE_HASH_FILE" "$GITHUB_HASH_FILE"
+        return 0
+    fi
+    
+    if ! jq empty "$GITHUB_HASH_FILE" 2>/dev/null; then
+        echo "⚠️  GitHub file_hashes.json 格式无效，需要下载和上传所有文件"
+        rm -f "$GITEE_HASH_FILE" "$GITHUB_HASH_FILE"
+        return 0
+    fi
+    
+    echo "✅ 已下载 GitHub file_hashes.json"
+    
+    # 4. 比较两个 hash 文件
+    echo ""
+    echo "📋 步骤 4: 比较两个平台的 hash 文件..."
+    
+    # 比较两个 JSON 文件的内容（忽略顺序）
+    GITHUB_HASH_CONTENT=$(jq -S -c . "$GITHUB_HASH_FILE" 2>/dev/null || echo "")
+    GITEE_HASH_CONTENT=$(jq -S -c . "$GITEE_HASH_FILE" 2>/dev/null || echo "")
+    
+    if [ -z "$GITHUB_HASH_CONTENT" ] || [ -z "$GITEE_HASH_CONTENT" ]; then
+        echo "⚠️  无法解析 hash 文件，需要下载和上传所有文件"
+        rm -f "$GITEE_HASH_FILE" "$GITHUB_HASH_FILE"
+        return 0
+    fi
+    
+    if [ "$GITHUB_HASH_CONTENT" = "$GITEE_HASH_CONTENT" ]; then
+        echo -e "${GREEN}✅ 两个平台的 hash 文件完全一致！${NC}"
+        echo ""
+        echo "📊 Hash 文件统计:"
+        FILE_COUNT=$(jq 'length' "$GITHUB_HASH_FILE" 2>/dev/null || echo "0")
+        echo "  文件数量: ${FILE_COUNT}"
+        echo ""
+        echo -e "${GREEN}✅ 跳过下载和上传构建产物（文件已是最新版本）${NC}"
+        export SKIP_DOWNLOAD_ASSETS=true
+        export SKIP_UPLOAD_ASSETS=true
+        
+        # 保存 GitHub hash 文件供后续使用（如果后续步骤需要）
+        RELEASE_ASSETS_DIR="${TEMP_DIR}/release-assets"
+        mkdir -p "${RELEASE_ASSETS_DIR}"
+        cp "$GITHUB_HASH_FILE" "${RELEASE_ASSETS_DIR}/file_hashes.json"
+    else
+        echo -e "${YELLOW}⚠️  两个平台的 hash 文件不一致，需要下载和上传${NC}"
+        echo "  将比较详细的差异..."
+        
+        # 显示差异（可选）
+        GITHUB_FILES=$(jq -r 'keys[]' "$GITHUB_HASH_FILE" 2>/dev/null | sort || echo "")
+        GITEE_FILES=$(jq -r 'keys[]' "$GITEE_HASH_FILE" 2>/dev/null | sort || echo "")
+        
+        if [ "$GITHUB_FILES" != "$GITEE_FILES" ]; then
+            echo "  文件列表不一致"
+        fi
+        
+        # 逐个比较文件 hash
+        ALL_MATCH=true
+        for file_name in $(echo "$GITHUB_FILES"); do
+            github_hash=$(jq -r ".[\"${file_name}\"] // empty" "$GITHUB_HASH_FILE" 2>/dev/null || echo "")
+            gitee_hash=$(jq -r ".[\"${file_name}\"] // empty" "$GITEE_HASH_FILE" 2>/dev/null || echo "")
+            
+            if [ -z "$github_hash" ] || [ -z "$gitee_hash" ] || [ "$github_hash" != "$gitee_hash" ]; then
+                if [ "$ALL_MATCH" = true ]; then
+                    echo "  不匹配的文件:"
+                    ALL_MATCH=false
+                fi
+                echo "    - ${file_name}"
+                if [ -n "$github_hash" ] && [ -n "$gitee_hash" ] && [ "$github_hash" != "$gitee_hash" ]; then
+                    echo "      GitHub: ${github_hash}"
+                    echo "      Gitee:  ${gitee_hash}"
+                fi
+            fi
+        done
+    fi
+    
+    # 清理临时文件
+    rm -f "$GITEE_HASH_FILE" "$GITHUB_HASH_FILE"
+    
+    echo ""
+}
+
+# 检查 Gitee Release 文件 hash 并决定是否需要上传
+check_gitee_release_hashes() {
+    echo -e "${BLUE}🔍 检查 Gitee Release 文件 hash...${NC}"
+    
+    # 确保 RELEASE_ASSETS_DIR 变量已定义
+    RELEASE_ASSETS_DIR="${TEMP_DIR}/release-assets"
+    
+    # URL 编码
+    GITEE_REPO_OWNER_ENCODED=$(printf '%s' "${GITEE_REPO_OWNER}" | jq -sRr @uri)
+    GITEE_REPO_NAME_ENCODED=$(printf '%s' "${GITEE_REPO_NAME}" | jq -sRr @uri)
+    TAG_NAME_ENCODED=$(printf '%s' "${TAG_NAME}" | jq -sRr @uri)
+    
+    # 检查 Release 是否存在
+    RELEASE_CHECK_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/tags/${TAG_NAME_ENCODED}"
+    
+    RELEASE_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
+        -H "Authorization: token ${GITEE_TOKEN}" \
+        "${RELEASE_CHECK_API_URL}")
+    
+    RELEASE_CHECK_HTTP_CODE=$(echo "$RELEASE_CHECK" | tail -n1)
+    RELEASE_CHECK_BODY=$(echo "$RELEASE_CHECK" | sed '$d')
+    
+    if [ "$RELEASE_CHECK_HTTP_CODE" != "200" ]; then
+        echo "✅ Gitee Release 不存在，需要上传所有文件"
+        export SKIP_UPLOAD_ASSETS=false
+        return 0
+    fi
+    
+    RELEASE_ID=$(echo "$RELEASE_CHECK_BODY" | jq -r '.id // empty' 2>/dev/null || echo "")
+    
+    if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" == "null" ]; then
+        echo "⚠️  无法获取 Release ID，需要上传所有文件"
+        export SKIP_UPLOAD_ASSETS=false
+        return 0
+    fi
+    
+    echo "✅ Gitee Release 已存在 (ID: ${RELEASE_ID})"
+    
+    # 获取 Release 的 assets 列表，查找 file_hashes.json
+    ASSETS_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}/attach_files"
+    
+    ASSETS_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+        -H "Authorization: token ${GITEE_TOKEN}" \
+        "${ASSETS_API_URL}")
+    
+    ASSETS_HTTP_CODE=$(echo "$ASSETS_RESPONSE" | tail -n1)
+    ASSETS_BODY=$(echo "$ASSETS_RESPONSE" | sed '$d')
+    
+    if [ "$ASSETS_HTTP_CODE" != "200" ]; then
+        echo "⚠️  无法获取 Release assets，需要上传所有文件"
+        export SKIP_UPLOAD_ASSETS=false
+        return 0
+    fi
+    
+    # 查找 file_hashes.json
+    HASH_FILE_URL=$(echo "$ASSETS_BODY" | jq -r '.[] | select(.name == "file_hashes.json") | .browser_download_url' 2>/dev/null || echo "")
+    
+    if [ -z "$HASH_FILE_URL" ]; then
+        echo "⚠️  Gitee Release 中没有 file_hashes.json，需要上传所有文件"
+        export SKIP_UPLOAD_ASSETS=false
+        return 0
+    fi
+    
+    echo "📥 下载 Gitee Release 的 file_hashes.json..."
+    GITEE_HASH_FILE="${TEMP_DIR}/gitee_file_hashes.json"
+    
+    download_result=$(curl -s -w "\n%{http_code}" -L \
+        -H "Authorization: token ${GITEE_TOKEN}" \
+        -o "$GITEE_HASH_FILE" \
+        "$HASH_FILE_URL")
+    
+    download_http_code=$(echo "$download_result" | tail -n1)
+    
+    if [ "$download_http_code" != "200" ] || [ ! -f "$GITEE_HASH_FILE" ]; then
+        echo "⚠️  下载 file_hashes.json 失败，需要上传所有文件"
+        export SKIP_UPLOAD_ASSETS=false
+        rm -f "$GITEE_HASH_FILE"
+        return 0
+    fi
+    
+    # 加载 Gitee 的 hash 文件
+    if ! jq empty "$GITEE_HASH_FILE" 2>/dev/null; then
+        echo "⚠️  file_hashes.json 格式无效，需要上传所有文件"
+        export SKIP_UPLOAD_ASSETS=false
+        rm -f "$GITEE_HASH_FILE"
+        return 0
+    fi
+    
+    echo "✅ 已下载 Gitee file_hashes.json"
+    
+    # 加载本地的 hash 文件
+    LOCAL_HASH_FILE="${RELEASE_ASSETS_DIR}/file_hashes.json"
+    if [ ! -f "$LOCAL_HASH_FILE" ]; then
+        echo "⚠️  本地 file_hashes.json 不存在，需要上传所有文件"
+        export SKIP_UPLOAD_ASSETS=false
+        rm -f "$GITEE_HASH_FILE"
+        return 0
+    fi
+    
+    # 比较 hash
+    echo ""
+    echo "📋 比较文件 hash..."
+    
+    # 获取需要比较的文件列表（排除 file_hashes.json 本身）
+    LOCAL_FILES=()
+    while IFS= read -r -d '' file; do
+        file_name=$(basename "$file")
+        if [ "$file_name" != "file_hashes.json" ]; then
+            LOCAL_FILES+=("$file")
+        fi
+    done < <(find "${RELEASE_ASSETS_DIR}" -type f -print0 2>/dev/null)
+    
+    ALL_MATCH=true
+    MISMATCH_FILES=()
+    
+    for local_file in "${LOCAL_FILES[@]}"; do
+        local_file_name=$(basename "$local_file")
+        
+        # 从本地 hash 文件获取 hash
+        local_hash=$(jq -r ".[\"${local_file_name}\"] // empty" "$LOCAL_HASH_FILE" 2>/dev/null || echo "")
+        
+        if [ -z "$local_hash" ]; then
+            echo "  ⚠️  本地 hash 文件中未找到: ${local_file_name}"
+            ALL_MATCH=false
+            MISMATCH_FILES+=("${local_file_name} (本地 hash 不存在)")
+            continue
+        fi
+        
+        # 从 Gitee hash 文件获取 hash
+        gitee_hash=$(jq -r ".[\"${local_file_name}\"] // empty" "$GITEE_HASH_FILE" 2>/dev/null || echo "")
+        
+        if [ -z "$gitee_hash" ]; then
+            echo "  ⚠️  Gitee hash 文件中未找到: ${local_file_name}"
+            ALL_MATCH=false
+            MISMATCH_FILES+=("${local_file_name} (Gitee hash 不存在)")
+            continue
+        fi
+        
+        # 比较 hash
+        if [ "$local_hash" = "$gitee_hash" ]; then
+            echo "  ✅ ${local_file_name}: hash 匹配"
+        else
+            echo "  ❌ ${local_file_name}: hash 不匹配"
+            echo "     本地: ${local_hash}"
+            echo "     Gitee: ${gitee_hash}"
+            ALL_MATCH=false
+            MISMATCH_FILES+=("${local_file_name}")
+        fi
+    done
+    
+    # 清理临时文件
+    rm -f "$GITEE_HASH_FILE"
+    
+    echo ""
+    if [ "$ALL_MATCH" = true ]; then
+        echo -e "${GREEN}✅ 所有文件 hash 匹配，跳过上传构建产物${NC}"
+        export SKIP_UPLOAD_ASSETS=true
+    else
+        echo -e "${YELLOW}⚠️  文件 hash 不匹配，需要上传构建产物${NC}"
+        if [ ${#MISMATCH_FILES[@]} -gt 0 ]; then
+            echo "不匹配的文件:"
+            for file in "${MISMATCH_FILES[@]}"; do
+                echo "  - ${file}"
+            done
+        fi
+        export SKIP_UPLOAD_ASSETS=false
+    fi
+    
+    echo ""
+}
+
 # 上传构建产物到 Gitee Release
 upload_assets_to_gitee() {
+    # 检查是否需要跳过上传
+    if [ "${SKIP_UPLOAD_ASSETS:-false}" = "true" ]; then
+        echo -e "${GREEN}✅ 跳过上传构建产物（文件 hash 已匹配）${NC}"
+        return 0
+    fi
+    
     echo -e "${BLUE}📤 上传构建产物到 Gitee Release...${NC}"
     
     # 获取 Release ID
@@ -855,18 +1272,14 @@ upload_assets_to_gitee() {
     echo ""
 }
 
-# 生成并同步更新配置到 Gitee
-sync_update_config() {
-    echo -e "${BLUE}🔄 生成并同步更新配置到 Gitee...${NC}"
-    
-    GITEE_REPO_OWNER_ENCODED=$(printf '%s' "${GITEE_REPO_OWNER}" | jq -sRr @uri)
-    GITEE_REPO_NAME_ENCODED=$(printf '%s' "${GITEE_REPO_NAME}" | jq -sRr @uri)
+# 生成更新配置文件（仅生成，不检查）
+generate_update_config_file() {
+    echo -e "${BLUE}📝 生成更新配置文件...${NC}"
     
     # 单点数据源原则：版本信息从 build tag 的 VERSION.yaml 获取（已在 extract_version_from_build_tag() 中设置）
-    # 不依赖 GitHub 配置文件，避免串联依赖
     if [ -z "$CLIENT_FULL_VERSION" ] || [ -z "$SERVER_FULL_VERSION" ]; then
         echo -e "${RED}❌ 版本信息未设置，请确保已调用 extract_version_from_build_tag()${NC}"
-        return
+        return 1
     fi
     
     echo "  使用从 build tag 的 VERSION.yaml 提取的版本信息（单点数据源）:"
@@ -881,17 +1294,17 @@ sync_update_config() {
     
     if [ -z "$MACOS_FILE" ] || [ ! -f "$MACOS_FILE" ]; then
         echo -e "${RED}❌ 未找到 macOS 构建产物文件${NC}"
-        return
+        return 1
     fi
     
     if [ -z "$WINDOWS_FILE" ] || [ ! -f "$WINDOWS_FILE" ]; then
         echo -e "${RED}❌ 未找到 Windows 构建产物文件${NC}"
-        return
+        return 1
     fi
     
     if [ -z "$ANDROID_FILE" ] || [ ! -f "$ANDROID_FILE" ]; then
         echo -e "${RED}❌ 未找到 Android 构建产物文件${NC}"
-        return
+        return 1
     fi
     
     echo "  找到构建产物文件:"
@@ -905,7 +1318,6 @@ sync_update_config() {
     
     # 使用统一的生成脚本生成 Gitee 配置
     CONFIG_RELEASE_TAG="config"
-    CONFIG_RELEASE_TAG_ENCODED=$(printf '%s' "${CONFIG_RELEASE_TAG}" | jq -sRr @uri)
     
     # 设置配置文件输出路径
     CONFIG_DIR="${TEMP_DIR}/config"
@@ -947,6 +1359,126 @@ sync_update_config() {
     fi
     
     echo "✅ 已生成 Gitee 更新配置文件"
+    echo ""
+}
+
+# 检查配置是否需要上传（仅检查，不上传）
+check_config_before_upload() {
+    echo -e "${BLUE}🔍 检查配置是否需要上传...${NC}"
+    
+    GITEE_REPO_OWNER_ENCODED=$(printf '%s' "${GITEE_REPO_OWNER}" | jq -sRr @uri)
+    GITEE_REPO_NAME_ENCODED=$(printf '%s' "${GITEE_REPO_NAME}" | jq -sRr @uri)
+    CONFIG_RELEASE_TAG="config"
+    CONFIG_RELEASE_TAG_ENCODED=$(printf '%s' "${CONFIG_RELEASE_TAG}" | jq -sRr @uri)
+    CONFIG_GITEE_FILE="${TEMP_DIR}/config/update_config_gitee.json"
+    
+    # 检查配置文件是否存在
+    if [ ! -f "$CONFIG_GITEE_FILE" ]; then
+        echo -e "${YELLOW}⚠️  配置文件不存在，需要生成${NC}"
+        export SKIP_UPLOAD_CONFIG=false
+        return 0
+    fi
+    
+    # 检查配置 Release 是否存在
+    RELEASE_CHECK=$(curl -s --max-time 30 --connect-timeout 10 -w "\n%{http_code}" -X GET \
+        -H "Authorization: token ${GITEE_TOKEN}" \
+        "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/tags/${CONFIG_RELEASE_TAG_ENCODED}")
+    
+    RELEASE_CHECK_HTTP_CODE=$(echo "$RELEASE_CHECK" | tail -n1)
+    RELEASE_CHECK_BODY=$(echo "$RELEASE_CHECK" | sed '$d')
+    
+    export SKIP_UPLOAD_CONFIG=false
+    
+    if [ "$RELEASE_CHECK_HTTP_CODE" = "200" ]; then
+        CONFIG_RELEASE_ID=$(echo "$RELEASE_CHECK_BODY" | jq -r '.id // empty' 2>/dev/null || echo "")
+        
+        if [ -n "$CONFIG_RELEASE_ID" ] && [ "$CONFIG_RELEASE_ID" != "null" ]; then
+            # 获取配置文件的下载 URL
+            ASSETS_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${CONFIG_RELEASE_ID}/attach_files"
+            
+            ASSETS_RESPONSE=$(curl -s --max-time 30 --connect-timeout 10 -w "\n%{http_code}" -X GET \
+                -H "Authorization: token ${GITEE_TOKEN}" \
+                "${ASSETS_API_URL}")
+            
+            ASSETS_HTTP_CODE=$(echo "$ASSETS_RESPONSE" | tail -n1)
+            ASSETS_BODY=$(echo "$ASSETS_RESPONSE" | sed '$d')
+            
+            if [ "$ASSETS_HTTP_CODE" = "200" ]; then
+                CONFIG_FILE_URL=$(echo "$ASSETS_BODY" | jq -r '.[] | select(.name == "update_config_gitee.json") | .browser_download_url' 2>/dev/null || echo "")
+                
+                if [ -n "$CONFIG_FILE_URL" ]; then
+                    echo "📥 下载 Gitee 上的更新配置..."
+                    GITEE_CONFIG_FILE="${TEMP_DIR}/gitee_update_config_gitee.json"
+                    
+                    download_result=$(curl -s --max-time 30 --connect-timeout 10 -w "\n%{http_code}" -L \
+                        -H "Authorization: token ${GITEE_TOKEN}" \
+                        -o "$GITEE_CONFIG_FILE" \
+                        "$CONFIG_FILE_URL")
+                    
+                    download_http_code=$(echo "$download_result" | tail -n1)
+                    
+                    if [ "$download_http_code" = "200" ] && [ -f "$GITEE_CONFIG_FILE" ]; then
+                        # 比较两个配置文件（忽略 lastUpdated 字段）
+                        LOCAL_CONFIG_HASH=$(jq -S -c 'del(.lastUpdated)' "$CONFIG_GITEE_FILE" 2>/dev/null | sha256sum | cut -d' ' -f1 || echo "")
+                        GITEE_CONFIG_HASH=$(jq -S -c 'del(.lastUpdated)' "$GITEE_CONFIG_FILE" 2>/dev/null | sha256sum | cut -d' ' -f1 || echo "")
+                        
+                        if [ -n "$LOCAL_CONFIG_HASH" ] && [ -n "$GITEE_CONFIG_HASH" ] && [ "$LOCAL_CONFIG_HASH" = "$GITEE_CONFIG_HASH" ]; then
+                            echo -e "${GREEN}✅ 更新配置与 Gitee 上的配置一致，跳过上传${NC}"
+                            export SKIP_UPLOAD_CONFIG=true
+                        else
+                            echo -e "${YELLOW}⚠️  更新配置与 Gitee 上的配置不一致，需要上传${NC}"
+                            if [ -n "$LOCAL_CONFIG_HASH" ] && [ -n "$GITEE_CONFIG_HASH" ]; then
+                                echo "  本地配置 hash: ${LOCAL_CONFIG_HASH}"
+                                echo "  Gitee 配置 hash: ${GITEE_CONFIG_HASH}"
+                            fi
+                            export SKIP_UPLOAD_CONFIG=false
+                        fi
+                        
+                        rm -f "$GITEE_CONFIG_FILE"
+                    else
+                        echo "⚠️  下载 Gitee 配置失败，需要上传"
+                        export SKIP_UPLOAD_CONFIG=false
+                    fi
+                else
+                    echo "⚠️  Gitee Release 中没有找到 update_config_gitee.json，需要上传"
+                    export SKIP_UPLOAD_CONFIG=false
+                fi
+            else
+                echo "⚠️  无法获取 Gitee Release assets，需要上传"
+                export SKIP_UPLOAD_CONFIG=false
+            fi
+        else
+            echo "⚠️  无法获取配置 Release ID，需要上传"
+            export SKIP_UPLOAD_CONFIG=false
+        fi
+    else
+        echo "✅ Gitee 配置 Release 不存在，需要上传"
+        export SKIP_UPLOAD_CONFIG=false
+    fi
+    
+    echo ""
+}
+
+# 上传更新配置到 Gitee（仅上传，不检查）
+upload_update_config() {
+    echo -e "${BLUE}📤 上传更新配置到 Gitee...${NC}"
+    
+    # 检查是否需要跳过上传
+    if [ "${SKIP_UPLOAD_CONFIG:-false}" = "true" ]; then
+        echo -e "${GREEN}✅ 跳过上传更新配置（配置已是最新）${NC}"
+        return 0
+    fi
+    
+    GITEE_REPO_OWNER_ENCODED=$(printf '%s' "${GITEE_REPO_OWNER}" | jq -sRr @uri)
+    GITEE_REPO_NAME_ENCODED=$(printf '%s' "${GITEE_REPO_NAME}" | jq -sRr @uri)
+    CONFIG_RELEASE_TAG="config"
+    CONFIG_RELEASE_TAG_ENCODED=$(printf '%s' "${CONFIG_RELEASE_TAG}" | jq -sRr @uri)
+    CONFIG_GITEE_FILE="${TEMP_DIR}/config/update_config_gitee.json"
+    
+    if [ ! -f "$CONFIG_GITEE_FILE" ]; then
+        echo -e "${RED}❌ 配置文件不存在: ${CONFIG_GITEE_FILE}${NC}"
+        return 1
+    fi
     
     # 获取 master 分支的最新 commit SHA
     echo ""
@@ -978,17 +1510,23 @@ sync_update_config() {
         RELEASE_ID=$(echo "$RELEASE_CHECK_BODY" | jq -r '.id // empty' 2>/dev/null || echo "")
         if [ -n "$RELEASE_ID" ] && [ "$RELEASE_ID" != "null" ]; then
             echo "✅ Release ${CONFIG_RELEASE_TAG} 已存在 (ID: ${RELEASE_ID})"
-            echo "🗑️  删除现有配置 Release..."
             
-            DELETE_RELEASE_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
-                -H "Authorization: token ${GITEE_TOKEN}" \
-                "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}")
-            
-            DELETE_RELEASE_HTTP_CODE=$(echo "$DELETE_RELEASE_RESPONSE" | tail -n1)
-            
-            if [ "$DELETE_RELEASE_HTTP_CODE" = "204" ] || [ "$DELETE_RELEASE_HTTP_CODE" = "200" ]; then
-                echo "✅ 已删除现有配置 Release"
-                sleep 2
+            # 如果配置也匹配，跳过删除
+            if [ "${SKIP_UPLOAD_CONFIG:-false}" = "true" ]; then
+                echo "✅ 配置已是最新版本，跳过删除操作"
+            else
+                echo "🗑️  删除现有配置 Release..."
+                
+                DELETE_RELEASE_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
+                    -H "Authorization: token ${GITEE_TOKEN}" \
+                    "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}")
+                
+                DELETE_RELEASE_HTTP_CODE=$(echo "$DELETE_RELEASE_RESPONSE" | tail -n1)
+                
+                if [ "$DELETE_RELEASE_HTTP_CODE" = "204" ] || [ "$DELETE_RELEASE_HTTP_CODE" = "200" ]; then
+                    echo "✅ 已删除现有配置 Release"
+                    sleep 2
+                fi
             fi
         fi
     fi
@@ -1025,7 +1563,13 @@ sync_update_config() {
         echo "✅ Tag ${CONFIG_RELEASE_TAG} 已存在"
     fi
     
-    # 创建新 Release
+    # 创建新 Release（仅在需要上传时）
+    if [ "${SKIP_UPLOAD_CONFIG:-false}" = "true" ]; then
+        echo ""
+        echo "✅ 配置 Release 已存在且配置一致，跳过创建和上传"
+        return 0
+    fi
+    
     echo ""
     echo "📝 创建配置 Release..."
     
@@ -1058,9 +1602,32 @@ sync_update_config() {
         echo -e "${GREEN}✅ Release 创建成功 (ID: ${RELEASE_ID})${NC}"
     else
         ERROR_MSG=$(echo "$CREATE_RELEASE_BODY_RESPONSE" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$CREATE_RELEASE_BODY_RESPONSE")
-        echo -e "${RED}❌ Release 创建失败 (HTTP ${CREATE_RELEASE_HTTP_CODE})${NC}"
-        echo "  错误信息: ${ERROR_MSG}"
-        exit 1
+        # 如果 Release 已存在，可能是之前的删除操作还没完成，尝试获取现有的 Release ID
+        if echo "$ERROR_MSG" | grep -qi "已存在\|already exists\|duplicate"; then
+            echo "⚠️  Release 已存在，尝试获取现有 Release ID..."
+            RELEASE_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
+                -H "Authorization: token ${GITEE_TOKEN}" \
+                "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/tags/${CONFIG_RELEASE_TAG_ENCODED}")
+            RELEASE_CHECK_HTTP_CODE=$(echo "$RELEASE_CHECK" | tail -n1)
+            RELEASE_CHECK_BODY=$(echo "$RELEASE_CHECK" | sed '$d')
+            if [ "$RELEASE_CHECK_HTTP_CODE" = "200" ]; then
+                RELEASE_ID=$(echo "$RELEASE_CHECK_BODY" | jq -r '.id // empty' 2>/dev/null || echo "")
+                if [ -n "$RELEASE_ID" ] && [ "$RELEASE_ID" != "null" ]; then
+                    echo "✅ 找到现有 Release (ID: ${RELEASE_ID})"
+                else
+                    echo -e "${RED}❌ Release 创建失败且无法获取现有 Release ID${NC}"
+                    exit 1
+                fi
+            else
+                echo -e "${RED}❌ Release 创建失败 (HTTP ${CREATE_RELEASE_HTTP_CODE})${NC}"
+                echo "  错误信息: ${ERROR_MSG}"
+                exit 1
+            fi
+        else
+            echo -e "${RED}❌ Release 创建失败 (HTTP ${CREATE_RELEASE_HTTP_CODE})${NC}"
+            echo "  错误信息: ${ERROR_MSG}"
+            exit 1
+        fi
     fi
     
     # 上传配置文件到 Release
@@ -1145,15 +1712,81 @@ main() {
     echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
+    # ==========================================
+    # 第一阶段：初始化和准备
+    # ==========================================
     check_env
     extract_release_tag "$input_version"
     get_release_info
-    download_assets
     extract_version_from_build_tag
-    create_gitee_release
-    upload_assets_to_gitee
-    sync_update_config
     
+    # ==========================================
+    # 第二阶段：检查阶段（所有检查操作）
+    # ==========================================
+    echo ""
+    echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BOLD}🔍 检查阶段${NC}"
+    echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    
+    # 1. 检查文件 hash（构建产物）
+    #    这个函数会下载 GitHub 和 Gitee 的 file_hashes.json 进行比较
+    #    如果 hash 匹配，设置 SKIP_DOWNLOAD_ASSETS=true 和 SKIP_UPLOAD_ASSETS=true
+    check_hashes_before_download
+    
+    # 2. 下载构建产物（如果需要）
+    #    注意：即使 hash 匹配，也需要下载文件才能生成配置文件
+    #    但如果 hash 匹配，后续不会上传这些文件
+    if [ "${SKIP_DOWNLOAD_ASSETS:-false}" = "false" ]; then
+        download_assets
+    else
+        # Hash 匹配，跳过下载，但需要确保文件已存在（用于生成配置）
+        # 如果文件不存在，仍然需要下载
+        RELEASE_ASSETS_DIR="${TEMP_DIR}/release-assets"
+        MACOS_FILE=$(find "${RELEASE_ASSETS_DIR}" -name "HelloKnightRCC_macos_*.zip" 2>/dev/null | head -1)
+        WINDOWS_FILE=$(find "${RELEASE_ASSETS_DIR}" -name "HelloKnightRCC_windows_*.zip" 2>/dev/null | head -1)
+        ANDROID_FILE=$(find "${RELEASE_ASSETS_DIR}" -name "helloknightrcc_server_android_*.zip" 2>/dev/null | head -1)
+        
+        if [ -z "$MACOS_FILE" ] || [ -z "$WINDOWS_FILE" ] || [ -z "$ANDROID_FILE" ]; then
+            echo -e "${YELLOW}⚠️  Hash 匹配但文件不存在，需要下载文件以生成配置${NC}"
+            export SKIP_DOWNLOAD_ASSETS=false
+            download_assets
+        else
+            echo -e "${GREEN}✅ Hash 匹配且文件已存在，跳过下载${NC}"
+        fi
+    fi
+    
+    # 3. 生成更新配置文件
+    #    需要文件存在才能生成配置
+    generate_update_config_file
+    
+    # 4. 检查配置 hash
+    #    比较本地生成的配置和 Gitee 上的配置
+    #    如果匹配，设置 SKIP_UPLOAD_CONFIG=true
+    check_config_before_upload
+    
+    # ==========================================
+    # 第三阶段：上传阶段（所有上传操作）
+    # ==========================================
+    echo ""
+    echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BOLD}📤 上传阶段${NC}"
+    echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    
+    # 1. 创建 Gitee Release（如果需要）
+    #    如果 SKIP_UPLOAD_ASSETS=true，跳过删除和创建 Release
+    create_gitee_release
+    
+    # 2. 上传构建产物（如果需要）
+    #    如果 SKIP_UPLOAD_ASSETS=true，跳过上传
+    upload_assets_to_gitee
+    
+    # 3. 上传更新配置（如果需要）
+    #    如果 SKIP_UPLOAD_CONFIG=true，跳过上传
+    upload_update_config
+    
+    echo ""
     echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${GREEN}✅ 同步完成！${NC}"
     echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

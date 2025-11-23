@@ -41,12 +41,13 @@ def calculate_file_hash(file_path: str) -> str:
     return sha256_hash.hexdigest().lower()
 
 
-def calculate_hashes_for_directory(input_dir: str) -> dict:
+def calculate_hashes_for_directory(input_dir: str, exclude_files: list = None) -> dict:
     """
     计算目录中所有文件的 hash
     
     Args:
         input_dir: 输入目录路径
+        exclude_files: 要排除的文件路径列表（绝对路径或相对路径）
         
     Returns:
         字典，key 是文件名，value 是 hash 值
@@ -55,12 +56,37 @@ def calculate_hashes_for_directory(input_dir: str) -> dict:
         raise NotADirectoryError(f"目录不存在: {input_dir}")
     
     file_hashes = {}
+    exclude_files = exclude_files or []
+    
+    # 将排除文件列表转换为绝对路径
+    exclude_abs_paths = set()
+    input_dir_abs = os.path.abspath(input_dir)
+    
+    for exclude_file in exclude_files:
+        if os.path.isabs(exclude_file):
+            exclude_abs_paths.add(os.path.abspath(exclude_file))
+        else:
+            exclude_abs_paths.add(os.path.abspath(os.path.join(input_dir, exclude_file)))
+    
+    # 获取脚本自身的路径（用于排除）
+    script_path = os.path.abspath(__file__)
+    exclude_abs_paths.add(script_path)
     
     # 遍历目录中的所有文件
+    skipped_count = 0
+    error_count = 0
+    
     for root, dirs, files in os.walk(input_dir):
         for file_name in files:
             file_path = os.path.join(root, file_name)
+            file_abs_path = os.path.abspath(file_path)
             relative_path = os.path.relpath(file_path, input_dir)
+            
+            # 跳过排除的文件
+            if file_abs_path in exclude_abs_paths:
+                skipped_count += 1
+                print(f"⏭️  跳过文件: {relative_path} (在排除列表中)")
+                continue
             
             # 只处理文件，跳过目录
             if os.path.isfile(file_path):
@@ -69,9 +95,17 @@ def calculate_hashes_for_directory(input_dir: str) -> dict:
                     # 使用相对路径作为 key（相对于输入目录）
                     file_hashes[relative_path] = file_hash
                     print(f"计算 hash: {relative_path} -> {file_hash}")
+                except PermissionError as e:
+                    print(f"⚠️  权限不足，跳过文件: {relative_path} - {e}", file=sys.stderr)
+                    error_count += 1
                 except Exception as e:
-                    print(f"❌ 计算文件 hash 失败: {relative_path} - {e}", file=sys.stderr)
-                    sys.exit(1)
+                    print(f"⚠️  计算文件 hash 失败，跳过: {relative_path} - {e}", file=sys.stderr)
+                    error_count += 1
+    
+    if skipped_count > 0:
+        print(f"\n📊 统计: 跳过了 {skipped_count} 个文件")
+    if error_count > 0:
+        print(f"⚠️  警告: {error_count} 个文件计算失败", file=sys.stderr)
     
     return file_hashes
 
@@ -106,7 +140,23 @@ def main():
     try:
         # 计算 hash
         print(f"📁 输入目录: {os.path.abspath(args.input_dir)}")
-        file_hashes = calculate_hashes_for_directory(args.input_dir)
+        
+        # 准备排除文件列表（包括输出文件，如果它在输入目录中）
+        exclude_files = []
+        output_abs_path = os.path.abspath(args.output)
+        input_dir_abs = os.path.abspath(args.input_dir)
+        
+        # 如果输出文件在输入目录中，排除它
+        try:
+            output_rel_path = os.path.relpath(output_abs_path, input_dir_abs)
+            if not output_rel_path.startswith('..'):
+                exclude_files.append(output_rel_path)
+                print(f"⏭️  将排除输出文件: {output_rel_path}")
+        except ValueError:
+            # 输出文件不在输入目录中，不需要排除
+            pass
+        
+        file_hashes = calculate_hashes_for_directory(args.input_dir, exclude_files=exclude_files)
         
         if not file_hashes:
             print("⚠️  警告: 未找到任何文件", file=sys.stderr)
