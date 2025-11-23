@@ -645,7 +645,8 @@ jobs:
             echo "📦 [${FILE_INDEX}/${TOTAL_FILES}] 上传 ${filename}"
             echo "   文件大小: ${filesize} (${filesize_bytes} bytes)"
             echo "   文件路径: ${filepath}"
-            echo "   进度: $((FILE_INDEX * 100 / TOTAL_FILES))%"
+            echo "   整体进度: $((FILE_INDEX * 100 / TOTAL_FILES))% (${FILE_INDEX}/${TOTAL_FILES} 个文件)"
+            echo ""
             
             # 重试机制
             RETRY_COUNT=0
@@ -658,20 +659,76 @@ jobs:
               fi
               
               # 使用 curl 上传，显示进度条
-              echo "   📤 开始上传..."
+              echo "   📤 开始上传 ${filename}..."
               UPLOAD_START_TIME=$(date +%s)
               
-              # 使用 curl 的进度显示（--progress-bar 或 -#）
-              UPLOAD_RESPONSE=$(curl --progress-bar -w "\n%{http_code}" -X POST \
+              # 创建临时文件存储响应和HTTP状态码
+              TEMP_RESPONSE_FILE=$(mktemp)
+              TEMP_HTTP_CODE_FILE=$(mktemp)
+              
+              # 启动后台进程定期输出状态（防止日志看起来卡住）
+              (
+                while true; do
+                  sleep 10
+                  ELAPSED=$(($(date +%s) - UPLOAD_START_TIME))
+                  echo "   ⏳ 仍在上传中... (已用时: ${ELAPSED}秒)"
+                done
+              ) &
+              STATUS_PID=$!
+              
+              # 使用 curl 上传
+              # --progress-bar: 进度条输出到 stderr（会实时显示在日志中）
+              # -w "%{http_code}": HTTP 状态码输出到 stdout
+              # -o: 响应体保存到文件
+              # --max-time: 设置最大超时时间（文件大小/100KB/s + 60秒缓冲）
+              MAX_TIMEOUT=$((filesize_bytes / 102400 + 300))
+              if [ $MAX_TIMEOUT -lt 300 ]; then
+                MAX_TIMEOUT=300
+              fi
+              if [ $MAX_TIMEOUT -gt 1800 ]; then
+                MAX_TIMEOUT=1800
+              fi
+              
+              echo "   ⏳ 上传中（最大超时: ${MAX_TIMEOUT}秒，进度条会实时显示）..."
+              
+              curl --progress-bar --show-error \
+                --max-time ${MAX_TIMEOUT} \
+                -w "%{http_code}" \
+                -o "${TEMP_RESPONSE_FILE}" \
+                -X POST \
                 -H "Authorization: token ${GITEE_TOKEN}" \
                 -F "file=@${file}" \
-                "${UPLOAD_API_BASE_URL}" 2>&1)
+                "${UPLOAD_API_BASE_URL}" \
+                > "${TEMP_HTTP_CODE_FILE}" 2>&1
+              
+              CURL_EXIT_CODE=$?
+              
+              # 停止状态输出进程
+              kill $STATUS_PID 2>/dev/null || true
+              wait $STATUS_PID 2>/dev/null || true
+              
+              # 读取 HTTP 状态码
+              HTTP_CODE=$(cat "${TEMP_HTTP_CODE_FILE}" 2>/dev/null | grep -oE '[0-9]{3}' | tail -n1 || echo "")
+              
+              # 读取响应体
+              RESPONSE_BODY=$(cat "${TEMP_RESPONSE_FILE}" 2>/dev/null || echo "")
+              
+              # 清理临时文件
+              rm -f "${TEMP_RESPONSE_FILE}" "${TEMP_HTTP_CODE_FILE}"
               
               UPLOAD_END_TIME=$(date +%s)
               UPLOAD_DURATION=$((UPLOAD_END_TIME - UPLOAD_START_TIME))
               
-              HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
-              RESPONSE_BODY=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+              # 检查 curl 退出码
+              if [ $CURL_EXIT_CODE -eq 28 ]; then
+                echo "   ❌ 上传超时（超过 ${MAX_TIMEOUT} 秒）"
+                HTTP_CODE="TIMEOUT"
+              elif [ $CURL_EXIT_CODE -ne 0 ]; then
+                echo "   ⚠️ curl 退出码: ${CURL_EXIT_CODE}"
+              fi
+              
+              echo ""
+              echo "   ✅ 上传完成（耗时: ${UPLOAD_DURATION}秒）"
               
               echo ""
               echo "   HTTP 状态码: ${HTTP_CODE}"
@@ -994,17 +1051,34 @@ jobs:
               echo "  📤 开始上传..."
               UPLOAD_START_TIME=$(date +%s)
               
-              UPLOAD_RESPONSE=$(curl --progress-bar -w "\n%{http_code}" -X POST \
+              # 创建临时文件存储响应
+              TEMP_RESPONSE_FILE=$(mktemp)
+              
+              # 使用 curl 上传
+              # --progress-bar: 进度条输出到 stderr（GitHub Actions 会自动显示）
+              # -w "%{http_code}": HTTP 状态码追加到 stdout 最后
+              # -o: 响应体保存到文件
+              # 进度条会实时显示在日志中（stderr）
+              UPLOAD_OUTPUT=$(curl --progress-bar --show-error \
+                -w "\n%{http_code}" \
+                -o "${TEMP_RESPONSE_FILE}" \
+                -X POST \
                 -H "Authorization: token ${GITEE_TOKEN}" \
                 -F "file=@update_config_gitee.json" \
                 -F "name=update_config_gitee.json" \
                 "${UPLOAD_API_URL}" 2>&1)
               
+              # 提取 HTTP 状态码（最后一行）
+              UPLOAD_HTTP_CODE=$(echo "$UPLOAD_OUTPUT" | tail -n1 | grep -oE '[0-9]{3}' | tail -n1 || echo "")
+              
+              # 读取响应体
+              UPLOAD_BODY_RESPONSE=$(cat "${TEMP_RESPONSE_FILE}" 2>/dev/null || echo "")
+              
+              # 清理临时文件
+              rm -f "${TEMP_RESPONSE_FILE}"
+              
               UPLOAD_END_TIME=$(date +%s)
               UPLOAD_DURATION=$((UPLOAD_END_TIME - UPLOAD_START_TIME))
-              
-              UPLOAD_HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
-              UPLOAD_BODY_RESPONSE=$(echo "$UPLOAD_RESPONSE" | sed '$d')
               
               echo ""
               echo "  响应 HTTP 状态码: ${UPLOAD_HTTP_CODE}"
