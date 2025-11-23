@@ -782,8 +782,33 @@ jobs:
       - name: Set job outputs
         id: set_outputs
         run: |
-          echo "release_tag=${{ steps.get_versions.outputs.TAG_VERSION }}" >> $GITHUB_OUTPUT
-          echo "release_version=${{ steps.get_versions.outputs.RELEASE_VERSION }}" >> $GITHUB_OUTPUT
+          TAG_VERSION="${{ steps.get_versions.outputs.TAG_VERSION }}"
+          RELEASE_VERSION="${{ steps.get_versions.outputs.RELEASE_VERSION }}"
+          
+          # 调试信息
+          echo "🔍 设置 job 输出:"
+          echo "  TAG_VERSION: ${TAG_VERSION}"
+          echo "  RELEASE_VERSION: ${RELEASE_VERSION}"
+          
+          # 确保 TAG_VERSION 不为空
+          if [ -z "$TAG_VERSION" ] || [ "$TAG_VERSION" == "" ]; then
+            echo "⚠️  警告: TAG_VERSION 为空，尝试从 find_builds 获取..."
+            TAG_VERSION="${{ steps.find_builds.outputs.release_tag }}"
+            echo "  从 find_builds 获取: ${TAG_VERSION}"
+          fi
+          
+          # 如果还是为空，报错
+          if [ -z "$TAG_VERSION" ] || [ "$TAG_VERSION" == "" ]; then
+            echo "❌ 错误: 无法获取 release_tag"
+            exit 1
+          fi
+          
+          echo "release_tag=${TAG_VERSION}" >> $GITHUB_OUTPUT
+          echo "release_version=${RELEASE_VERSION}" >> $GITHUB_OUTPUT
+          
+          echo "✅ 输出已设置:"
+          echo "  release_tag: ${TAG_VERSION}"
+          echo "  release_version: ${RELEASE_VERSION}"
 
   sync-to-gitee:
     name: Sync Release to Gitee

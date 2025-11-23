@@ -7,14 +7,14 @@ on:
   workflow_call:  # 允许被其他工作流调用
     inputs:
       release_tag:
-        description: '要同步的 Release 标签（例如：v1.0.7）'
-        required: true
+        description: '要同步的 Release 标签（例如：v1.0.7），留空则使用最新 Release'
+        required: false
         type: string
   workflow_dispatch:  # 允许手动触发
     inputs:
       release_tag:
-        description: '要同步的 Release 标签（例如：v1.0.7）'
-        required: true
+        description: '要同步的 Release 标签（例如：v1.0.7），留空则使用最新 Release'
+        required: false
         type: string
 
 jobs:
@@ -81,10 +81,12 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_call" ]; then
             TAG_NAME="${{ inputs.release_tag }}"
             echo "📌 工作流调用: 使用标签 ${TAG_NAME}"
+            echo "  [调试] inputs.release_tag 值: '${{ inputs.release_tag }}'"
+            echo "  [调试] TAG_NAME 值: '${TAG_NAME}'"
           # 如果是手动触发，使用输入的 release_tag
           elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             TAG_NAME="${{ github.event.inputs.release_tag }}"
-            echo "📌 手动触发: 使用标签 ${TAG_NAME}"
+            echo "📌 手动触发: 使用标签 ${TAG_NAME:-（未提供，将使用最新）}"
           else
             # 从 release 事件获取 tag 名称
             # release 事件的 GITHUB_REF 格式可能是 refs/tags/v1.0.0
@@ -108,9 +110,27 @@ jobs:
             fi
           fi
           
+          # 如果 TAG_NAME 为空，从 GitHub API 获取最新 Release
+          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" == "" ]; then
+            echo "📡 未提供 Release 标签，从 GitHub API 获取最新 Release..."
+            TAG_NAME=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/latest" | \
+              jq -r '.tag_name // empty')
+            
+            if [ -n "$TAG_NAME" ] && [ "$TAG_NAME" != "null" ] && [ "$TAG_NAME" != "" ]; then
+              echo "✅ 获取到最新 Release 标签: ${TAG_NAME}"
+            else
+              echo "❌ 无法从 GitHub API 获取最新 Release 标签"
+              echo "  请手动指定 release_tag 参数，或确保仓库中至少有一个已发布的 Release"
+              exit 1
+            fi
+          fi
+          
           # 确保 TAG_NAME 不为空
-          if [ -z "$TAG_NAME" ]; then
+          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" == "" ] || [ "$TAG_NAME" == "null" ]; then
             echo "❌ 无法获取 Release 标签"
+            echo "  请手动指定 release_tag 参数，或确保仓库中至少有一个已发布的 Release"
             exit 1
           fi
           
