@@ -373,27 +373,52 @@ jobs:
           fi
           echo "  默认分支: ${REPO_DEFAULT_BRANCH}"
           
-          # 获取默认分支的最新 commit SHA（用于创建标签和 Release，不需要检查 GitHub commit）
+          # 获取tag对应的commit SHA（用于创建Release，确保Release路径正确）
           echo ""
-          echo "🔍 获取默认分支 ${REPO_DEFAULT_BRANCH} 的最新 commit..."
-          BRANCH_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/branches/${REPO_DEFAULT_BRANCH}"
-          BRANCH_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
+          echo "🔍 获取tag ${TAG_NAME} 对应的commit SHA..."
+          TAG_INFO_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/tags/${TAG_NAME_ENCODED}"
+          TAG_INFO=$(curl -s -w "\n%{http_code}" -X GET \
             -H "Authorization: token ${GITEE_TOKEN}" \
-            "${BRANCH_API_URL}")
+            "${TAG_INFO_API_URL}")
           
-          BRANCH_CHECK_HTTP_CODE=$(echo "$BRANCH_CHECK" | tail -n1)
-          if [ "$BRANCH_CHECK_HTTP_CODE" = "200" ]; then
-            BRANCH_CHECK_BODY=$(echo "$BRANCH_CHECK" | sed '$d')
-            TARGET_COMMITISH=$(echo "$BRANCH_CHECK_BODY" | jq -r '.commit.sha // empty' 2>/dev/null || echo "")
-            if [ -z "$TARGET_COMMITISH" ] || [ "$TARGET_COMMITISH" == "null" ]; then
-              echo "⚠️ 无法获取默认分支的 commit SHA，将使用分支名"
-              TARGET_COMMITISH="${REPO_DEFAULT_BRANCH}"
+          TAG_INFO_HTTP_CODE=$(echo "$TAG_INFO" | tail -n1)
+          TAG_INFO_BODY=$(echo "$TAG_INFO" | sed '$d')
+          
+          if [ "$TAG_INFO_HTTP_CODE" = "200" ]; then
+            TARGET_COMMITISH=$(echo "$TAG_INFO_BODY" | jq -r '.commit.sha // empty' 2>/dev/null || echo "")
+            if [ -n "$TARGET_COMMITISH" ] && [ "$TARGET_COMMITISH" != "null" ]; then
+              echo "✅ 使用tag ${TAG_NAME} 对应的commit: ${TARGET_COMMITISH:0:7}..."
             else
-              echo "✅ 使用默认分支 ${REPO_DEFAULT_BRANCH} 的最新 commit: ${TARGET_COMMITISH:0:7}..."
+              echo "⚠️ 无法从tag获取commit SHA，尝试使用默认分支"
+              TARGET_COMMITISH=""
             fi
           else
-            echo "⚠️ 无法获取默认分支信息，将使用分支名"
-            TARGET_COMMITISH="${REPO_DEFAULT_BRANCH}"
+            echo "⚠️ 无法获取tag信息，尝试使用默认分支"
+            TARGET_COMMITISH=""
+          fi
+          
+          # 如果无法从tag获取commit，则使用默认分支的最新commit
+          if [ -z "$TARGET_COMMITISH" ] || [ "$TARGET_COMMITISH" == "null" ]; then
+            echo "🔍 获取默认分支 ${REPO_DEFAULT_BRANCH} 的最新 commit..."
+            BRANCH_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/branches/${REPO_DEFAULT_BRANCH}"
+            BRANCH_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              "${BRANCH_API_URL}")
+            
+            BRANCH_CHECK_HTTP_CODE=$(echo "$BRANCH_CHECK" | tail -n1)
+            if [ "$BRANCH_CHECK_HTTP_CODE" = "200" ]; then
+              BRANCH_CHECK_BODY=$(echo "$BRANCH_CHECK" | sed '$d')
+              TARGET_COMMITISH=$(echo "$BRANCH_CHECK_BODY" | jq -r '.commit.sha // empty' 2>/dev/null || echo "")
+              if [ -z "$TARGET_COMMITISH" ] || [ "$TARGET_COMMITISH" == "null" ]; then
+                echo "⚠️ 无法获取默认分支的 commit SHA，将使用分支名"
+                TARGET_COMMITISH="${REPO_DEFAULT_BRANCH}"
+              else
+                echo "✅ 使用默认分支 ${REPO_DEFAULT_BRANCH} 的最新 commit: ${TARGET_COMMITISH:0:7}..."
+              fi
+            else
+              echo "⚠️ 无法获取默认分支信息，将使用分支名"
+              TARGET_COMMITISH="${REPO_DEFAULT_BRANCH}"
+            fi
           fi
           echo ""
           
@@ -452,57 +477,77 @@ jobs:
             echo "✅ 标签 ${TAG_NAME} 已存在"
           fi
           
-          # 检查 Release 是否已存在，如果存在则删除（覆盖创建策略）
-          echo "🔍 检查 Gitee Release 是否已存在..."
-          RELEASE_CHECK_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/tags/${TAG_NAME_ENCODED}"
-          echo "  API URL: ${RELEASE_CHECK_API_URL}"
+          # 检查并删除所有匹配tag的Release（覆盖创建策略）
+          echo "🔍 检查并删除所有匹配tag的Gitee Release..."
+          DELETED_COUNT=0
+          PAGE=1
+          PER_PAGE=100
           
-          EXISTING_RELEASE=$(curl -s -w "\n%{http_code}" -X GET \
-            -H "Authorization: token ${GITEE_TOKEN}" \
-            "${RELEASE_CHECK_API_URL}")
-          
-          EXISTING_HTTP_CODE=$(echo "$EXISTING_RELEASE" | tail -n1)
-          EXISTING_BODY=$(echo "$EXISTING_RELEASE" | sed '$d')
-          
-          echo "  HTTP 状态码: ${EXISTING_HTTP_CODE}"
-          
-          if [ "$EXISTING_HTTP_CODE" = "200" ] && echo "${EXISTING_BODY}" | grep -q '"id"'; then
-            RELEASE_ID=$(echo "${EXISTING_BODY}" | jq -r '.id // empty')
-            RELEASE_EXISTING_NAME=$(echo "${EXISTING_BODY}" | jq -r '.name // empty' 2>/dev/null || echo "")
-            RELEASE_EXISTING_CREATED=$(echo "${EXISTING_BODY}" | jq -r '.created_at // empty' 2>/dev/null || echo "")
-            echo "⚠️ Gitee Release 已存在 (ID: ${RELEASE_ID})，将删除后重新创建..."
-            if [ -n "$RELEASE_EXISTING_NAME" ]; then
-              echo "  现有 Release 名称: ${RELEASE_EXISTING_NAME}"
-            fi
-            if [ -n "$RELEASE_EXISTING_CREATED" ]; then
-              echo "  创建时间: ${RELEASE_EXISTING_CREATED}"
-            fi
-            
-            # 删除现有 Release（覆盖创建策略）
-            DELETE_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}"
-            echo "  删除 API URL: ${DELETE_API_URL}"
-            
-            DELETE_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
+          while true; do
+            # 获取Release列表
+            RELEASES_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases?page=${PAGE}&per_page=${PER_PAGE}"
+            RELEASES_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
               -H "Authorization: token ${GITEE_TOKEN}" \
-              "${DELETE_API_URL}")
+              "${RELEASES_API_URL}")
             
-            DELETE_HTTP_CODE=$(echo "$DELETE_RESPONSE" | tail -n1)
-            DELETE_BODY=$(echo "$DELETE_RESPONSE" | sed '$d')
+            RELEASES_HTTP_CODE=$(echo "$RELEASES_RESPONSE" | tail -n1)
+            RELEASES_BODY=$(echo "$RELEASES_RESPONSE" | sed '$d')
             
-            echo "  删除响应 HTTP 状态码: ${DELETE_HTTP_CODE}"
-            
-            if [ "$DELETE_HTTP_CODE" = "204" ] || [ "$DELETE_HTTP_CODE" = "200" ]; then
-              echo "✅ 已删除现有 Release (ID: ${RELEASE_ID})"
-              # 等待一下，确保删除操作完成
-              sleep 2
-            else
-              ERROR_MSG=$(echo "$DELETE_BODY" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$DELETE_BODY")
-              echo "⚠️ 删除现有 Release 失败 (HTTP ${DELETE_HTTP_CODE})，但继续创建新 Release"
-              echo "  错误信息: ${ERROR_MSG}"
-              # 继续执行，尝试创建新 Release（可能会因为标签冲突而失败，但先尝试）
+            if [ "$RELEASES_HTTP_CODE" != "200" ]; then
+              echo "⚠️ 获取Release列表失败 (HTTP ${RELEASES_HTTP_CODE})，跳过删除步骤"
+              break
             fi
+            
+            # 解析Release列表，查找匹配tag的Release
+            MATCHING_RELEASES=$(echo "$RELEASES_BODY" | jq -r ".[] | select(.tag_name == \"${TAG_NAME}\") | .id" 2>/dev/null || echo "")
+            
+            if [ -z "$MATCHING_RELEASES" ]; then
+              # 当前页没有匹配的Release，检查是否还有下一页
+              RELEASE_COUNT=$(echo "$RELEASES_BODY" | jq 'length' 2>/dev/null || echo "0")
+              if [ "$RELEASE_COUNT" -lt "$PER_PAGE" ]; then
+                break
+              fi
+              PAGE=$((PAGE + 1))
+              continue
+            fi
+            
+            # 删除所有匹配的Release（使用数组避免子shell问题）
+            while IFS= read -r RELEASE_ID; do
+              if [ -n "$RELEASE_ID" ] && [ "$RELEASE_ID" != "null" ]; then
+                echo "  删除 Release ID: ${RELEASE_ID} (tag: ${TAG_NAME})"
+                DELETE_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}"
+                
+                DELETE_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
+                  -H "Authorization: token ${GITEE_TOKEN}" \
+                  "${DELETE_API_URL}")
+                
+                DELETE_HTTP_CODE=$(echo "$DELETE_RESPONSE" | tail -n1)
+                
+                if [ "$DELETE_HTTP_CODE" = "204" ] || [ "$DELETE_HTTP_CODE" = "200" ]; then
+                  echo "  ✅ 已删除 Release (ID: ${RELEASE_ID})"
+                  DELETED_COUNT=$((DELETED_COUNT + 1))
+                else
+                  DELETE_BODY=$(echo "$DELETE_RESPONSE" | sed '$d')
+                  ERROR_MSG=$(echo "$DELETE_BODY" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$DELETE_BODY")
+                  echo "  ⚠️ 删除 Release ${RELEASE_ID} 失败 (HTTP ${DELETE_HTTP_CODE}): ${ERROR_MSG}"
+                fi
+              fi
+            done <<< "$MATCHING_RELEASES"
+            
+            # 检查是否还有下一页
+            RELEASE_COUNT=$(echo "$RELEASES_BODY" | jq 'length' 2>/dev/null || echo "0")
+            if [ "$RELEASE_COUNT" -lt "$PER_PAGE" ]; then
+              break
+            fi
+            PAGE=$((PAGE + 1))
+          done
+          
+          if [ "$DELETED_COUNT" -gt 0 ]; then
+            echo "✅ 共删除了 ${DELETED_COUNT} 个匹配tag的Release"
+            # 等待一下，确保删除操作完成
+            sleep 3
           else
-            echo "✅ Gitee Release 不存在，将创建新的 Release"
+            echo "✅ 未找到需要删除的Release，将创建新的Release"
           fi
           
           # 创建新 Release（覆盖创建策略：总是创建新的）
