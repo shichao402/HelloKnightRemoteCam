@@ -1,43 +1,43 @@
 {
   "client": {
-    "version": "1.0.7+7",
+    "version": "1.0.7+8",
     "versionNumber": "1.0.7",
     "platforms": {
       "macos": {
-        "version": "1.0.7+7",
+        "version": "1.0.7+8",
         "versionNumber": "1.0.7",
-        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.7/HelloKnightRCC_macos_1.0.7+7.zip",
-        "fileName": "HelloKnightRCC_macos_1.0.7+7.zip",
+        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.7/HelloKnightRCC_macos_1.0.7+8.zip",
+        "fileName": "HelloKnightRCC_macos_1.0.7+8.zip",
         "fileType": "zip",
         "platform": "macos",
-        "fileHash": "4f5cf3ad20c114d4b5052cd72915e75aa506666978e804af1a54a078525c6681"
+        "fileHash": "6a9db62aa21336fd855dddbc707688834819db0e6c398139fa944a79a683b41c"
       },
       "windows": {
-        "version": "1.0.7+7",
+        "version": "1.0.7+8",
         "versionNumber": "1.0.7",
-        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.7/HelloKnightRCC_windows_1.0.7+7.zip",
-        "fileName": "HelloKnightRCC_windows_1.0.7+7.zip",
+        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.7/HelloKnightRCC_windows_1.0.7+8.zip",
+        "fileName": "HelloKnightRCC_windows_1.0.7+8.zip",
         "fileType": "zip",
         "platform": "windows",
-        "fileHash": "ca56df7ac7f6d36063d5a092e63669074f73b1bd1763adbffd6eea1a73bef51a"
+        "fileHash": "59daf66e41a030fdb9e21cd13b33a1565ac973a81f36a7319c952ec434d13fac"
       }
     }
   },
   "server": {
-    "version": "1.0.7+7",
+    "version": "1.0.7+8",
     "versionNumber": "1.0.7",
     "platforms": {
       "android": {
-        "version": "1.0.7+7",
+        "version": "1.0.7+8",
         "versionNumber": "1.0.7",
-        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.7/helloknightrcc_server_android_1.0.7+7.zip",
-        "fileName": "helloknightrcc_server_android_1.0.7+7.zip",
+        "downloadUrl": "https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.7/helloknightrcc_server_android_1.0.7+8.zip",
+        "fileName": "helloknightrcc_server_android_1.0.7+8.zip",
         "fileType": "zip",
         "platform": "android",
-        "fileHash": "3a5691df0d09c38764f6b904fb65d9567db7359b1dace2549e00dd0dd651c7ce"
+        "fileHash": "152ff52c977c2f0edfb3c9a86758483ba3b43b9de69b8b5fc5de06247f62e5b5"
       }
     }
   },
   "updateCheckUrl": "https://raw.githubusercontent.com/shichao402/HelloKnightRemoteCam/main/update_config_github.json",
-  "lastUpdated": "2025-11-23T06:04:23Z"
+  "lastUpdated": "2025-11-23T07:23:36Z"
 }
