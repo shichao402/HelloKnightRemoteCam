@@ -289,9 +289,12 @@ jobs:
           GITEE_REPO_OWNER: ${{ secrets.GITEE_REPO_OWNER }}
           GITEE_REPO_NAME: ${{ secrets.GITEE_REPO_NAME }}
         run: |
-          TAG_NAME="${{ steps.get_version.outputs.TAG_NAME }}"
+          TAG_NAME_RAW="${{ steps.get_version.outputs.TAG_NAME }}"
           RELEASE_NAME="${{ steps.release_info.outputs.release_name }}"
           RELEASE_BODY="${{ steps.release_info.outputs.release_body }}"
+          
+          # 清理 TAG_NAME：去除换行符、回车符和前后空格
+          TAG_NAME=$(printf '%s' "${TAG_NAME_RAW}" | tr -d '\n\r\t' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
           
           # 清理并去除换行符、回车符和前后空格
           GITEE_REPO_OWNER=$(printf '%s' "${GITEE_REPO_OWNER}" | tr -d '\n\r\t' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
@@ -300,6 +303,7 @@ jobs:
           # URL 编码
           GITEE_REPO_OWNER_ENCODED=$(printf '%s' "${GITEE_REPO_OWNER}" | jq -sRr @uri)
           GITEE_REPO_NAME_ENCODED=$(printf '%s' "${GITEE_REPO_NAME}" | jq -sRr @uri)
+          TAG_NAME_ENCODED=$(printf '%s' "${TAG_NAME}" | jq -sRr @uri)
           GITEE_REPO="${GITEE_REPO_OWNER}/${GITEE_REPO_NAME}"
           
           echo "🚀 创建 Gitee Release..."
@@ -308,10 +312,42 @@ jobs:
           echo "  仓库: ${GITEE_REPO}"
           echo "  Owner: ${GITEE_REPO_OWNER}"
           echo "  Repo Name: ${GITEE_REPO_NAME}"
-          echo "  Owner (编码后): ${GITEE_REPO_OWNER_ENCODED}"
-          echo "  Repo Name (编码后): ${GITEE_REPO_NAME_ENCODED}"
-          echo "  Owner (编码后): ${GITEE_REPO_OWNER_ENCODED}"
-          echo "  Repo Name (编码后): ${GITEE_REPO_NAME_ENCODED}"
+          echo "  标签 (编码后): ${TAG_NAME_ENCODED}"
+          
+          # 获取标签对应的 commit SHA（target_commitish）
+          echo "🔍 获取标签对应的 commit SHA..."
+          TAG_SHA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/git/refs/tags/${TAG_NAME}" | \
+            jq -r '.object.sha // empty')
+          
+          # 如果通过 refs/tags 获取不到，尝试通过 tags API 获取
+          if [ -z "$TAG_SHA" ] || [ "$TAG_SHA" == "null" ]; then
+            echo "  [调试] 通过 refs/tags 未获取到，尝试通过 tags API..."
+            TAG_SHA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/git/tags/${TAG_NAME}" | \
+              jq -r '.object.sha // empty')
+          fi
+          
+          # 如果还是获取不到，尝试获取标签对象指向的 commit
+          if [ -z "$TAG_SHA" ] || [ "$TAG_SHA" == "null" ]; then
+            echo "  [调试] 通过 tags API 未获取到，尝试获取标签指向的 commit..."
+            TAG_INFO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/git/refs/tags/${TAG_NAME}")
+            TAG_OBJECT_SHA=$(echo "$TAG_INFO" | jq -r '.object.sha // empty')
+            if [ -n "$TAG_OBJECT_SHA" ] && [ "$TAG_OBJECT_SHA" != "null" ]; then
+              TAG_OBJECT=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                "https://api.github.com/repos/${{ github.repository }}/git/tags/${TAG_OBJECT_SHA}")
+              TAG_SHA=$(echo "$TAG_OBJECT" | jq -r '.object.sha // empty')
+            fi
+          fi
+          
+          if [ -z "$TAG_SHA" ] || [ "$TAG_SHA" == "null" ]; then
+            echo "⚠️ 警告: 无法获取标签 ${TAG_NAME} 对应的 commit SHA，将使用默认分支"
+            TARGET_COMMITISH=""
+          else
+            TARGET_COMMITISH="${TAG_SHA}"
+            echo "✅ 标签 ${TAG_NAME} 对应的 commit SHA: ${TAG_SHA:0:7}..."
+          fi
           
           # 首先验证仓库是否存在
           echo "🔍 验证 Gitee 仓库是否存在..."
@@ -353,7 +389,6 @@ jobs:
           
           # 检查 Release 是否已存在
           echo "🔍 检查 Gitee Release 是否已存在..."
-          TAG_NAME_ENCODED=$(echo "${TAG_NAME}" | jq -sRr @uri)
           RELEASE_CHECK_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/tags/${TAG_NAME_ENCODED}"
           echo "  API URL: ${RELEASE_CHECK_API_URL}"
           
@@ -382,11 +417,22 @@ jobs:
             UPDATE_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}"
             echo "  更新 API URL: ${UPDATE_API_URL}"
             
-            REQUEST_BODY=$(echo "{
-              \"name\": \"${RELEASE_NAME}\",
-              \"body\": $(echo "${RELEASE_BODY}" | jq -Rs .),
-              \"prerelease\": false
-            }" | jq -c .)
+            # 构建更新请求体
+            UPDATE_BODY_JSON=$(echo "${RELEASE_BODY}" | jq -Rs .)
+            if [ -n "$TARGET_COMMITISH" ]; then
+              REQUEST_BODY=$(echo "{
+                \"name\": \"${RELEASE_NAME}\",
+                \"body\": ${UPDATE_BODY_JSON},
+                \"target_commitish\": \"${TARGET_COMMITISH}\",
+                \"prerelease\": false
+              }" | jq -c .)
+            else
+              REQUEST_BODY=$(echo "{
+                \"name\": \"${RELEASE_NAME}\",
+                \"body\": ${UPDATE_BODY_JSON},
+                \"prerelease\": false
+              }" | jq -c .)
+            fi
             echo "  请求体: ${REQUEST_BODY}"
             
             RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
@@ -400,12 +446,24 @@ jobs:
             CREATE_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases"
             echo "  创建 API URL: ${CREATE_API_URL}"
             
-            REQUEST_BODY=$(echo "{
-              \"tag_name\": \"${TAG_NAME}\",
-              \"name\": \"${RELEASE_NAME}\",
-              \"body\": $(echo "${RELEASE_BODY}" | jq -Rs .),
-              \"prerelease\": false
-            }" | jq -c .)
+            # 构建创建请求体
+            CREATE_BODY_JSON=$(echo "${RELEASE_BODY}" | jq -Rs .)
+            if [ -n "$TARGET_COMMITISH" ]; then
+              REQUEST_BODY=$(echo "{
+                \"tag_name\": \"${TAG_NAME}\",
+                \"name\": \"${RELEASE_NAME}\",
+                \"body\": ${CREATE_BODY_JSON},
+                \"target_commitish\": \"${TARGET_COMMITISH}\",
+                \"prerelease\": false
+              }" | jq -c .)
+            else
+              REQUEST_BODY=$(echo "{
+                \"tag_name\": \"${TAG_NAME}\",
+                \"name\": \"${RELEASE_NAME}\",
+                \"body\": ${CREATE_BODY_JSON},
+                \"prerelease\": false
+              }" | jq -c .)
+            fi
             echo "  请求体: ${REQUEST_BODY}"
             
             RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
