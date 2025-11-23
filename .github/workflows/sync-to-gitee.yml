@@ -636,6 +636,12 @@ jobs:
           FILE_INDEX=0
           for file in "${FILES[@]}"; do
             FILE_INDEX=$((FILE_INDEX + 1))
+            
+            # 添加请求间隔，避免 Gitee API 限流（每个文件上传前等待 2 秒）
+            if [ $FILE_INDEX -gt 1 ]; then
+              echo "   ⏸️  等待 2 秒以避免 API 限流..."
+              sleep 2
+            fi
             filename=$(basename "$file")
             filesize=$(du -h "$file" | cut -f1)
             filepath=$(realpath "$file" 2>/dev/null || echo "$file")
@@ -670,23 +676,37 @@ jobs:
               # --progress-bar: 进度条输出到 stderr（会实时显示，不重定向）
               # -w "%{http_code}": HTTP 状态码输出到 stdout
               # -o: 响应体保存到文件
-              # --max-time: 设置最大超时时间（文件大小/100KB/s + 5分钟缓冲）
-              MAX_TIMEOUT=$((filesize_bytes / 102400 + 300))
-              if [ $MAX_TIMEOUT -lt 300 ]; then
-                MAX_TIMEOUT=300
+              # 超时设置说明：
+              #   --connect-timeout: 连接超时（30秒，建立连接的时间）
+              #   --max-time: 总超时时间（文件大小/50KB/s + 10分钟缓冲，最大60分钟）
+              #   注意：Gitee API 可能因为网络延迟导致超时，需要设置较长的超时时间
+              CONNECT_TIMEOUT=30
+              # 计算传输超时：假设平均速度 50KB/s（保守估计，考虑网络波动）
+              # 加上 10 分钟缓冲时间（600秒）
+              MAX_TIMEOUT=$((filesize_bytes / 51200 + 600))
+              if [ $MAX_TIMEOUT -lt 600 ]; then
+                MAX_TIMEOUT=600  # 最小 10 分钟
               fi
-              if [ $MAX_TIMEOUT -gt 1800 ]; then
-                MAX_TIMEOUT=1800
+              if [ $MAX_TIMEOUT -gt 3600 ]; then
+                MAX_TIMEOUT=3600  # 最大 60 分钟
               fi
               
-              echo "   ⏳ 上传中（最大超时: ${MAX_TIMEOUT}秒）..."
+              echo "   ⏳ 上传中..."
+              echo "   连接超时: ${CONNECT_TIMEOUT}秒"
+              echo "   传输超时: ${MAX_TIMEOUT}秒（约 $((MAX_TIMEOUT / 60)) 分钟）"
+              echo "   文件大小: ${filesize} (${filesize_bytes} bytes)"
               echo ""
               
               # curl 进度条输出到 stderr（不重定向，实时显示）
               # HTTP 状态码保存到文件（只重定向 stdout）
               # 响应体通过 -o 保存到文件
+              # 使用 --retry 和 --retry-delay 处理临时网络错误
               curl --progress-bar --show-error \
+                --connect-timeout ${CONNECT_TIMEOUT} \
                 --max-time ${MAX_TIMEOUT} \
+                --retry 2 \
+                --retry-delay 3 \
+                --retry-connrefused \
                 -w "%{http_code}" \
                 -o "${TEMP_RESPONSE_FILE}" \
                 -X POST \
@@ -1046,14 +1066,26 @@ jobs:
               TEMP_RESPONSE_FILE=$(mktemp)
               TEMP_HTTP_CODE_FILE=$(mktemp)
               
+              # 配置文件通常较小，但仍需要足够的超时时间
+              CONNECT_TIMEOUT=30
+              MAX_TIMEOUT=600  # 配置文件上传超时 10 分钟
+              
               echo ""
+              echo "   连接超时: ${CONNECT_TIMEOUT}秒"
+              echo "   传输超时: ${MAX_TIMEOUT}秒"
               
               # 使用 curl 上传
               # --progress-bar: 进度条输出到 stderr（会实时显示，不重定向）
               # -w "%{http_code}": HTTP 状态码输出到 stdout
               # -o: 响应体保存到文件
+              # 使用 --retry 和 --retry-delay 处理临时网络错误
               # 注意：只重定向 stdout 到文件，stderr（进度条）直接输出到终端
               curl --progress-bar --show-error \
+                --connect-timeout ${CONNECT_TIMEOUT} \
+                --max-time ${MAX_TIMEOUT} \
+                --retry 2 \
+                --retry-delay 3 \
+                --retry-connrefused \
                 -w "%{http_code}" \
                 -o "${TEMP_RESPONSE_FILE}" \
                 -X POST \
