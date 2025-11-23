@@ -9,6 +9,11 @@ on:
         required: false
         type: string
 
+# 排他性配置：同一时间只能有一个 release 流程运行，其他请求排队等待
+concurrency:
+  group: create-release
+  cancel-in-progress: false  # 排队等待，不取消正在运行的流程
+
 env:
   FLUTTER_VERSION: '3.24.0'
 
