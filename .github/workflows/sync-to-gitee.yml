@@ -387,6 +387,76 @@ jobs:
             echo "  仓库描述: ${REPO_DESCRIPTION}"
           fi
           
+          # 检查标签是否存在，如果不存在则创建
+          echo "🔍 检查 Gitee 标签是否存在..."
+          TAG_CHECK_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/tags/${TAG_NAME_ENCODED}"
+          echo "  标签检查 API URL: ${TAG_CHECK_API_URL}"
+          
+          TAG_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
+            -H "Authorization: token ${GITEE_TOKEN}" \
+            "${TAG_CHECK_API_URL}")
+          
+          TAG_CHECK_HTTP_CODE=$(echo "$TAG_CHECK" | tail -n1)
+          TAG_CHECK_BODY=$(echo "$TAG_CHECK" | sed '$d')
+          
+          echo "  HTTP 状态码: ${TAG_CHECK_HTTP_CODE}"
+          
+          if [ "$TAG_CHECK_HTTP_CODE" != "200" ]; then
+            echo "⚠️ 标签 ${TAG_NAME} 不存在，需要创建..."
+            
+            # 确保有 commit SHA
+            if [ -z "$TARGET_COMMITISH" ] || [ "$TARGET_COMMITISH" == "" ]; then
+              echo "❌ 错误: 无法创建标签，因为缺少 commit SHA"
+              echo "  请确保标签 ${TAG_NAME} 在 GitHub 中存在"
+              exit 1
+            fi
+            
+            # 创建标签
+            echo "📝 创建 Gitee 标签 ${TAG_NAME}..."
+            CREATE_TAG_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/tags"
+            echo "  创建标签 API URL: ${CREATE_TAG_API_URL}"
+            
+            CREATE_TAG_BODY=$(echo "{
+              \"ref\": \"${TARGET_COMMITISH}\",
+              \"tag_name\": \"${TAG_NAME}\",
+              \"message\": \"Release ${TAG_NAME}\"
+            }" | jq -c .)
+            echo "  请求体: ${CREATE_TAG_BODY}"
+            
+            CREATE_TAG_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+              -H "Content-Type: application/json" \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              -d "${CREATE_TAG_BODY}" \
+              "${CREATE_TAG_API_URL}")
+            
+            CREATE_TAG_HTTP_CODE=$(echo "$CREATE_TAG_RESPONSE" | tail -n1)
+            CREATE_TAG_BODY_RESPONSE=$(echo "$CREATE_TAG_RESPONSE" | sed '$d')
+            
+            echo "  响应 HTTP 状态码: ${CREATE_TAG_HTTP_CODE}"
+            
+            if [ "$CREATE_TAG_HTTP_CODE" = "200" ] || [ "$CREATE_TAG_HTTP_CODE" = "201" ]; then
+              echo "✅ 标签 ${TAG_NAME} 创建成功"
+            else
+              ERROR_MSG=$(echo "$CREATE_TAG_BODY_RESPONSE" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$CREATE_TAG_BODY_RESPONSE")
+              echo "❌ 创建标签失败 (HTTP ${CREATE_TAG_HTTP_CODE})"
+              echo "  错误信息: ${ERROR_MSG}"
+              echo "  完整响应: ${CREATE_TAG_BODY_RESPONSE}"
+              
+              # 如果错误是标签已存在，继续执行
+              if echo "$ERROR_MSG" | grep -qi "已存在\|already exists\|duplicate"; then
+                echo "⚠️ 标签可能已存在，继续执行..."
+              else
+                exit 1
+              fi
+            fi
+          else
+            TAG_COMMIT=$(echo "$TAG_CHECK_BODY" | jq -r '.commit.sha // empty' 2>/dev/null || echo "")
+            echo "✅ 标签 ${TAG_NAME} 已存在"
+            if [ -n "$TAG_COMMIT" ]; then
+              echo "  标签指向的 commit: ${TAG_COMMIT:0:7}..."
+            fi
+          fi
+          
           # 检查 Release 是否已存在
           echo "🔍 检查 Gitee Release 是否已存在..."
           RELEASE_CHECK_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/tags/${TAG_NAME_ENCODED}"
