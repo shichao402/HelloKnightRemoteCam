@@ -126,7 +126,7 @@ jobs:
           DefaultDirName={autopf}\HelloKnightRCC
           DefaultGroupName=HelloKnightRCC
           OutputDir=PLACEHOLDER_WORKSPACE_ROOT
-          # EXE文件名使用固定命名，不包含版本号（版本信息由ZIP文件名和hash保证）
+          ; EXE文件名使用固定命名，不包含版本号（版本信息由ZIP文件名和hash保证）
           OutputBaseFilename=HelloKnightRCC_windows_setup
           Compression=lzma
           SolidCompression=yes
