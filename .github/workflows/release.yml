@@ -445,35 +445,89 @@ jobs:
           echo "重命名后的文件列表（仅zip文件）:"
           ls -la artifacts/
 
-      - name: Delete existing Release if exists
+      - name: Delete existing Release if exists (including drafts)
         uses: actions/github-script@v7
         continue-on-error: true
         with:
           script: |
             const tagName = '${{ steps.get_versions.outputs.TAG_VERSION }}';
+            console.log(`查找并删除标签为 ${tagName} 的所有 Release（包括 draft）...`);
+            
             try {
-              const release = await github.rest.repos.getReleaseByTag({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                tag: tagName
-              });
-              
-              if (release.data) {
-                console.log(`删除已存在的 Release: ${release.data.id}`);
-                await github.rest.repos.deleteRelease({
+              // 首先尝试通过 tag 获取 release（不包括 draft）
+              try {
+                const release = await github.rest.repos.getReleaseByTag({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  release_id: release.data.id
+                  tag: tagName
                 });
-                console.log('Release 已删除');
+                
+                if (release.data) {
+                  console.log(`找到已发布的 Release: ${release.data.id} (draft: ${release.data.draft})`);
+                  await github.rest.repos.deleteRelease({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    release_id: release.data.id
+                  });
+                  console.log(`✓ 已删除 Release: ${release.data.id}`);
+                }
+              } catch (tagError) {
+                if (tagError.status !== 404) {
+                  console.log(`通过 tag 查找 Release 时出错: ${tagError.message}`);
+                }
+              }
+              
+              // 列出所有 release（包括 draft），查找匹配 tag 的 release
+              let page = 1;
+              let hasMore = true;
+              let deletedCount = 0;
+              
+              while (hasMore) {
+                const { data: releases } = await github.rest.repos.listReleases({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  per_page: 100,
+                  page: page
+                });
+                
+                if (releases.length === 0) {
+                  hasMore = false;
+                  break;
+                }
+                
+                // 查找匹配 tag 的 release（包括 draft）
+                for (const release of releases) {
+                  if (release.tag_name === tagName) {
+                    console.log(`找到匹配的 Release: ${release.id} (tag: ${release.tag_name}, draft: ${release.draft}, published: ${release.published_at || '未发布'})`);
+                    try {
+                      await github.rest.repos.deleteRelease({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        release_id: release.id
+                      });
+                      console.log(`✓ 已删除 Release: ${release.id} (${release.draft ? 'draft' : 'published'})`);
+                      deletedCount++;
+                    } catch (deleteError) {
+                      console.log(`删除 Release ${release.id} 失败: ${deleteError.message}`);
+                    }
+                  }
+                }
+                
+                if (releases.length < 100) {
+                  hasMore = false;
+                } else {
+                  page++;
+                }
+              }
+              
+              if (deletedCount > 0) {
+                console.log(`✓ 共删除了 ${deletedCount} 个 Release`);
+              } else {
+                console.log('未找到需要删除的 Release');
               }
             } catch (error) {
-              if (error.status === 404) {
-                console.log('Release 不存在，跳过删除');
-              } else {
-                console.log(`检查 Release 时出错: ${error.message}`);
-                // 不抛出错误，继续执行
-              }
+              console.log(`检查 Release 时出错: ${error.message}`);
+              // 不抛出错误，继续执行
             }
 
       - name: Create Release
@@ -508,26 +562,76 @@ jobs:
           echo "  标签: ${TAG_NAME}"
           
           # 等待一下，确保 Release 完全创建
-          sleep 2
+          sleep 3
           
-          # 检查 Release 是否存在
+          # 检查 Release 是否存在（通过 tag，不包括 draft）
           RELEASE_INFO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG_NAME}")
           
           if echo "${RELEASE_INFO}" | grep -q '"id"'; then
             RELEASE_ID=$(echo "${RELEASE_INFO}" | jq -r '.id')
             RELEASE_NAME=$(echo "${RELEASE_INFO}" | jq -r '.name')
+            RELEASE_DRAFT=$(echo "${RELEASE_INFO}" | jq -r '.draft')
+            RELEASE_PUBLISHED=$(echo "${RELEASE_INFO}" | jq -r '.published_at // empty')
             ASSETS_COUNT=$(echo "${RELEASE_INFO}" | jq -r '.assets | length')
+            
+            if [ "$RELEASE_DRAFT" = "true" ]; then
+              echo "❌ 错误: Release 创建为 draft 状态！"
+              echo "  Release ID: ${RELEASE_ID}"
+              echo "  Release 名称: ${RELEASE_NAME}"
+              echo "  状态: draft"
+              echo ""
+              echo "这通常是因为文件上传失败导致的。请检查："
+              echo "  1. 构建产物文件是否存在"
+              echo "  2. 文件大小是否超过限制"
+              echo "  3. GitHub API 是否有错误"
+              exit 1
+            fi
+            
+            if [ -z "$RELEASE_PUBLISHED" ]; then
+              echo "❌ 错误: Release 未发布！"
+              echo "  Release ID: ${RELEASE_ID}"
+              echo "  Release 名称: ${RELEASE_NAME}"
+              exit 1
+            fi
+            
             echo "✅ GitHub Release 创建成功"
             echo "  Release ID: ${RELEASE_ID}"
             echo "  Release 名称: ${RELEASE_NAME}"
+            echo "  状态: published (非 draft)"
+            echo "  发布时间: ${RELEASE_PUBLISHED}"
             echo "  构建产物数量: ${ASSETS_COUNT}"
             echo ""
             echo "🚀 这将自动触发 Gitee 同步工作流..."
           else
-            echo "❌ GitHub Release 创建失败或未找到"
-            echo "  响应: ${RELEASE_INFO}"
-            exit 1
+            # 如果通过 tag 找不到，尝试列出所有 release 查找（包括 draft）
+            echo "⚠️  通过 tag 未找到 Release，尝试查找所有 Release（包括 draft）..."
+            ALL_RELEASES=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100")
+            
+            MATCHED_RELEASE=$(echo "${ALL_RELEASES}" | jq -r ".[] | select(.tag_name == \"${TAG_NAME}\") | .id" | head -1)
+            
+            if [ -n "$MATCHED_RELEASE" ] && [ "$MATCHED_RELEASE" != "null" ]; then
+              RELEASE_DETAIL=$(echo "${ALL_RELEASES}" | jq -r ".[] | select(.id == ${MATCHED_RELEASE})")
+              RELEASE_DRAFT=$(echo "${RELEASE_DETAIL}" | jq -r '.draft')
+              
+              if [ "$RELEASE_DRAFT" = "true" ]; then
+                echo "❌ 错误: Release 创建为 draft 状态！"
+                echo "  Release ID: ${MATCHED_RELEASE}"
+                echo "  标签: ${TAG_NAME}"
+                echo "  状态: draft"
+                echo ""
+                echo "这通常是因为文件上传失败导致的。请检查构建产物。"
+                exit 1
+              else
+                echo "✅ 找到 Release: ${MATCHED_RELEASE}"
+              fi
+            else
+              echo "❌ GitHub Release 创建失败或未找到"
+              echo "  标签: ${TAG_NAME}"
+              echo "  响应: ${RELEASE_INFO}"
+              exit 1
+            fi
           fi
 
       # 计算文件hash并生成 GitHub 更新配置文件
@@ -684,10 +788,7 @@ jobs:
   sync-to-gitee:
     name: Sync Release to Gitee
     needs: create-release
-    runs-on: ubuntu-latest
     if: success()  # 只有在 create-release 成功后才执行
-    permissions:
-      contents: read
     uses: ./.github/workflows/sync-to-gitee.yml
     with:
       release_tag: ${{ needs.create-release.outputs.release_tag }}
