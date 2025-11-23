@@ -528,14 +528,13 @@ jobs:
         run: |
           # 使用从构建产物文件名提取的版本号（从extract_versions_from_artifacts步骤获取）
           CLIENT_VERSION=${{ steps.extract_versions_from_artifacts.outputs.CLIENT_FULL_VERSION }}
-          CLIENT_VERSION_NUMBER=${{ steps.extract_versions_from_artifacts.outputs.CLIENT_VERSION_NUM }}
           SERVER_VERSION=${{ steps.extract_versions_from_artifacts.outputs.SERVER_FULL_VERSION }}
-          SERVER_VERSION_NUMBER=${{ steps.extract_versions_from_artifacts.outputs.SERVER_VERSION_NUM }}
           TAG_VERSION=${{ steps.get_versions_from_tag.outputs.TAG_VERSION }}
           
           # GitHub Releases 下载链接格式（使用内置变量）
           GITHUB_REPO="${{ github.repository }}"
-          BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${TAG_VERSION}"
+          REPO_OWNER=$(echo "${GITHUB_REPO}" | cut -d'/' -f1)
+          REPO_NAME=$(echo "${GITHUB_REPO}" | cut -d'/' -f2)
           
           # 使用传递的版本号构建文件名（直接使用zip文件，不创建_update.zip）
           MACOS_UPDATE_FILE="HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
@@ -563,72 +562,21 @@ jobs:
             exit 1
           fi
           
-          # 计算文件SHA256 hash（使用zip文件）
-          MACOS_HASH=""
-          WINDOWS_HASH=""
-          ANDROID_HASH=""
+          # 调用工程脚本生成更新配置
+          echo ""
+          echo "调用工程脚本生成更新配置..."
+          python3 scripts/generate_update_config.py \
+            --client-version "${CLIENT_VERSION}" \
+            --server-version "${SERVER_VERSION}" \
+            --macos-file "artifacts/${MACOS_UPDATE_FILE}" \
+            --windows-file "artifacts/${WINDOWS_UPDATE_FILE}" \
+            --android-file "artifacts/${ANDROID_FILE}" \
+            --tag-version "${TAG_VERSION}" \
+            --repo-owner "${REPO_OWNER}" \
+            --repo-name "${REPO_NAME}" \
+            --output "update_config_github.json"
           
-          if [ -n "$MACOS_UPDATE_FILE" ] && [ -f "artifacts/$MACOS_UPDATE_FILE" ]; then
-            MACOS_HASH=$(sha256sum "artifacts/$MACOS_UPDATE_FILE" | cut -d' ' -f1)
-            echo "macOS更新文件hash: $MACOS_HASH"
-          fi
-          
-          if [ -n "$WINDOWS_UPDATE_FILE" ] && [ -f "artifacts/$WINDOWS_UPDATE_FILE" ]; then
-            WINDOWS_HASH=$(sha256sum "artifacts/$WINDOWS_UPDATE_FILE" | cut -d' ' -f1)
-            echo "Windows更新文件hash: $WINDOWS_HASH"
-          fi
-          
-          if [ -n "$ANDROID_FILE" ] && [ -f "artifacts/$ANDROID_FILE" ]; then
-            ANDROID_HASH=$(sha256sum "artifacts/$ANDROID_FILE" | cut -d' ' -f1)
-            echo "Android文件hash: $ANDROID_HASH"
-          fi
-          
-          cat > update_config_github.json <<EOF
-          {
-            "client": {
-              "version": "${CLIENT_VERSION}",
-              "versionNumber": "${CLIENT_VERSION_NUMBER}",
-              "platforms": {
-                "macos": {
-                  "version": "${CLIENT_VERSION}",
-                  "versionNumber": "${CLIENT_VERSION_NUMBER}",
-                  "downloadUrl": "${BASE_URL}/${MACOS_UPDATE_FILE}",
-                  "fileName": "${MACOS_UPDATE_FILE}",
-                  "fileType": "zip",
-                  "platform": "macos",
-                  "fileHash": "${MACOS_HASH}"
-                },
-                "windows": {
-                  "version": "${CLIENT_VERSION}",
-                  "versionNumber": "${CLIENT_VERSION_NUMBER}",
-                  "downloadUrl": "${BASE_URL}/${WINDOWS_UPDATE_FILE}",
-                  "fileName": "${WINDOWS_UPDATE_FILE}",
-                  "fileType": "zip",
-                  "platform": "windows",
-                  "fileHash": "${WINDOWS_HASH}"
-                }
-              }
-            },
-            "server": {
-              "version": "${SERVER_VERSION}",
-              "versionNumber": "${SERVER_VERSION_NUMBER}",
-              "platforms": {
-                "android": {
-                  "version": "${SERVER_VERSION}",
-                  "versionNumber": "${SERVER_VERSION_NUMBER}",
-                  "downloadUrl": "${BASE_URL}/${ANDROID_FILE}",
-                  "fileName": "${ANDROID_FILE}",
-                  "fileType": "zip",
-                  "platform": "android",
-                  "fileHash": "${ANDROID_HASH}"
-                }
-              }
-            },
-            "updateCheckUrl": "https://github.com/${{ github.repository }}/releases/download/UpdateConfig/update_config_github.json",
-            "lastUpdated": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-          }
-          EOF
-          
+          echo ""
           echo "GitHub 更新配置文件已生成:"
           cat update_config_github.json
           echo ""

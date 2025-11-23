@@ -76,9 +76,13 @@ class UpdateDownloadProcessor {
       // 如果有hash，进行校验
       if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
         onLog?.call('开始校验文件hash: $filePath', tag: 'UPDATE');
+        onLog?.call('期望 hash: ${updateInfo.fileHash}', tag: 'UPDATE');
         final isValid = await _fileVerificationService.verifyFileHash(
             filePath, updateInfo.fileHash!);
         if (!isValid) {
+          // 获取实际hash用于调试
+          final actualHash = await _fileVerificationService.calculateFileHash(filePath);
+          onLogError?.call('文件hash校验失败', error: '期望: ${updateInfo.fileHash}, 实际: $actualHash');
           // 删除下载的文件
           try {
             await File(filePath).delete();

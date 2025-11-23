@@ -102,6 +102,12 @@ app.*.symbols
 
 .gitlab_env
 
+# Gitee sync configuration (contains sensitive tokens)
+gitee_config.yaml
+
+# Temporary files for sync scripts
+temp/
+
 # Test scripts and files
 scripts/test_*.sh
 scripts/push_update_config_to_gitee.sh

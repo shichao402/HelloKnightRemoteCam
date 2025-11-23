@@ -110,6 +110,15 @@ class UpdateService {
       final currentVersionNumber = await _versionService.getVersionNumber();
 
       _logger.log('当前版本: $currentVersion', tag: 'UPDATE');
+      _logger.log('当前版本号(不含构建号): $currentVersionNumber', tag: 'UPDATE');
+      _logger.log('当前平台: ${_getCurrentPlatform()}', tag: 'UPDATE');
+      _logger.log('更新检查 URL 列表 (共 ${_updateCheckUrls.length} 个):',
+          tag: 'UPDATE');
+      for (int i = 0; i < _updateCheckUrls.length; i++) {
+        final url = _updateCheckUrls[i];
+        final sourceName = url.contains('gitee.com') ? 'Gitee' : 'GitHub';
+        _logger.log('  ${i + 1}. $sourceName: $url', tag: 'UPDATE');
+      }
 
       // 使用shared包的UpdateCheckService检查更新（支持多个 URL）
       final result = await _updateCheckService.checkForUpdate(
@@ -124,6 +133,18 @@ class UpdateService {
       if (result.hasUpdate && result.updateInfo != null) {
         final updateInfo = result.updateInfo!;
         _logger.log('发现新版本: ${updateInfo.version}', tag: 'UPDATE');
+        _logger.log('更新信息已保存到内存:', tag: 'UPDATE');
+        _logger.log('  版本号: ${updateInfo.version}', tag: 'UPDATE');
+        _logger.log('  版本号(不含构建号): ${updateInfo.versionNumber}', tag: 'UPDATE');
+        _logger.log('  下载 URL: ${updateInfo.downloadUrl}', tag: 'UPDATE');
+        _logger.log('  文件名: ${updateInfo.fileName}', tag: 'UPDATE');
+        _logger.log('  文件类型: ${updateInfo.fileType}', tag: 'UPDATE');
+        _logger.log('  平台: ${updateInfo.platform}', tag: 'UPDATE');
+        if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
+          _logger.log('  文件 Hash: ${updateInfo.fileHash}', tag: 'UPDATE');
+        } else {
+          _logger.log('  文件 Hash: 未提供', tag: 'UPDATE');
+        }
 
         // 检查是否有旧的更新信息（内存中）
         if (_currentUpdateInfo != null &&
@@ -328,8 +349,6 @@ class UpdateService {
     UpdateInfo currentUpdateInfo = updateInfo;
 
     try {
-      _logger.log('开始下载更新文件: ${currentUpdateInfo.fileName}', tag: 'UPDATE');
-
       // 1. 清理旧版本文件
       onStatus?.call('正在清理旧版本文件...');
       await _cleanupOldVersions();
@@ -392,7 +411,10 @@ class UpdateService {
               final githubUpdateInfo =
                   await _getGitHubUpdateInfo(currentUpdateInfo);
               if (githubUpdateInfo != null) {
-                _logger.log('从 GitHub 获取到更新信息，使用 GitHub downloadUrl',
+                _logger.log(
+                    '从 GitHub 获取到更新信息，使用 GitHub downloadUrl: ${githubUpdateInfo.downloadUrl}',
+                    tag: 'UPDATE');
+                _logger.log('GitHub 期望 hash: ${githubUpdateInfo.fileHash}',
                     tag: 'UPDATE');
                 filePath = await _fileDownloadService.downloadFile(
                   url: githubUpdateInfo.downloadUrl,
@@ -419,6 +441,14 @@ class UpdateService {
       }
 
       _logger.log('更新文件下载完成: $filePath', tag: 'UPDATE');
+      _logger.log('准备处理下载文件:', tag: 'UPDATE');
+      _logger.log('  文件路径: $filePath', tag: 'UPDATE');
+      _logger.log('  版本: ${currentUpdateInfo.version}', tag: 'UPDATE');
+      _logger.log('  文件名: ${currentUpdateInfo.fileName}', tag: 'UPDATE');
+      if (currentUpdateInfo.fileHash != null &&
+          currentUpdateInfo.fileHash!.isNotEmpty) {
+        _logger.log('  期望 Hash: ${currentUpdateInfo.fileHash}', tag: 'UPDATE');
+      }
 
       // 处理下载完成的文件（校验hash、解压等）
       return await _processDownloadedFile(filePath, currentUpdateInfo);
@@ -432,6 +462,12 @@ class UpdateService {
   /// 从 GitHub 获取更新信息（用于 fallback）
   Future<UpdateInfo?> _getGitHubUpdateInfo(UpdateInfo currentUpdateInfo) async {
     try {
+      _logger.log('开始从 GitHub 获取更新信息（fallback）', tag: 'UPDATE');
+      _logger.log('当前更新信息:', tag: 'UPDATE');
+      _logger.log('  版本: ${currentUpdateInfo.version}', tag: 'UPDATE');
+      _logger.log('  下载 URL: ${currentUpdateInfo.downloadUrl}', tag: 'UPDATE');
+      _logger.log('  文件名: ${currentUpdateInfo.fileName}', tag: 'UPDATE');
+
       // 确保 URL 列表已初始化
       if (_updateCheckUrls.isEmpty) {
         await initializeUpdateUrls();
@@ -451,7 +487,7 @@ class UpdateService {
         return null;
       }
 
-      _logger.log('从 GitHub 获取更新信息: $githubUrl', tag: 'UPDATE');
+      _logger.log('使用 GitHub 更新检查 URL: $githubUrl', tag: 'UPDATE');
 
       // 获取当前版本号
       final currentVersionNumber = await _versionService.getVersionNumber();
@@ -467,14 +503,22 @@ class UpdateService {
 
       if (result.hasUpdate && result.updateInfo != null) {
         final githubUpdateInfo = result.updateInfo!;
+        _logger.log('从 GitHub 获取到更新信息:', tag: 'UPDATE');
+        _logger.log('  版本: ${githubUpdateInfo.version}', tag: 'UPDATE');
+        _logger.log('  下载 URL: ${githubUpdateInfo.downloadUrl}', tag: 'UPDATE');
+        _logger.log('  文件名: ${githubUpdateInfo.fileName}', tag: 'UPDATE');
+        if (githubUpdateInfo.fileHash != null &&
+            githubUpdateInfo.fileHash!.isNotEmpty) {
+          _logger.log('  文件 Hash: ${githubUpdateInfo.fileHash}', tag: 'UPDATE');
+        }
+
         // 确保版本号匹配
         if (githubUpdateInfo.version == currentUpdateInfo.version) {
-          _logger.log('从 GitHub 获取到匹配的更新信息: ${githubUpdateInfo.downloadUrl}',
-              tag: 'UPDATE');
+          _logger.log('版本号匹配，可以使用 GitHub 的更新信息', tag: 'UPDATE');
           return githubUpdateInfo;
         } else {
           _logger.log(
-              'GitHub 版本不匹配: ${githubUpdateInfo.version} != ${currentUpdateInfo.version}',
+              '版本号不匹配: GitHub ${githubUpdateInfo.version} != 当前 ${currentUpdateInfo.version}',
               tag: 'UPDATE');
           return null;
         }

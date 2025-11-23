@@ -112,13 +112,20 @@ class UpdateCheckService {
     final List<_CheckResult> successfulResults = [];
     Exception? lastError;
 
+    onLog?.call('检查结果汇总:', tag: 'UPDATE');
     for (final result in results) {
       if (result.error != null) {
+        onLogError?.call('${result.sourceName} 检查失败', error: result.error);
         lastError = result.error;
         continue;
       }
-      if (result.updateInfo != null && result.hasUpdate) {
-        successfulResults.add(result);
+      if (result.updateInfo != null) {
+        if (result.hasUpdate) {
+          onLog?.call('  ${result.sourceName}: 发现新版本 ${result.updateInfo!.version}', tag: 'UPDATE');
+          successfulResults.add(result);
+        } else {
+          onLog?.call('  ${result.sourceName}: 版本 ${result.updateInfo!.version} 不高于当前版本', tag: 'UPDATE');
+        }
       }
     }
 
@@ -153,12 +160,29 @@ class UpdateCheckService {
       });
 
       final bestResult = successfulResults.first;
+      final updateInfo = bestResult.updateInfo!;
       onLog?.call(
-          '发现新版本: ${bestResult.updateInfo!.version} (来源: ${bestResult.sourceName})',
+          '发现新版本: ${updateInfo.version} (来源: ${bestResult.sourceName})',
           tag: 'UPDATE');
+      onLog?.call(
+          '更新信息详情 (来源: ${bestResult.sourceName}):', tag: 'UPDATE');
+      onLog?.call('  版本号: ${updateInfo.version}', tag: 'UPDATE');
+      onLog?.call('  版本号(不含构建号): ${updateInfo.versionNumber}', tag: 'UPDATE');
+      onLog?.call('  下载 URL: ${updateInfo.downloadUrl}', tag: 'UPDATE');
+      onLog?.call('  文件名: ${updateInfo.fileName}', tag: 'UPDATE');
+      onLog?.call('  文件类型: ${updateInfo.fileType}', tag: 'UPDATE');
+      onLog?.call('  平台: ${updateInfo.platform}', tag: 'UPDATE');
+      if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
+        onLog?.call('  文件 Hash: ${updateInfo.fileHash}', tag: 'UPDATE');
+      } else {
+        onLog?.call('  文件 Hash: 未提供', tag: 'UPDATE');
+      }
+      if (updateInfo.releaseNotes != null && updateInfo.releaseNotes!.isNotEmpty) {
+        onLog?.call('  更新说明: ${updateInfo.releaseNotes}', tag: 'UPDATE');
+      }
       return UpdateCheckResult(
         hasUpdate: true,
-        updateInfo: bestResult.updateInfo,
+        updateInfo: updateInfo,
       );
     }
 
@@ -166,6 +190,12 @@ class UpdateCheckService {
     final noUpdateResults = results.where((r) => r.error == null && !r.hasUpdate);
     if (noUpdateResults.isNotEmpty) {
       onLog?.call('当前已是最新版本', tag: 'UPDATE');
+      // 记录所有检查过的来源
+      for (final result in noUpdateResults) {
+        if (result.updateInfo != null) {
+          onLog?.call('  ${result.sourceName}: 版本 ${result.updateInfo!.version} 不高于当前版本', tag: 'UPDATE');
+        }
+      }
       return UpdateCheckResult(
         hasUpdate: false,
       );
@@ -260,6 +290,18 @@ class UpdateCheckService {
       final updateInfo = UpdateInfo.fromJson(platformConfig);
       onLog?.call('最新版本: ${updateInfo.version} (来源: $sourceName)',
           tag: 'UPDATE');
+      onLog?.call('从 $sourceName 获取的更新信息:', tag: 'UPDATE');
+      onLog?.call('  版本号: ${updateInfo.version}', tag: 'UPDATE');
+      onLog?.call('  版本号(不含构建号): ${updateInfo.versionNumber}', tag: 'UPDATE');
+      onLog?.call('  下载 URL: ${updateInfo.downloadUrl}', tag: 'UPDATE');
+      onLog?.call('  文件名: ${updateInfo.fileName}', tag: 'UPDATE');
+      onLog?.call('  文件类型: ${updateInfo.fileType}', tag: 'UPDATE');
+      onLog?.call('  平台: ${updateInfo.platform}', tag: 'UPDATE');
+      if (updateInfo.fileHash != null && updateInfo.fileHash!.isNotEmpty) {
+        onLog?.call('  文件 Hash: ${updateInfo.fileHash}', tag: 'UPDATE');
+      } else {
+        onLog?.call('  文件 Hash: 未提供', tag: 'UPDATE');
+      }
 
       // 比较版本（使用工具类）
       final hasUpdate = VersionUtils.compareVersions(
