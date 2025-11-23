@@ -943,13 +943,12 @@ jobs:
           echo "  release_tag: ${TAG_VERSION}"
           echo "  release_version: ${RELEASE_VERSION}"
 
-  # 暂时禁用 Gitee 同步，排查 GitHub Release 更新配置问题
-  # sync-to-gitee:
-  #   name: Sync Release to Gitee
-  #   needs: create-release
-  #   if: success()  # 只有在 create-release 成功后才执行
-  #   uses: ./.github/workflows/sync-to-gitee.yml
-  #   with:
-  #     release_tag: ${{ needs.create-release.outputs.release_tag }}
-  #   secrets: inherit
+  sync-to-gitee:
+    name: Sync Release to Gitee
+    needs: create-release
+    if: success()  # 只有在 create-release 成功后才执行
+    uses: ./.github/workflows/sync-to-gitee.yml
+    with:
+      release_tag: ${{ needs.create-release.outputs.release_tag }}
+    secrets: inherit
 

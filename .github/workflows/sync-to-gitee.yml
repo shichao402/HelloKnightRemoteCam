@@ -452,7 +452,7 @@ jobs:
             echo "✅ 标签 ${TAG_NAME} 已存在"
           fi
           
-          # 检查 Release 是否已存在
+          # 检查 Release 是否已存在，如果存在则删除（覆盖创建策略）
           echo "🔍 检查 Gitee Release 是否已存在..."
           RELEASE_CHECK_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/tags/${TAG_NAME_ENCODED}"
           echo "  API URL: ${RELEASE_CHECK_API_URL}"
@@ -470,7 +470,7 @@ jobs:
             RELEASE_ID=$(echo "${EXISTING_BODY}" | jq -r '.id // empty')
             RELEASE_EXISTING_NAME=$(echo "${EXISTING_BODY}" | jq -r '.name // empty' 2>/dev/null || echo "")
             RELEASE_EXISTING_CREATED=$(echo "${EXISTING_BODY}" | jq -r '.created_at // empty' 2>/dev/null || echo "")
-            echo "⚠️ Gitee Release 已存在 (ID: ${RELEASE_ID})，将更新..."
+            echo "⚠️ Gitee Release 已存在 (ID: ${RELEASE_ID})，将删除后重新创建..."
             if [ -n "$RELEASE_EXISTING_NAME" ]; then
               echo "  现有 Release 名称: ${RELEASE_EXISTING_NAME}"
             fi
@@ -478,49 +478,55 @@ jobs:
               echo "  创建时间: ${RELEASE_EXISTING_CREATED}"
             fi
             
-            # 更新现有 Release
-            UPDATE_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}"
-            echo "  更新 API URL: ${UPDATE_API_URL}"
+            # 删除现有 Release（覆盖创建策略）
+            DELETE_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}"
+            echo "  删除 API URL: ${DELETE_API_URL}"
             
-            # 构建更新请求体
-            UPDATE_BODY_JSON=$(echo "${RELEASE_BODY}" | jq -Rs .)
-            REQUEST_BODY=$(echo "{
-              \"tag_name\": \"${TAG_NAME}\",
-              \"name\": \"${RELEASE_NAME}\",
-              \"body\": ${UPDATE_BODY_JSON},
-              \"target_commitish\": \"${TARGET_COMMITISH}\",
-              \"prerelease\": false
-            }" | jq -c .)
-            echo "  请求体: ${REQUEST_BODY}"
-            
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
-              -H "Content-Type: application/json" \
+            DELETE_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
               -H "Authorization: token ${GITEE_TOKEN}" \
-              -d "${REQUEST_BODY}" \
-              "${UPDATE_API_URL}")
+              "${DELETE_API_URL}")
+            
+            DELETE_HTTP_CODE=$(echo "$DELETE_RESPONSE" | tail -n1)
+            DELETE_BODY=$(echo "$DELETE_RESPONSE" | sed '$d')
+            
+            echo "  删除响应 HTTP 状态码: ${DELETE_HTTP_CODE}"
+            
+            if [ "$DELETE_HTTP_CODE" = "204" ] || [ "$DELETE_HTTP_CODE" = "200" ]; then
+              echo "✅ 已删除现有 Release (ID: ${RELEASE_ID})"
+              # 等待一下，确保删除操作完成
+              sleep 2
+            else
+              ERROR_MSG=$(echo "$DELETE_BODY" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$DELETE_BODY")
+              echo "⚠️ 删除现有 Release 失败 (HTTP ${DELETE_HTTP_CODE})，但继续创建新 Release"
+              echo "  错误信息: ${ERROR_MSG}"
+              # 继续执行，尝试创建新 Release（可能会因为标签冲突而失败，但先尝试）
+            fi
           else
-            # 创建新 Release
-            echo "📝 创建新的 Gitee Release..."
-            CREATE_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases"
-            echo "  创建 API URL: ${CREATE_API_URL}"
-            
-            # 构建创建请求体
-            CREATE_BODY_JSON=$(echo "${RELEASE_BODY}" | jq -Rs .)
-            REQUEST_BODY=$(echo "{
-              \"tag_name\": \"${TAG_NAME}\",
-              \"name\": \"${RELEASE_NAME}\",
-              \"body\": ${CREATE_BODY_JSON},
-              \"target_commitish\": \"${TARGET_COMMITISH}\",
-              \"prerelease\": false
-            }" | jq -c .)
-            echo "  请求体: ${REQUEST_BODY}"
-            
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-              -H "Content-Type: application/json" \
-              -H "Authorization: token ${GITEE_TOKEN}" \
-              -d "${REQUEST_BODY}" \
-              "${CREATE_API_URL}")
+            echo "✅ Gitee Release 不存在，将创建新的 Release"
           fi
+          
+          # 创建新 Release（覆盖创建策略：总是创建新的）
+          echo ""
+          echo "📝 创建新的 Gitee Release..."
+          CREATE_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases"
+          echo "  创建 API URL: ${CREATE_API_URL}"
+          
+          # 构建创建请求体
+          CREATE_BODY_JSON=$(echo "${RELEASE_BODY}" | jq -Rs .)
+          REQUEST_BODY=$(echo "{
+            \"tag_name\": \"${TAG_NAME}\",
+            \"name\": \"${RELEASE_NAME}\",
+            \"body\": ${CREATE_BODY_JSON},
+            \"target_commitish\": \"${TARGET_COMMITISH}\",
+            \"prerelease\": false
+          }" | jq -c .)
+          echo "  请求体: ${REQUEST_BODY}"
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: token ${GITEE_TOKEN}" \
+            -d "${REQUEST_BODY}" \
+            "${CREATE_API_URL}")
           
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           RESPONSE_BODY=$(echo "$RESPONSE" | sed '$d')
@@ -533,7 +539,7 @@ jobs:
               RELEASE_ID=$(echo "${RESPONSE_BODY}" | jq -r '.id // empty')
               RELEASE_TAG_NAME=$(echo "${RESPONSE_BODY}" | jq -r '.tag_name // empty' 2>/dev/null || echo "")
               RELEASE_CREATED=$(echo "${RESPONSE_BODY}" | jq -r '.created_at // empty' 2>/dev/null || echo "")
-              echo "✅ Gitee Release 创建/更新成功"
+              echo "✅ Gitee Release 创建成功"
               echo "  Release ID: ${RELEASE_ID}"
               if [ -n "$RELEASE_TAG_NAME" ]; then
                 echo "  标签: ${RELEASE_TAG_NAME}"
@@ -541,14 +547,13 @@ jobs:
               if [ -n "$RELEASE_CREATED" ]; then
                 echo "  创建时间: ${RELEASE_CREATED}"
               fi
-              echo "  完整响应: ${RESPONSE_BODY}"
             else
               echo "⚠️ 响应格式异常，但 HTTP 状态码为 ${HTTP_CODE}"
               echo "  响应内容: ${RESPONSE_BODY}"
             fi
           else
             ERROR_MSG=$(echo "${RESPONSE_BODY}" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "${RESPONSE_BODY}")
-            echo "❌ Gitee Release 创建/更新失败 (HTTP ${HTTP_CODE})"
+            echo "❌ Gitee Release 创建失败 (HTTP ${HTTP_CODE})"
             echo "  错误信息: ${ERROR_MSG}"
             echo "  完整响应: ${RESPONSE_BODY}"
             exit 1
@@ -949,73 +954,69 @@ jobs:
               echo "✅ Tag ${CONFIG_RELEASE_TAG} 已存在"
             fi
             
-            # 创建或更新 Release
+            # 覆盖创建 Release（如果存在则先删除）
             echo ""
-            if [ "$USE_EXISTING_RELEASE" = false ]; then
-              echo "📝 创建配置 Release..."
+            if [ "$USE_EXISTING_RELEASE" = true ] && [ -n "$RELEASE_ID" ] && [ "$RELEASE_ID" != "null" ]; then
+              echo "🗑️  删除现有配置 Release (ID: ${RELEASE_ID})..."
               
-              RELEASE_NAME="Update Configuration"
-              RELEASE_BODY="This release contains the update configuration file for the application."
-              
-              CREATE_RELEASE_BODY=$(echo "{
-                \"tag_name\": \"${CONFIG_RELEASE_TAG}\",
-                \"name\": \"${RELEASE_NAME}\",
-                \"body\": \"${RELEASE_BODY}\",
-                \"target_commitish\": \"${MASTER_COMMIT_SHA}\",
-                \"prerelease\": false
-              }" | jq -c .)
-              
-              CREATE_RELEASE_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-                -H "Content-Type: application/json" \
+              DELETE_RELEASE_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
                 -H "Authorization: token ${GITEE_TOKEN}" \
-                -d "${CREATE_RELEASE_BODY}" \
-                "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases")
-              
-              CREATE_RELEASE_HTTP_CODE=$(echo "$CREATE_RELEASE_RESPONSE" | tail -n1)
-              CREATE_RELEASE_BODY_RESPONSE=$(echo "$CREATE_RELEASE_RESPONSE" | sed '$d')
-              
-              echo "  响应 HTTP 状态码: ${CREATE_RELEASE_HTTP_CODE}"
-              
-              if [ "$CREATE_RELEASE_HTTP_CODE" = "200" ] || [ "$CREATE_RELEASE_HTTP_CODE" = "201" ]; then
-                RELEASE_ID=$(echo "$CREATE_RELEASE_BODY_RESPONSE" | jq -r '.id // empty' 2>/dev/null || echo "")
-                echo "✅ Release 创建成功 (ID: ${RELEASE_ID})"
-              else
-                ERROR_MSG=$(echo "$CREATE_RELEASE_BODY_RESPONSE" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$CREATE_RELEASE_BODY_RESPONSE")
-                echo "❌ Release 创建失败 (HTTP ${CREATE_RELEASE_HTTP_CODE})"
-                echo "  错误信息: ${ERROR_MSG}"
-                exit 1
-              fi
-            else
-              echo "📝 更新现有 Release..."
-              
-              RELEASE_NAME="Update Configuration"
-              RELEASE_BODY="This release contains the update configuration file for the application. Updated at $(date -u +'%Y-%m-%d %H:%M:%S')"
-              
-              UPDATE_RELEASE_BODY=$(echo "{
-                \"tag_name\": \"${CONFIG_RELEASE_TAG}\",
-                \"name\": \"${RELEASE_NAME}\",
-                \"body\": \"${RELEASE_BODY}\",
-                \"target_commitish\": \"${MASTER_COMMIT_SHA}\",
-                \"prerelease\": false
-              }" | jq -c .)
-              
-              UPDATE_RELEASE_RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
-                -H "Content-Type: application/json" \
-                -H "Authorization: token ${GITEE_TOKEN}" \
-                -d "${UPDATE_RELEASE_BODY}" \
                 "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}")
               
-              UPDATE_RELEASE_HTTP_CODE=$(echo "$UPDATE_RELEASE_RESPONSE" | tail -n1)
+              DELETE_RELEASE_HTTP_CODE=$(echo "$DELETE_RELEASE_RESPONSE" | tail -n1)
               
-              echo "  响应 HTTP 状态码: ${UPDATE_RELEASE_HTTP_CODE}"
+              echo "  删除响应 HTTP 状态码: ${DELETE_RELEASE_HTTP_CODE}"
               
-              if [ "$UPDATE_RELEASE_HTTP_CODE" = "200" ] || [ "$UPDATE_RELEASE_HTTP_CODE" = "201" ]; then
-                echo "✅ Release 更新成功"
+              if [ "$DELETE_RELEASE_HTTP_CODE" = "204" ] || [ "$DELETE_RELEASE_HTTP_CODE" = "200" ]; then
+                echo "✅ 已删除现有配置 Release"
+                # 等待一下，确保删除操作完成
+                sleep 2
               else
-                ERROR_MSG=$(echo "$UPDATE_RELEASE_RESPONSE" | sed '$d' | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "")
-                echo "⚠️ Release 更新失败 (HTTP ${UPDATE_RELEASE_HTTP_CODE})，但继续执行"
+                ERROR_MSG=$(echo "$DELETE_RELEASE_RESPONSE" | sed '$d' | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "")
+                echo "⚠️ 删除现有 Release 失败 (HTTP ${DELETE_RELEASE_HTTP_CODE})，但继续创建新 Release"
                 echo "  错误信息: ${ERROR_MSG}"
               fi
+            fi
+            
+            # 创建新 Release（覆盖创建策略：总是创建新的）
+            echo ""
+            echo "📝 创建配置 Release..."
+            
+            RELEASE_NAME="Update Configuration"
+            RELEASE_BODY="This release contains the update configuration file for the application."
+            
+            CREATE_RELEASE_BODY=$(echo "{
+              \"tag_name\": \"${CONFIG_RELEASE_TAG}\",
+              \"name\": \"${RELEASE_NAME}\",
+              \"body\": \"${RELEASE_BODY}\",
+              \"target_commitish\": \"${MASTER_COMMIT_SHA}\",
+              \"prerelease\": false
+            }" | jq -c .)
+            
+            CREATE_RELEASE_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+              -H "Content-Type: application/json" \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              -d "${CREATE_RELEASE_BODY}" \
+              "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases")
+            
+            CREATE_RELEASE_HTTP_CODE=$(echo "$CREATE_RELEASE_RESPONSE" | tail -n1)
+            CREATE_RELEASE_BODY_RESPONSE=$(echo "$CREATE_RELEASE_RESPONSE" | sed '$d')
+            
+            echo "  响应 HTTP 状态码: ${CREATE_RELEASE_HTTP_CODE}"
+            
+            if [ "$CREATE_RELEASE_HTTP_CODE" = "200" ] || [ "$CREATE_RELEASE_HTTP_CODE" = "201" ]; then
+              RELEASE_ID=$(echo "$CREATE_RELEASE_BODY_RESPONSE" | jq -r '.id // empty' 2>/dev/null || echo "")
+              if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" == "null" ]; then
+                echo "❌ 无法从响应中获取 Release ID"
+                echo "  响应内容: ${CREATE_RELEASE_BODY_RESPONSE}"
+                exit 1
+              fi
+              echo "✅ Release 创建成功 (ID: ${RELEASE_ID})"
+            else
+              ERROR_MSG=$(echo "$CREATE_RELEASE_BODY_RESPONSE" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$CREATE_RELEASE_BODY_RESPONSE")
+              echo "❌ Release 创建失败 (HTTP ${CREATE_RELEASE_HTTP_CODE})"
+              echo "  错误信息: ${ERROR_MSG}"
+              exit 1
             fi
             
             # 上传配置文件到 Release
