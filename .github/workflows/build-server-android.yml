@@ -52,7 +52,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
-          cache: true
+          cache: false  # 禁用内置缓存，使用上面的手动缓存步骤
 
       - name: Extract and sync version
         id: get_version
