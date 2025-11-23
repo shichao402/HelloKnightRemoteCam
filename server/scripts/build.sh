@@ -77,6 +77,32 @@ fi
 echo "获取依赖..."
 $FLUTTER pub get
 
+# 拷贝 VERSION.yaml 到 assets 目录（使用统一的版本管理模块）
+if [ -f "$VERSION_MANAGER" ]; then
+    echo "拷贝 VERSION.yaml 到 assets 目录..."
+    if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "win32" ]] || [[ -n "$WINDIR" ]]; then
+        # Windows 环境
+        PYTHONIOENCODING=utf-8 python "$VERSION_MANAGER" copy-to-assets || {
+            echo "警告: 拷贝 VERSION.yaml 到 assets 失败，跳过"
+        }
+    else
+        # macOS/Linux 环境
+        python3 "$VERSION_MANAGER" copy-to-assets || {
+            echo "警告: 拷贝 VERSION.yaml 到 assets 失败，跳过"
+        }
+    fi
+else
+    echo "⚠️  警告: 版本管理模块未找到，手动拷贝 VERSION.yaml..."
+    if [ -f "$PROJECT_ROOT/VERSION.yaml" ]; then
+        ASSETS_DIR="assets"
+        mkdir -p "$ASSETS_DIR"
+        cp "$PROJECT_ROOT/VERSION.yaml" "$ASSETS_DIR/VERSION.yaml"
+        echo "✓ VERSION.yaml 已拷贝到 $ASSETS_DIR"
+    else
+        echo "⚠️  警告: VERSION.yaml 不存在，跳过拷贝"
+    fi
+fi
+
 # 构建 APK
 echo "正在构建 APK..."
 $FLUTTER build apk --$BUILD_MODE

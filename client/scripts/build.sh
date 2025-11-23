@@ -133,6 +133,29 @@ else
     fi
 fi
 
+# 拷贝 VERSION.yaml 到构建输出目录
+if [ -f "$PROJECT_ROOT/VERSION.yaml" ]; then
+    echo "拷贝 VERSION.yaml 到构建输出目录..."
+    if [ "$BUILD_TYPE" = "macos" ]; then
+        # macOS: 拷贝到 app bundle 的 Resources 目录
+        APP_PATH="$BUILD_PATH/HelloKnightRCC.app"
+        if [ -d "$APP_PATH" ]; then
+            RESOURCES_PATH="$APP_PATH/Contents/Resources"
+            mkdir -p "$RESOURCES_PATH"
+            cp "$PROJECT_ROOT/VERSION.yaml" "$RESOURCES_PATH/VERSION.yaml"
+            echo "✓ VERSION.yaml 已拷贝到 $RESOURCES_PATH"
+        fi
+    else
+        # Windows: 拷贝到构建输出目录
+        if [ -d "$BUILD_PATH" ]; then
+            cp "$PROJECT_ROOT/VERSION.yaml" "$BUILD_PATH/VERSION.yaml"
+            echo "✓ VERSION.yaml 已拷贝到 $BUILD_PATH"
+        fi
+    fi
+else
+    echo "⚠️  警告: VERSION.yaml 不存在，跳过拷贝"
+fi
+
 if [ "$BUILD_TYPE" = "macos" ]; then
     APP_PATH="$BUILD_PATH/HelloKnightRCC.app"
     if [ -d "$APP_PATH" ]; then

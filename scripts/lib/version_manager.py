@@ -430,6 +430,9 @@ def main():
     extract_parser.add_argument('--sync', help='同步到 pubspec.yaml 文件路径')
     extract_parser.add_argument('--json', action='store_true', default=True, help='输出 JSON 格式')
     
+    # copy-to-assets 命令
+    copy_parser = subparsers.add_parser('copy-to-assets', help='拷贝 VERSION.yaml 到 server/assets 目录')
+    
     args = parser.parse_args()
     
     if not args.command:
@@ -497,6 +500,8 @@ def main():
             
             if args.sync:
                 manager.sync_to_pubspec(args.target, args.sync)
+                # 注意：不再在这里自动拷贝 VERSION.yaml 到 assets
+                # 拷贝逻辑应该在构建脚本中统一处理，确保本地和 CI/CD 一致
             
             if args.json:
                 output = {
@@ -508,6 +513,10 @@ def main():
                 print(json.dumps(output, ensure_ascii=False))
             else:
                 print(f"{version_part}+{build_part}")
+        
+        elif args.command == 'copy-to-assets':
+            manager.copy_to_assets()
+            print("VERSION.yaml 已拷贝到 server/assets 目录")
     
     except Exception as e:
         print(f"错误: {e}", file=sys.stderr)
