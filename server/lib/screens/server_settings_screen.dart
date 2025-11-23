@@ -5,7 +5,6 @@ import '../services/logger_service.dart';
 import '../services/version_service.dart';
 import 'package:shared/shared.dart';
 import '../services/update_service.dart';
-import '../services/update_settings_service.dart';
 
 class ServerSettingsScreen extends StatefulWidget {
   const ServerSettingsScreen({Key? key}) : super(key: key);
@@ -22,7 +21,6 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   final LoggerService _logger = LoggerService();
   final VersionService _versionService = VersionService();
   final UpdateService _updateService = UpdateService();
-  final UpdateSettingsService _updateSettings = UpdateSettingsService();
   bool _autoStartServer = false;
   bool _autoStopEnabled = false;
   int _autoStopMinutes = 15; // UI显示用分钟，内部转换为秒存储
@@ -48,12 +46,10 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final version = await _versionService.getVersion();
-    final updateCheckUrl = await _updateSettings.getUpdateCheckUrl();
     
-    // 设置更新检查URL
-    if (updateCheckUrl.isNotEmpty) {
-      _updateService.setUpdateCheckUrl(updateCheckUrl);
-    }
+    // 注意：更新检查 URL 现在从 VERSION.yaml 读取，不再从设置中读取
+    // 如果 URL 列表为空，尝试初始化（从 VERSION.yaml 读取）
+    await _updateService.initializeUpdateUrls();
     
     // 检查是否有保存的更新信息
     final updateInfo = await _updateService.getSavedUpdateInfo();
@@ -248,19 +244,8 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   }
 
   Future<void> _checkForUpdate() async {
-    // 检查是否设置了更新检查URL
-    final updateCheckUrl = await _updateSettings.getUpdateCheckUrl();
-    if (updateCheckUrl.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('更新检查URL未设置，请在配置中设置'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-      return;
-    }
+    // 确保 URL 列表已初始化（从 VERSION.yaml 读取）
+    await _updateService.initializeUpdateUrls();
 
     setState(() {
       _isCheckingUpdate = true;

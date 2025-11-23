@@ -60,8 +60,8 @@ class UpdateCheckService {
         continue;
       }
 
-      // 确定来源名称（在 try 块外定义，以便在 catch 中使用）
-      final sourceName = i == 0 ? 'Gitee' : 'GitHub';
+      // 确定来源名称（根据 URL 内容判断，而不是索引）
+      final sourceName = updateCheckUrl.contains('gitee.com') ? 'Gitee' : 'GitHub';
 
       try {
         // 添加时间戳参数避免缓存

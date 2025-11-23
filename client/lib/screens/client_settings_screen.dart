@@ -6,7 +6,6 @@ import '../services/download_settings_service.dart';
 import '../services/version_service.dart';
 import 'package:shared/shared.dart';
 import '../services/update_service.dart';
-import '../services/update_settings_service.dart';
 import 'package:file_picker/file_picker.dart';
 
 class ClientSettingsScreen extends StatefulWidget {
@@ -21,7 +20,6 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   final DownloadSettingsService _downloadSettings = DownloadSettingsService();
   final VersionService _versionService = VersionService();
   final UpdateService _updateService = UpdateService();
-  final UpdateSettingsService _updateSettings = UpdateSettingsService();
   bool _debugMode = false;
   bool _isLoading = true;
   String _downloadPath = '';
@@ -38,16 +36,14 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   Future<void> _loadSettings() async {
     final downloadPath = await _downloadSettings.getDownloadPath();
     final version = await _versionService.getVersion();
-    final updateCheckUrl = await _updateSettings.getUpdateCheckUrl();
-    
-    // 设置更新检查URL
-    if (updateCheckUrl.isNotEmpty) {
-      _updateService.setUpdateCheckUrl(updateCheckUrl);
-    }
-    
+
+    // 注意：更新检查 URL 现在从 VERSION.yaml 读取，不再从设置中读取
+    // 如果 URL 列表为空，尝试初始化（从 VERSION.yaml 读取）
+    await _updateService.initializeUpdateUrls();
+
     // 检查是否有保存的更新信息
     final updateInfo = await _updateService.getSavedUpdateInfo();
-    
+
     setState(() {
       _debugMode = _logger.debugEnabled;
       _downloadPath = downloadPath;
@@ -62,11 +58,11 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
     setState(() {
       _debugMode = value;
     });
-    
+
     if (value) {
       await _logger.cleanOldLogs();
     }
-    
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -78,7 +74,7 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
 
   Future<void> _viewLogFiles() async {
     final files = await _logger.getLogFiles();
-    
+
     if (files.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -102,7 +98,7 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                 final file = files[index];
                 final size = file.lengthSync();
                 final modified = file.lastModifiedSync();
-                
+
                 return ListTile(
                   dense: true,
                   leading: const Icon(Icons.description),
@@ -152,7 +148,7 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   Future<void> _viewLogContent(File file) async {
     try {
       final content = await file.readAsString();
-      
+
       if (mounted) {
         showDialog(
           context: context,
@@ -291,7 +287,7 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
     return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')} '
         '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
   }
-  
+
   Future<void> _copyDownloadPath() async {
     await Clipboard.setData(ClipboardData(text: _downloadPath));
     if (mounted) {
@@ -300,11 +296,11 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
       );
     }
   }
-  
+
   Future<void> _selectDownloadPath() async {
     try {
       String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
-      
+
       if (selectedDirectory != null && selectedDirectory.isNotEmpty) {
         // 验证路径
         final isValid = await _downloadSettings.validatePath(selectedDirectory);
@@ -316,13 +312,13 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
           }
           return;
         }
-        
+
         // 保存路径
         await _downloadSettings.setDownloadPath(selectedDirectory);
         setState(() {
           _downloadPath = selectedDirectory;
         });
-        
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('下载路径已更新: $selectedDirectory')),
@@ -337,7 +333,7 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
       }
     }
   }
-  
+
   Future<void> _resetDownloadPath() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -356,7 +352,7 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
         ],
       ),
     );
-    
+
     if (confirmed == true) {
       final defaultPath = await _downloadSettings.resetToDefaultPath();
       setState(() {
@@ -371,19 +367,8 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   }
 
   Future<void> _checkForUpdate() async {
-    // 检查是否设置了更新检查URL
-    final updateCheckUrl = await _updateSettings.getUpdateCheckUrl();
-    if (updateCheckUrl.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('更新检查URL未设置，请在配置中设置'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-      return;
-    }
+    // 确保 URL 列表已初始化（从 VERSION.yaml 读取）
+    await _updateService.initializeUpdateUrls();
 
     setState(() {
       _isCheckingUpdate = true;
@@ -565,7 +550,8 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                       if (_updateInfo != null) ...[
                         const SizedBox(height: 4),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
                           decoration: BoxDecoration(
                             color: Colors.orange,
                             borderRadius: BorderRadius.circular(12),
@@ -573,7 +559,8 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.system_update, size: 14, color: Colors.white),
+                              const Icon(Icons.system_update,
+                                  size: 14, color: Colors.white),
                               const SizedBox(width: 4),
                               Text(
                                 '新版本 ${_updateInfo!.version}',
@@ -604,7 +591,8 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                             ? const SizedBox(
                                 width: 20,
                                 height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
                               )
                             : const Icon(Icons.refresh),
                         onPressed: _isCheckingUpdate ? null : _checkForUpdate,
@@ -627,6 +615,3 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
     );
   }
 }
-
-
-
