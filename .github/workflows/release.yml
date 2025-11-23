@@ -189,16 +189,16 @@ jobs:
             // 查找该 commit 对应的总构建工作流运行
             const mainWorkflowFile = 'build.yml';
             let mainWorkflowRun = null;
-            let page = 1;
-            let found = false;
+            let mainPage = 1;
+            let mainFound = false;
             
-            while (!found && page <= 5) {
+            while (!mainFound && mainPage <= 5) {
               const { data: runs } = await github.rest.actions.listWorkflowRuns({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 workflow_id: mainWorkflowFile,
                 per_page: 30,
-                page: page
+                page: mainPage
               });
               
               if (runs.workflow_runs.length === 0) break;
@@ -211,9 +211,9 @@ jobs:
               );
               
               if (mainWorkflowRun) {
-                found = true;
+                mainFound = true;
               } else {
-                page++;
+                mainPage++;
               }
             }
             
@@ -224,12 +224,12 @@ jobs:
             
             console.log(`总构建工作流运行 ID: ${mainWorkflowRun.id} (运行号: ${mainWorkflowRun.run_number})`);
             
-            // 查找子工作流的运行（从总构建工作流的运行中获取）
-            const workflowFiles = {
-              macos: 'build-client-macos.yml',
-              windows: 'build-client-windows.yml',
-              android: 'build-server-android.yml'
-            };
+            // 从主工作流运行中获取所有作业（jobs）
+            const { data: jobsData } = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: mainWorkflowRun.id
+            });
             
             const workflowRuns = {
               macos: null,
@@ -237,40 +237,35 @@ jobs:
               android: null
             };
             
-            // 查找每个子工作流的运行
-            for (const [platform, workflowFile] of Object.entries(workflowFiles)) {
-              page = 1;
-              found = false;
+            // 从作业中查找三个平台的构建作业
+            const platformKeywords = {
+              macos: ['macos', 'client-macos'],
+              windows: ['windows', 'client-windows'],
+              android: ['android', 'server-android']
+            };
+            
+            for (const job of jobsData.jobs) {
+              const jobName = job.name.toLowerCase();
               
-              while (!found && page <= 5) {
-                const { data: runs } = await github.rest.actions.listWorkflowRuns({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  workflow_id: workflowFile,
-                  per_page: 30,
-                  page: page
-                });
-                
-                if (runs.workflow_runs.length === 0) break;
-                
-                // 查找该 commit 对应的成功运行
-                const successfulRun = runs.workflow_runs.find(run => 
-                  run.head_sha === commitSha && 
-                  run.status === 'completed' && 
-                  run.conclusion === 'success'
-                );
-                
-                if (successfulRun) {
-                  workflowRuns[platform] = successfulRun.id;
-                  console.log(`  ${platform} workflow run ID: ${successfulRun.id} (运行号: ${successfulRun.run_number})`);
-                  found = true;
-                } else {
-                  page++;
+              for (const [platform, keywords] of Object.entries(platformKeywords)) {
+                if (keywords.some(keyword => jobName.includes(keyword))) {
+                  if (job.status === 'completed' && job.conclusion === 'success') {
+                    workflowRuns[platform] = mainWorkflowRun.id; // 使用主工作流运行ID
+                    console.log(`  ${platform} 作业: ${job.name} (作业 ID: ${job.id}, 状态: ${job.status}, 结论: ${job.conclusion})`);
+                  } else {
+                    core.setFailed(`${platform} 平台构建未成功完成（状态: ${job.status}, 结论: ${job.conclusion}）`);
+                    return;
+                  }
+                  break;
                 }
               }
-              
-              if (!workflowRuns[platform]) {
-                core.setFailed(`未找到 ${platform} 平台的成功构建运行`);
+            }
+            
+            // 检查是否所有平台都找到了
+            for (const [platform, runId] of Object.entries(workflowRuns)) {
+              if (!runId) {
+                core.setFailed(`未找到 ${platform} 平台的成功构建作业`);
+                return;
               }
             }
             
