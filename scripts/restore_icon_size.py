@@ -1,28 +1,21 @@
 #!/usr/bin/env python3
 """
-调整 macOS 图标尺寸，添加安全内边距
-根据 Apple HIG 指南，图标内容应该占据画布的 80-90%，留出 10-20% 的内边距
-这样可以确保图标在 Dock 和 Finder 中显示时不会显得过大
-
-macOS 图标标准：
-- 图标内容应占据画布的 90%（推荐），留出 10% 的内边距
-- 这样可以确保图标在 Dock 和 Finder 中显示时大小合适
+恢复 macOS 图标尺寸，将图标内容放大到占满画布的 95%
+根据 Apple HIG 指南，图标内容应该占据画布的 80-90%，但用户反馈图标太小
+这里将内容区域设置为 95%，只保留很小的内边距（2.5%）
 """
 
 import os
 import sys
 from PIL import Image
 
-def adjust_icon_size(icon_path, padding_percent=0.10):
+def restore_icon_size(icon_path, content_percent=0.90):
     """
-    调整图标尺寸，添加内边距
+    恢复图标尺寸，将内容放大到指定百分比
     
     Args:
         icon_path: 图标文件路径
-        padding_percent: 单边内边距百分比（默认10%，实际会限制为5%以确保内容区域≥89%）
-                        注意：padding_percent * 2 是总内边距，内容区域 = 1 - padding_percent * 2
-                        例如：padding_percent=0.05 (5%)，内容区域=90%
-                             padding_percent=0.10 (10%)，内容区域=80%
+        content_percent: 内容区域占画布的百分比（默认90%，符合 Apple HIG 指南）
     
     Returns:
         bool: 是否成功
@@ -36,27 +29,39 @@ def adjust_icon_size(icon_path, padding_percent=0.10):
             print(f"警告: {icon_path} 不是正方形 ({width}x{height})，跳过")
             return False
         
-        # 计算新的内容区域大小（90%）
-        # padding_percent 是单边内边距百分比，总内边距是 2 * padding_percent
-        # 内容区域 = 1 - 2 * padding_percent
-        # 例如：padding_percent=0.05 (5%)，内容区域=90%
-        # 或者：padding_percent=0.10 (10%)，内容区域=80%
-        # 为了达到 90% 内容区域，使用 5% 的单边内边距
-        actual_padding_percent = padding_percent if padding_percent <= 0.05 else 0.05
-        content_size = int(width * (1 - actual_padding_percent * 2))
-        padding = (width - content_size) // 2
+        # 找到当前内容的边界框
+        bbox = img.getbbox()
+        if not bbox:
+            print(f"警告: {icon_path} 完全透明，跳过")
+            return False
+        
+        left, top, right, bottom = bbox
+        current_content_width = right - left
+        current_content_height = bottom - top
+        
+        # 计算目标内容区域大小（90%）
+        target_content_size = int(width * content_percent)
+        padding = (width - target_content_size) // 2
+        
+        # 提取当前内容区域
+        current_content = img.crop((left, top, right, bottom))
+        
+        # 将内容放大到目标尺寸
+        resized_content = current_content.resize(
+            (target_content_size, target_content_size),
+            Image.Resampling.LANCZOS
+        )
         
         # 创建新的透明画布
         new_img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
         
-        # 将原图缩小并居中放置
-        resized_img = img.resize((content_size, content_size), Image.Resampling.LANCZOS)
-        new_img.paste(resized_img, (padding, padding), resized_img)
+        # 将放大后的内容居中放置
+        new_img.paste(resized_content, (padding, padding), resized_content)
         
         # 保存
         new_img.save(icon_path, 'PNG', optimize=True)
-        content_percent = int((content_size / width) * 100)
-        print(f"✓ 已调整: {os.path.basename(icon_path)} ({width}x{height}, 内容区域: {content_size}x{content_size} ({content_percent}%), 内边距: {padding}px)")
+        actual_content_percent = (target_content_size / width) * 100
+        print(f"✓ 已恢复: {os.path.basename(icon_path)} ({width}x{width}, 内容区域: {target_content_size}x{target_content_size} ({actual_content_percent:.1f}%), 内边距: {padding}px)")
         return True
     except Exception as e:
         print(f"错误: 处理 {icon_path} 时出错: {e}")
@@ -68,8 +73,8 @@ def main():
     """主函数"""
     print("=" * 60)
     print("macOS 图标尺寸调整脚本")
-    print("添加安全内边距（10%），使图标内容占90%")
-    print("根据 Apple HIG 指南：图标内容应占据画布的 80-90%")
+    print("将图标内容调整到占满画布的 90%")
+    print("符合 Apple HIG 指南：图标内容应占据画布的 80-90%")
     print("=" * 60)
     print()
     
@@ -105,7 +110,7 @@ def main():
             print(f"警告: {icon_path} 不存在，跳过")
             continue
         
-        if adjust_icon_size(icon_path):
+        if restore_icon_size(icon_path):
             success_count += 1
     
     print()
