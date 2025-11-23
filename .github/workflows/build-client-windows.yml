@@ -1,0 +1,175 @@
+name: Build Client Windows
+
+on:
+  workflow_call:  # 作为可重用工作流被调用
+  workflow_dispatch:  # 允许手动触发
+  push:
+    tags:
+      - 'build_client_windows_v*'  # 向后兼容：当推送 build_client_windows_v* 标签时触发
+
+env:
+  FLUTTER_VERSION: '3.24.0'
+
+jobs:
+  build-client-windows:
+    name: Build Client Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            $env:APPDATA\Python\Python*\site-packages
+            $env:LOCALAPPDATA\pip\Cache
+          key: python-windows-pyyaml-1.0
+          restore-keys: |
+            python-windows-pyyaml-
+
+      - name: Cache Flutter dependencies
+        id: cache_flutter
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: |
+            client/.dart_tool
+            $env:APPDATA\Pub\Cache
+          key: flutter-windows-client-${{ hashFiles('client/pubspec.lock') }}
+          restore-keys: |
+            flutter-windows-client-
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Extract and sync version
+        id: get_version
+        run: |
+          # 安装 PyYAML
+          $ErrorActionPreference = "SilentlyContinue"
+          python -c "import yaml" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            python -m pip install --user pyyaml --quiet
+          }
+          $ErrorActionPreference = "Continue"
+          
+          # 使用统一的版本管理模块提取和同步版本号
+          python scripts/lib/version_manager.py extract client --sync client/pubspec.yaml > version_output.json
+          
+          # 解析 JSON 输出并设置 GitHub Actions 输出
+          $versionInfo = Get-Content version_output.json | ConvertFrom-Json
+          echo "VERSION=$($versionInfo.version)" >> $env:GITHUB_OUTPUT
+          echo "BUILD_NUMBER=$($versionInfo.build_number)" >> $env:GITHUB_OUTPUT
+          echo "FULL_VERSION=$($versionInfo.full_version)" >> $env:GITHUB_OUTPUT
+          echo "TAG_VERSION=$($versionInfo.tag_version)" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $($versionInfo.version)"
+          Write-Host "Build Number: $($versionInfo.build_number)"
+          Write-Host "Full Version: $($versionInfo.full_version)"
+
+      - name: Build Windows app
+        run: |
+          cd client
+          bash scripts/build.sh --release --windows
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          # 使用 Chocolatey 安装 Inno Setup（如果可用），否则直接下载安装
+          if (Get-Command choco -ErrorAction SilentlyContinue) {
+            choco install innosetup -y
+          } else {
+            # 下载并安装 Inno Setup
+            $innosetupUrl = "https://files.jrsoftware.org/is/6/innosetup-6.2.2.exe"
+            $innosetupPath = "$env:TEMP\innosetup.exe"
+            Write-Host "Downloading Inno Setup..."
+            Invoke-WebRequest -Uri $innosetupUrl -OutFile $innosetupPath
+            Write-Host "Installing Inno Setup..."
+            Start-Process -FilePath $innosetupPath -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /DIR=C:\Program Files (x86)\Inno Setup 6" -Wait
+          }
+          # 验证安装
+          $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (Test-Path $isccPath) {
+            Write-Host "Inno Setup installed successfully at: $isccPath"
+            echo "$isccPath" >> $env:GITHUB_PATH
+          } else {
+            Write-Host "Error: Inno Setup not found at expected path"
+            exit 1
+          }
+
+      - name: Create Inno Setup script
+        shell: powershell
+        run: |
+          $version = "${{ steps.get_version.outputs.FULL_VERSION }}"
+          # 获取构建产物的绝对路径
+          $buildPath = Resolve-Path "client\build\windows\x64\runner\Release"
+          # 获取工作区根目录的绝对路径
+          $workspaceRoot = $env:GITHUB_WORKSPACE
+          $scriptContent = @'
+          [Setup]
+          AppName=HelloKnightRCC
+          AppVersion=PLACEHOLDER_VERSION
+          DefaultDirName={autopf}\HelloKnightRCC
+          DefaultGroupName=HelloKnightRCC
+          OutputDir=PLACEHOLDER_WORKSPACE_ROOT
+          OutputBaseFilename=HelloKnightRCC_windows_PLACEHOLDER_VERSION_setup
+          Compression=lzma
+          SolidCompression=yes
+          PrivilegesRequired=admin
+          
+          [Files]
+          Source: "PLACEHOLDER_BUILD_PATH\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+          
+          [Icons]
+          Name: "{group}\HelloKnightRCC"; Filename: "{app}\HelloKnightRCC.exe"
+          Name: "{autodesktop}\HelloKnightRCC"; Filename: "{app}\HelloKnightRCC.exe"; Tasks: desktopicon
+          
+          [Tasks]
+          Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
+          '@
+          # 替换占位符
+          $scriptContent = $scriptContent -replace 'PLACEHOLDER_VERSION', $version
+          $scriptContent = $scriptContent -replace 'PLACEHOLDER_BUILD_PATH', $buildPath
+          $scriptContent = $scriptContent -replace 'PLACEHOLDER_WORKSPACE_ROOT', $workspaceRoot
+          New-Item -ItemType Directory -Force -Path "installer" | Out-Null
+          $scriptContent | Out-File -FilePath "installer\setup.iss" -Encoding UTF8
+          Write-Host "Inno Setup script created with build path: $buildPath"
+          Write-Host "Output directory: $workspaceRoot"
+
+      - name: Build Windows installer
+        shell: powershell
+        run: |
+          $version = "${{ steps.get_version.outputs.FULL_VERSION }}"
+          $installerName = "HelloKnightRCC_windows_${version}_setup.exe"
+          # 编译 Inno Setup 脚本
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\setup.iss
+          # 安装程序应该在工作区根目录
+          if (Test-Path "$env:GITHUB_WORKSPACE\$installerName") {
+            Move-Item -Path "$env:GITHUB_WORKSPACE\$installerName" -Destination "$env:GITHUB_WORKSPACE\client\$installerName"
+            Write-Host "Installer created: $installerName"
+          } elseif (Test-Path "installer\$installerName") {
+            Move-Item -Path "installer\$installerName" -Destination "$env:GITHUB_WORKSPACE\client\$installerName"
+            Write-Host "Installer created: $installerName"
+          } elseif (Test-Path "installer\installer\$installerName") {
+            Move-Item -Path "installer\installer\$installerName" -Destination "$env:GITHUB_WORKSPACE\client\$installerName"
+            Write-Host "Installer created: $installerName"
+          } else {
+            Write-Host "Error: Installer not found"
+            Write-Host "Searching in: $env:GITHUB_WORKSPACE"
+            Get-ChildItem -Path "$env:GITHUB_WORKSPACE" -Filter "*$installerName" -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+
+      - name: Upload Windows installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HelloKnightRCC_windows
+          path: client/HelloKnightRCC_windows_${{ steps.get_version.outputs.FULL_VERSION }}_setup.exe
+          retention-days: 30
+

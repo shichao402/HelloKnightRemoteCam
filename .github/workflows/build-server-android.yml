@@ -1,0 +1,119 @@
+name: Build Server Android
+
+on:
+  workflow_call:  # 作为可重用工作流被调用
+  workflow_dispatch:  # 允许手动触发
+  push:
+    tags:
+      - 'build_server_android_v*'  # 向后兼容：当推送 build_server_android_v* 标签时触发
+
+env:
+  FLUTTER_VERSION: '3.24.0'
+
+jobs:
+  build-server-android:
+    name: Build Server Android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/lib/python3.*/site-packages
+          key: python-linux-pyyaml-1.0
+          restore-keys: |
+            python-linux-pyyaml-
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Cache Flutter dependencies
+        id: cache_flutter
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: |
+            server/.dart_tool
+            ~/.pub-cache
+          key: flutter-${{ runner.os }}-server-${{ hashFiles('server/pubspec.lock') }}
+          restore-keys: |
+            flutter-${{ runner.os }}-server-
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Extract and sync version
+        id: get_version
+        run: |
+          # 安装 PyYAML
+          python3 -m pip install --user pyyaml --quiet || \
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install pyyaml --quiet
+          
+          # 使用统一的版本管理模块提取和同步版本号
+          python3 scripts/lib/version_manager.py extract server --sync server/pubspec.yaml > version_output.json
+          
+          # 解析 JSON 输出并设置 GitHub Actions 输出
+          VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['version'])")
+          BUILD_NUMBER=$(python3 -c "import json; print(json.load(open('version_output.json'))['build_number'])")
+          FULL_VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['full_version'])")
+          TAG_VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['tag_version'])")
+          
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+          echo "FULL_VERSION=$FULL_VERSION" >> $GITHUB_OUTPUT
+          echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+          echo "Build Number: $BUILD_NUMBER"
+          echo "Full Version: $FULL_VERSION"
+
+      - name: Build Android APK
+        run: |
+          cd server
+          ./scripts/build.sh --release
+
+      - name: Rename APK with version and create zip
+        run: |
+          cd server/build/app/outputs/flutter-apk
+          APK_NAME="helloknightrcc_server_android_${{ steps.get_version.outputs.FULL_VERSION }}.apk"
+          ZIP_NAME="helloknightrcc_server_android_${{ steps.get_version.outputs.FULL_VERSION }}.zip"
+          
+          # 重命名APK
+          mv app-release.apk "$APK_NAME"
+          
+          # 压缩APK为zip
+          zip "$ZIP_NAME" "$APK_NAME"
+          
+          # 移动到工作区根目录
+          mv "$APK_NAME" $GITHUB_WORKSPACE/server/
+          mv "$ZIP_NAME" $GITHUB_WORKSPACE/server/
+          
+          echo "APK已压缩为zip: $ZIP_NAME"
+
+      - name: Upload version info
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-info-android
+          path: |
+            VERSION.yaml
+            VERSION
+          retention-days: 30
+
+      - name: Upload Android ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: helloknightrcc_server_android
+          path: server/helloknightrcc_server_android_${{ steps.get_version.outputs.FULL_VERSION }}.zip
+          retention-days: 30
+

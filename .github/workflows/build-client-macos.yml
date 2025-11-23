@@ -1,0 +1,176 @@
+name: Build Client macOS
+
+on:
+  workflow_call:  # 作为可重用工作流被调用
+  workflow_dispatch:  # 允许手动触发
+  push:
+    tags:
+      - 'build_client_macos_v*'  # 向后兼容：当推送 build_client_macos_v* 标签时触发
+
+env:
+  FLUTTER_VERSION: '3.24.0'
+
+jobs:
+  build-client-macos:
+    name: Build Client macOS
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/lib/python3.*/site-packages
+          key: python-${{ runner.os }}-pyyaml-1.0
+          restore-keys: |
+            python-${{ runner.os }}-pyyaml-
+
+      - name: Cache Flutter dependencies
+        id: cache_flutter
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: |
+            client/.dart_tool
+            ~/.pub-cache
+          key: flutter-${{ runner.os }}-client-${{ hashFiles('client/pubspec.lock') }}
+          restore-keys: |
+            flutter-${{ runner.os }}-client-
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Extract and sync version
+        id: get_version
+        run: |
+          # 安装 PyYAML
+          python3 -c "import yaml" 2>/dev/null || \
+          python3 -m pip install --user --break-system-packages pyyaml --quiet || \
+          python3 -m pip install --break-system-packages pyyaml --quiet
+          
+          # 使用统一的版本管理模块提取和同步版本号
+          python3 scripts/lib/version_manager.py extract client --sync client/pubspec.yaml > version_output.json
+          
+          # 解析 JSON 输出并设置 GitHub Actions 输出
+          VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['version'])")
+          BUILD_NUMBER=$(python3 -c "import json; print(json.load(open('version_output.json'))['build_number'])")
+          FULL_VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['full_version'])")
+          TAG_VERSION=$(python3 -c "import json; print(json.load(open('version_output.json'))['tag_version'])")
+          
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+          echo "FULL_VERSION=$FULL_VERSION" >> $GITHUB_OUTPUT
+          echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+          echo "Build Number: $BUILD_NUMBER"
+          echo "Full Version: $FULL_VERSION"
+
+      - name: Build macOS app
+        run: |
+          cd client
+          ./scripts/build.sh --release --macos
+
+      - name: Create macOS DMG
+        run: |
+          cd client/build/macos/Build/Products/Release
+          APP_NAME="HelloKnightRCC.app"
+          DMG_NAME="HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.dmg"
+          VOLUME_NAME="HelloKnightRCC"
+          
+          # 创建临时目录用于DMG内容
+          mkdir -p dmg_temp
+          cp -R "$APP_NAME" dmg_temp/
+          
+          # 创建指向Applications文件夹的快捷方式（符号链接）
+          ln -s /Applications dmg_temp/Applications
+          
+          # 创建临时DMG（可读写）
+          TEMP_DMG="temp_$DMG_NAME"
+          hdiutil create -volname "$VOLUME_NAME" -srcfolder dmg_temp -ov -format UDRW "$TEMP_DMG"
+          
+          # 挂载DMG以设置视图属性
+          DMG_DEVICE=$(hdiutil attach -readwrite -noverify -noautoopen "$TEMP_DMG" | egrep '^/dev/' | sed 1q | awk '{print $1}')
+          
+          # 等待DMG挂载
+          sleep 2
+          
+          DMG_MOUNT_POINT="/Volumes/$VOLUME_NAME"
+          if [ -d "$DMG_MOUNT_POINT" ]; then
+            # 设置Applications快捷方式的属性（使其显示为快捷方式图标）
+            if command -v SetFile &> /dev/null; then
+              SetFile -a C "$DMG_MOUNT_POINT/Applications" || true
+            fi
+            
+            # 尝试设置DMG窗口视图
+            osascript -e 'tell application "Finder"' \
+              -e "  tell disk \"$VOLUME_NAME\"" \
+              -e '    open' \
+              -e '    set current view of container window to icon view' \
+              -e '    set toolbar visible of container window to false' \
+              -e '    set statusbar visible of container window to false' \
+              -e '    set the bounds of container window to {400, 100, 920, 420}' \
+              -e '    set viewOptions to the icon view options of container window' \
+              -e '    set arrangement of viewOptions to not arranged' \
+              -e '    set icon size of viewOptions to 72' \
+              -e "    set position of item \"$APP_NAME\" of container window to {160, 205}" \
+              -e '    set position of item "Applications" of container window to {360, 205}' \
+              -e '    close' \
+              -e '    open' \
+              -e '    update without registering applications' \
+              -e '    delay 2' \
+              -e '  end tell' \
+              -e 'end tell' 2>/dev/null || true
+          fi
+          
+          # 卸载DMG
+          hdiutil detach "$DMG_DEVICE" || true
+          
+          # 转换为只读压缩格式
+          hdiutil convert "$TEMP_DMG" -format UDZO -o "$DMG_NAME" -ov
+          
+          # 删除临时DMG
+          rm -f "$TEMP_DMG"
+          
+          # 移动到工作区根目录
+          mv "$DMG_NAME" $GITHUB_WORKSPACE/client/
+          
+          # 清理临时目录
+          rm -rf dmg_temp
+          
+          echo "DMG created: $DMG_NAME (with Applications shortcut)"
+
+      - name: Archive macOS DMG (zip)
+        run: |
+          cd $GITHUB_WORKSPACE/client
+          DMG_NAME="HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.dmg"
+          ZIP_NAME="HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip"
+          
+          # 将DMG文件打包成zip（zip包里包含dmg文件）
+          zip "$ZIP_NAME" "$DMG_NAME"
+          
+          echo "macOS ZIP created: $ZIP_NAME (contains DMG file)"
+
+      - name: Upload version info
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-info-macos
+          path: |
+            VERSION.yaml
+            VERSION
+          retention-days: 30
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: HelloKnightRCC_macos
+          path: |
+            client/HelloKnightRCC_macos_${{ steps.get_version.outputs.FULL_VERSION }}.zip
+          retention-days: 30
+
