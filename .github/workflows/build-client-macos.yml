@@ -20,13 +20,22 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Cache Python dependencies
-        uses: actions/cache@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          path: ~/.local/lib/python3.*/site-packages
-          key: python-${{ runner.os }}-pyyaml-1.0
-          restore-keys: |
-            python-${{ runner.os }}-pyyaml-
+          python-version: '3.x'
+          cache: 'pip'
+
+      - name: Get pubspec.lock hash
+        id: pubspec_hash
+        continue-on-error: true
+        run: |
+          if [ -f "client/pubspec.lock" ]; then
+            HASH=$(sha256sum client/pubspec.lock | cut -d' ' -f1 | head -c 16)
+            echo "hash=$HASH" >> $GITHUB_OUTPUT
+          else
+            echo "hash=default" >> $GITHUB_OUTPUT
+          fi
 
       - name: Cache Flutter dependencies
         id: cache_flutter
@@ -36,8 +45,9 @@ jobs:
           path: |
             client/.dart_tool
             ~/.pub-cache
-          key: flutter-${{ runner.os }}-client-${{ hashFiles('client/pubspec.lock') }}
+          key: flutter-${{ runner.os }}-client-${{ env.FLUTTER_VERSION }}-${{ steps.pubspec_hash.outputs.hash }}
           restore-keys: |
+            flutter-${{ runner.os }}-client-${{ env.FLUTTER_VERSION }}-
             flutter-${{ runner.os }}-client-
 
       - name: Setup Flutter

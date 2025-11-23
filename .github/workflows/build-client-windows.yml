@@ -20,15 +20,23 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Cache Python dependencies
-        uses: actions/cache@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          path: |
-            $env:APPDATA\Python\Python*\site-packages
-            $env:LOCALAPPDATA\pip\Cache
-          key: python-windows-pyyaml-1.0
-          restore-keys: |
-            python-windows-pyyaml-
+          python-version: '3.x'
+          cache: 'pip'
+
+      - name: Get pubspec.lock hash
+        id: pubspec_hash
+        continue-on-error: true
+        shell: bash
+        run: |
+          if [ -f "client/pubspec.lock" ]; then
+            HASH=$(sha256sum client/pubspec.lock | cut -d' ' -f1 | head -c 16)
+            echo "hash=$HASH" >> $GITHUB_OUTPUT
+          else
+            echo "hash=default" >> $GITHUB_OUTPUT
+          fi
 
       - name: Cache Flutter dependencies
         id: cache_flutter
@@ -38,8 +46,9 @@ jobs:
           path: |
             client/.dart_tool
             $env:APPDATA\Pub\Cache
-          key: flutter-windows-client-${{ hashFiles('client/pubspec.lock') }}
+          key: flutter-windows-client-${{ env.FLUTTER_VERSION }}-${{ steps.pubspec_hash.outputs.hash }}
           restore-keys: |
+            flutter-windows-client-${{ env.FLUTTER_VERSION }}-
             flutter-windows-client-
 
       - name: Setup Flutter

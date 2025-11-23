@@ -33,13 +33,11 @@ jobs:
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cache Python dependencies
-        uses: actions/cache@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          path: ~/.local/lib/python3.*/site-packages
-          key: python-linux-pyyaml-1.0
-          restore-keys: |
-            python-linux-pyyaml-
+          python-version: '3.x'
+          cache: 'pip'
 
       - name: Install PyYAML
         run: |
