@@ -445,6 +445,56 @@ jobs:
           echo "重命名后的文件列表（仅zip文件）:"
           ls -la artifacts/
 
+      - name: Verify artifacts exist before creating release
+        run: |
+          echo "🔍 验证构建产物文件是否存在..."
+          
+          CLIENT_VERSION="${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}"
+          SERVER_VERSION="${{ steps.get_versions.outputs.SERVER_FULL_VERSION }}"
+          
+          MACOS_FILE="artifacts/HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
+          WINDOWS_FILE="artifacts/HelloKnightRCC_windows_${CLIENT_VERSION}.zip"
+          ANDROID_FILE="artifacts/helloknightrcc_server_android_${SERVER_VERSION}.zip"
+          
+          ALL_FILES_EXIST=true
+          
+          if [ ! -f "$MACOS_FILE" ]; then
+            echo "❌ 错误: macOS 文件不存在: ${MACOS_FILE}"
+            ls -la artifacts/ || echo "artifacts 目录不存在"
+            ALL_FILES_EXIST=false
+          else
+            MACOS_SIZE=$(du -h "$MACOS_FILE" | cut -f1)
+            echo "✅ macOS 文件存在: ${MACOS_FILE} (${MACOS_SIZE})"
+          fi
+          
+          if [ ! -f "$WINDOWS_FILE" ]; then
+            echo "❌ 错误: Windows 文件不存在: ${WINDOWS_FILE}"
+            ls -la artifacts/ || echo "artifacts 目录不存在"
+            ALL_FILES_EXIST=false
+          else
+            WINDOWS_SIZE=$(du -h "$WINDOWS_FILE" | cut -f1)
+            echo "✅ Windows 文件存在: ${WINDOWS_FILE} (${WINDOWS_SIZE})"
+          fi
+          
+          if [ ! -f "$ANDROID_FILE" ]; then
+            echo "❌ 错误: Android 文件不存在: ${ANDROID_FILE}"
+            ls -la artifacts/ || echo "artifacts 目录不存在"
+            ALL_FILES_EXIST=false
+          else
+            ANDROID_SIZE=$(du -h "$ANDROID_FILE" | cut -f1)
+            echo "✅ Android 文件存在: ${ANDROID_FILE} (${ANDROID_SIZE})"
+          fi
+          
+          if [ "$ALL_FILES_EXIST" = false ]; then
+            echo ""
+            echo "❌ 部分构建产物文件不存在，无法创建 Release"
+            echo "请检查构建工作流是否成功完成"
+            exit 1
+          fi
+          
+          echo ""
+          echo "✅ 所有构建产物文件验证通过"
+
       - name: Delete existing Release if exists (including drafts)
         uses: actions/github-script@v7
         continue-on-error: true
@@ -554,15 +604,17 @@ jobs:
             artifacts/helloknightrcc_server_android_${{ steps.get_versions.outputs.SERVER_FULL_VERSION }}.zip
           draft: false
           prerelease: false
+          fail_on_unmatched_files: true
+          generate_release_notes: false
 
-      - name: Verify Release created successfully
+      - name: Verify Release created successfully (not draft)
         run: |
           TAG_NAME="${{ steps.get_versions.outputs.TAG_VERSION }}"
-          echo "🔍 验证 GitHub Release 是否创建成功..."
+          echo "🔍 验证 GitHub Release 是否创建成功（非 draft）..."
           echo "  标签: ${TAG_NAME}"
           
           # 等待一下，确保 Release 完全创建
-          sleep 3
+          sleep 5
           
           # 检查 Release 是否存在（通过 tag，不包括 draft）
           RELEASE_INFO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
