@@ -78,18 +78,41 @@ echo "获取依赖..."
 $FLUTTER pub get
 
 # 拷贝 VERSION.yaml 到 assets 目录（使用统一的版本管理模块）
+# 注意：必须在构建之前拷贝，确保 assets/VERSION.yaml 是最新的
 if [ -f "$VERSION_MANAGER" ]; then
     echo "拷贝 VERSION.yaml 到 assets 目录..."
     if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "win32" ]] || [[ -n "$WINDIR" ]]; then
         # Windows 环境
         PYTHONIOENCODING=utf-8 python "$VERSION_MANAGER" copy-to-assets || {
-            echo "警告: 拷贝 VERSION.yaml 到 assets 失败，跳过"
+            echo "警告: 拷贝 VERSION.yaml 到 assets 失败，尝试手动拷贝..."
+            if [ -f "$PROJECT_ROOT/VERSION.yaml" ]; then
+                ASSETS_DIR="assets"
+                mkdir -p "$ASSETS_DIR"
+                cp "$PROJECT_ROOT/VERSION.yaml" "$ASSETS_DIR/VERSION.yaml"
+                echo "✓ VERSION.yaml 已手动拷贝到 $ASSETS_DIR"
+            fi
         }
     else
         # macOS/Linux 环境
         python3 "$VERSION_MANAGER" copy-to-assets || {
-            echo "警告: 拷贝 VERSION.yaml 到 assets 失败，跳过"
+            echo "警告: 拷贝 VERSION.yaml 到 assets 失败，尝试手动拷贝..."
+            if [ -f "$PROJECT_ROOT/VERSION.yaml" ]; then
+                ASSETS_DIR="assets"
+                mkdir -p "$ASSETS_DIR"
+                cp "$PROJECT_ROOT/VERSION.yaml" "$ASSETS_DIR/VERSION.yaml"
+                echo "✓ VERSION.yaml 已手动拷贝到 $ASSETS_DIR"
+            fi
         }
+    fi
+    
+    # 验证拷贝是否成功
+    if [ -f "assets/VERSION.yaml" ]; then
+        echo "✓ 验证: assets/VERSION.yaml 已存在"
+        # 显示文件内容的前几行（用于调试）
+        echo "  文件内容预览:"
+        head -3 "assets/VERSION.yaml" | sed 's/^/    /'
+    else
+        echo "⚠️  警告: assets/VERSION.yaml 不存在，构建可能使用旧版本"
     fi
 else
     echo "⚠️  警告: 版本管理模块未找到，手动拷贝 VERSION.yaml..."

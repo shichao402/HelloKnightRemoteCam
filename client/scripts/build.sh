@@ -69,6 +69,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VERSION_MANAGER="$PROJECT_ROOT/scripts/lib/version_manager.py"
 PUBSPEC_FILE="pubspec.yaml"
+ASSETS_VERSION_FILE="assets/VERSION.yaml"
 
 # 注意：不再自动还原 pubspec.yaml，保留版本号同步后的状态
 
@@ -85,6 +86,16 @@ if [ -f "$VERSION_MANAGER" ]; then
         python3 "$VERSION_MANAGER" sync client --pubspec "$(pwd)/$PUBSPEC_FILE" || {
             echo "警告: 版本号同步失败，跳过版本号同步"
         }
+    fi
+    
+    # 同步 VERSION.yaml 到 assets 目录（Flutter 构建时会打包到应用中）
+    echo "同步 VERSION.yaml 到 assets 目录..."
+    if [ -f "$PROJECT_ROOT/VERSION.yaml" ]; then
+        mkdir -p "$(dirname "$ASSETS_VERSION_FILE")"
+        cp "$PROJECT_ROOT/VERSION.yaml" "$ASSETS_VERSION_FILE"
+        echo "✓ VERSION.yaml 已同步到 $ASSETS_VERSION_FILE"
+    else
+        echo "⚠️  警告: 根目录 VERSION.yaml 不存在，跳过同步到 assets"
     fi
 else
     echo "警告: 版本管理模块未找到，跳过版本号同步"
