@@ -69,10 +69,10 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Extract version from release
-        id: get_version
+      - name: Extract release tag (for finding release)
+        id: get_release_tag
         run: |
-          echo "🔍 提取 Release 版本信息..."
+          echo "🔍 提取 Release 标签（用于查找 Release）..."
           echo "  事件类型: ${{ github.event_name }}"
           echo "  GITHUB_REF: ${GITHUB_REF}"
           
@@ -133,11 +133,10 @@ jobs:
             exit 1
           fi
           
-          VERSION=${TAG_NAME#v}  # 去掉 v 前缀
           echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_OUTPUT
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
           echo "✅ Release 标签: ${TAG_NAME}"
-          echo "✅ 版本号: ${VERSION}"
+          echo ""
+          echo "注意: 实际版本号将从构建产物中的 VERSION.yaml 提取"
 
       - name: Get Release info
         uses: actions/github-script@v7
@@ -146,7 +145,7 @@ jobs:
           script: |
             // 从 release 事件获取 release 信息
             let release;
-            const tagName = '${{ steps.get_version.outputs.TAG_NAME }}';
+            const tagName = '${{ steps.get_release_tag.outputs.TAG_NAME }}';
             const repoOwner = context.repo.owner;
             const repoName = context.repo.repo;
             
@@ -238,7 +237,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}  # GitHub CLI 需要这个 token
         run: |
-          TAG_NAME="${{ steps.get_version.outputs.TAG_NAME }}"
+          TAG_NAME="${{ steps.get_release_tag.outputs.TAG_NAME }}"
           echo "📥 下载构建产物文件..."
           echo "  Release 标签: ${TAG_NAME}"
           
@@ -301,6 +300,74 @@ jobs:
           echo ""
           echo "  文件数量: ${FILE_COUNT}"
           echo "  总大小: ${TOTAL_SIZE}"
+
+      - name: Extract VERSION.yaml from build tag and get versions
+        id: get_version
+        run: |
+          # 从 Release 标签获取版本号
+          TAG_NAME="${{ steps.get_release_tag.outputs.TAG_NAME }}"
+          VERSION=${TAG_NAME#v}  # 去掉 v 前缀（例如 v1.0.7 -> 1.0.7）
+          
+          echo "🔍 从 build tag 读取 VERSION.yaml..."
+          echo "  Release Tag: ${TAG_NAME}"
+          echo "  Version: ${VERSION}"
+          
+          # 根据版本号构建 build tag 名称（例如 1.0.7 -> build1.0.7）
+          BUILD_TAG="build${VERSION}"
+          echo "  Build Tag: ${BUILD_TAG}"
+          
+          # Checkout build tag 以获取 VERSION.yaml
+          git fetch --tags --force
+          if git rev-parse "${BUILD_TAG}" >/dev/null 2>&1; then
+            echo "✅ 找到 build tag: ${BUILD_TAG}"
+            git checkout "${BUILD_TAG}" -- VERSION.yaml 2>/dev/null || {
+              echo "⚠️ 无法 checkout VERSION.yaml，尝试从当前工作区读取"
+              if [ ! -f "VERSION.yaml" ]; then
+                echo "❌ 错误: 未找到 VERSION.yaml"
+                exit 1
+              fi
+            }
+          else
+            echo "⚠️ 未找到 build tag: ${BUILD_TAG}"
+            echo "  尝试从当前工作区读取 VERSION.yaml"
+            if [ ! -f "VERSION.yaml" ]; then
+              echo "❌ 错误: 未找到 VERSION.yaml，也无法找到 build tag"
+              echo "  使用 Release 标签版本号: ${VERSION}"
+              echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_OUTPUT
+              echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          
+          # 安装 PyYAML
+          python3 -m pip install --user pyyaml --quiet || \
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install pyyaml --quiet
+          
+          # 从 VERSION.yaml 读取版本信息
+          CLIENT_FULL_VERSION=$(python3 -c "import yaml; print(yaml.safe_load(open('VERSION.yaml'))['client']['version'])")
+          SERVER_FULL_VERSION=$(python3 -c "import yaml; print(yaml.safe_load(open('VERSION.yaml'))['server']['version'])")
+          
+          # 提取主版本号（去除build number）
+          CLIENT_VERSION_NUM=$(echo "${CLIENT_FULL_VERSION}" | sed 's/+.*//')
+          SERVER_VERSION_NUM=$(echo "${SERVER_FULL_VERSION}" | sed 's/+.*//')
+          
+          # 使用从 VERSION.yaml 提取的版本号（确保一致性）
+          VERSION="${CLIENT_VERSION_NUM}"
+          
+          echo ""
+          echo "✅ 从 build tag (${BUILD_TAG}) 的 VERSION.yaml 提取的版本信息:"
+          echo "  Client Full Version: ${CLIENT_FULL_VERSION}"
+          echo "  Client Version Number: ${CLIENT_VERSION_NUM}"
+          echo "  Server Full Version: ${SERVER_FULL_VERSION}"
+          echo "  Server Version Number: ${SERVER_VERSION_NUM}"
+          echo "  Release Tag: ${TAG_NAME}"
+          echo "  Release Version: ${VERSION}"
+          
+          # 输出版本号供后续步骤使用
+          echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "CLIENT_FULL_VERSION=${CLIENT_FULL_VERSION}" >> $GITHUB_OUTPUT
+          echo "SERVER_FULL_VERSION=${SERVER_FULL_VERSION}" >> $GITHUB_OUTPUT
 
       - name: Create Gitee Release
         env:

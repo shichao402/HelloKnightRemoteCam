@@ -273,6 +273,7 @@ jobs:
             }
             
             // 设置输出
+            core.setOutput('build_tag', foundBuildTag || '');
             core.setOutput('macos_run_id', workflowRuns.macos || '');
             core.setOutput('windows_run_id', workflowRuns.windows || '');
             core.setOutput('android_run_id', workflowRuns.android || '');
@@ -292,46 +293,56 @@ jobs:
               releaseTag
             };
 
-      - name: Extract versions from build results
-        id: get_versions
+      - name: Checkout build tag and extract VERSION.yaml
+        id: get_versions_from_tag
         run: |
-          # 使用从构建标签中找到的版本号
-          RELEASE_VERSION="${{ steps.find_builds.outputs.release_version }}"
-          TAG_VERSION="${{ steps.find_builds.outputs.release_tag }}"
+          # 获取找到的 build tag
+          BUILD_TAG="${{ steps.find_builds.outputs.build_tag }}"
           
-          MACOS_VERSION="${{ steps.find_builds.outputs.macos_version }}"
-          WINDOWS_VERSION="${{ steps.find_builds.outputs.windows_version }}"
-          ANDROID_VERSION="${{ steps.find_builds.outputs.android_version }}"
-          
-          # 从构建版本号中提取主版本号和构建号
-          # 构建版本号格式：x.y.z+build_number
-          # 如果没有构建号，则从 VERSION.yaml 读取
-          
-          # 安装 PyYAML（如果需要）
-          python3 -c "import yaml" 2>/dev/null || \
-          python3 -m pip install --user --break-system-packages pyyaml --quiet || \
-          python3 -m pip install --break-system-packages pyyaml --quiet || \
-          python3 -m pip install --user pyyaml --quiet || true
-          
-          # 从 VERSION.yaml 读取完整版本信息（用于构建号）
-          if [ -f "VERSION.yaml" ]; then
-            CLIENT_FULL_VERSION=$(python3 scripts/lib/version_manager.py extract client --json 2>/dev/null | \
-              python3 -c "import sys, json; print(json.load(sys.stdin)['full_version'])" 2>/dev/null || echo "")
-            SERVER_FULL_VERSION=$(python3 scripts/lib/version_manager.py extract server --json 2>/dev/null | \
-              python3 -c "import sys, json; print(json.load(sys.stdin)['full_version'])" 2>/dev/null || echo "")
-          else
-            CLIENT_FULL_VERSION="${MACOS_VERSION}"
-            SERVER_FULL_VERSION="${ANDROID_VERSION}"
+          if [ -z "$BUILD_TAG" ] || [ "$BUILD_TAG" == "" ]; then
+            echo "❌ 错误: 未找到 build tag"
+            exit 1
           fi
           
-          # 使用构建版本号作为主版本号
-          CLIENT_VERSION_NUM="${MACOS_VERSION}"
-          SERVER_VERSION_NUM="${ANDROID_VERSION}"
+          echo "🔍 从 build tag 读取 VERSION.yaml..."
+          echo "  Build Tag: ${BUILD_TAG}"
           
-          # 如果没有找到构建版本，使用 release_version
-          CLIENT_VERSION_NUM=${CLIENT_VERSION_NUM:-$RELEASE_VERSION}
-          SERVER_VERSION_NUM=${SERVER_VERSION_NUM:-$RELEASE_VERSION}
+          # Checkout build tag 以获取 VERSION.yaml
+          git fetch --tags --force
+          git checkout "${BUILD_TAG}" -- VERSION.yaml 2>/dev/null || {
+            echo "⚠️ 无法 checkout VERSION.yaml，尝试从当前工作区读取"
+            if [ ! -f "VERSION.yaml" ]; then
+              echo "❌ 错误: 未找到 VERSION.yaml"
+              exit 1
+            fi
+          }
           
+          # 安装 PyYAML
+          python3 -m pip install --user pyyaml --quiet || \
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install pyyaml --quiet
+          
+          # 从 VERSION.yaml 读取版本信息
+          CLIENT_FULL_VERSION=$(python3 -c "import yaml; print(yaml.safe_load(open('VERSION.yaml'))['client']['version'])")
+          SERVER_FULL_VERSION=$(python3 -c "import yaml; print(yaml.safe_load(open('VERSION.yaml'))['server']['version'])")
+          
+          # 提取主版本号（去除build number）
+          CLIENT_VERSION_NUM=$(echo "${CLIENT_FULL_VERSION}" | sed 's/+.*//')
+          SERVER_VERSION_NUM=$(echo "${SERVER_FULL_VERSION}" | sed 's/+.*//')
+          
+          # 设置 Release 标签和版本号
+          TAG_VERSION="v${CLIENT_VERSION_NUM}"
+          RELEASE_VERSION="${CLIENT_VERSION_NUM}"
+          
+          echo ""
+          echo "✅ 从 build tag (${BUILD_TAG}) 的 VERSION.yaml 提取的版本信息:"
+          echo "  Client Full Version: ${CLIENT_FULL_VERSION}"
+          echo "  Client Version Number: ${CLIENT_VERSION_NUM}"
+          echo "  Server Full Version: ${SERVER_FULL_VERSION}"
+          echo "  Server Version Number: ${SERVER_VERSION_NUM}"
+          echo "  Release Tag: ${TAG_VERSION}"
+          echo "  Release Version: ${RELEASE_VERSION}"
+          
+          # 输出版本号供后续步骤使用
           echo "CLIENT_VERSION=${CLIENT_FULL_VERSION}" >> $GITHUB_OUTPUT
           echo "CLIENT_VERSION_NUM=${CLIENT_VERSION_NUM}" >> $GITHUB_OUTPUT
           echo "CLIENT_FULL_VERSION=${CLIENT_FULL_VERSION}" >> $GITHUB_OUTPUT
@@ -343,15 +354,9 @@ jobs:
           echo "TAG_VERSION=${TAG_VERSION}" >> $GITHUB_OUTPUT
           echo "RELEASE_VERSION=${RELEASE_VERSION}" >> $GITHUB_OUTPUT
           
-          echo ""
-          echo "Release 信息:"
-          echo "  Release 标签: ${TAG_VERSION}"
-          echo "  Release 版本: ${RELEASE_VERSION}"
-          echo ""
-          echo "使用的构建版本:"
-          echo "  macOS: ${MACOS_VERSION}"
-          echo "  Windows: ${WINDOWS_VERSION}"
-          echo "  Android: ${ANDROID_VERSION}"
+          # 保存 VERSION.yaml 供后续步骤使用
+          mkdir -p artifacts-temp
+          cp VERSION.yaml ./artifacts-temp/VERSION.yaml
 
       - name: Download macOS artifact from build workflow
         uses: actions/download-artifact@v4
@@ -381,16 +386,28 @@ jobs:
         continue-on-error: false
 
       - name: Flatten artifacts structure and rename with correct version
+        id: extract_versions_from_artifacts
         run: |
           mkdir -p artifacts
           
-          # 使用传递的版本号（从VERSION文件获取）
-          CLIENT_VERSION="${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}"
-          SERVER_VERSION="${{ steps.get_versions.outputs.SERVER_FULL_VERSION }}"
+          # 使用从 build tag 提取的版本号
+          CLIENT_FULL_VERSION="${{ steps.get_versions_from_tag.outputs.CLIENT_FULL_VERSION }}"
+          CLIENT_VERSION_NUM="${{ steps.get_versions_from_tag.outputs.CLIENT_VERSION_NUM }}"
+          SERVER_FULL_VERSION="${{ steps.get_versions_from_tag.outputs.SERVER_FULL_VERSION }}"
+          SERVER_VERSION_NUM="${{ steps.get_versions_from_tag.outputs.SERVER_VERSION_NUM }}"
           
-          echo "使用版本号重命名文件:"
-          echo "  CLIENT_VERSION=$CLIENT_VERSION"
-          echo "  SERVER_VERSION=$SERVER_VERSION"
+          echo "使用版本号重命名文件（从 build tag 的 VERSION.yaml 获取）:"
+          echo "  CLIENT_VERSION=${CLIENT_FULL_VERSION}"
+          echo "  SERVER_VERSION=${SERVER_FULL_VERSION}"
+          
+          # 输出版本号供后续步骤使用（直接传递，不修改）
+          echo "CLIENT_VERSION=${CLIENT_FULL_VERSION}" >> $GITHUB_OUTPUT
+          echo "CLIENT_VERSION_NUM=${CLIENT_VERSION_NUM}" >> $GITHUB_OUTPUT
+          echo "CLIENT_FULL_VERSION=${CLIENT_FULL_VERSION}" >> $GITHUB_OUTPUT
+          
+          echo "SERVER_VERSION=${SERVER_FULL_VERSION}" >> $GITHUB_OUTPUT
+          echo "SERVER_VERSION_NUM=${SERVER_VERSION_NUM}" >> $GITHUB_OUTPUT
+          echo "SERVER_FULL_VERSION=${SERVER_FULL_VERSION}" >> $GITHUB_OUTPUT
           
           # macOS文件 - zip文件（zip包里包含dmg文件）
           MACOS_ZIP_COUNT=$(find ./artifacts-temp -name "HelloKnightRCC_macos_*.zip" | wc -l)
@@ -403,6 +420,8 @@ jobs:
             exit 1
           fi
           MACOS_ZIP=$(find ./artifacts-temp -name "HelloKnightRCC_macos_*.zip" | head -1)
+          # 使用从文件名提取的版本号
+          CLIENT_VERSION="${CLIENT_FULL_VERSION}"
           mv "$MACOS_ZIP" "./artifacts/HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
           echo "重命名macOS ZIP: $(basename "$MACOS_ZIP") -> HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
           echo "注意: macOS ZIP文件包含DMG文件（固定命名），用户需要解压后打开DMG安装"
@@ -436,6 +455,8 @@ jobs:
             exit 1
           fi
           ANDROID_ZIP=$(find ./artifacts-temp -name "helloknightrcc_server_android_*.zip" | head -1)
+          # 使用从文件名提取的版本号
+          SERVER_VERSION="${SERVER_FULL_VERSION}"
           mv "$ANDROID_ZIP" "./artifacts/helloknightrcc_server_android_${SERVER_VERSION}.zip"
           echo "重命名Android ZIP: $(basename "$ANDROID_ZIP") -> helloknightrcc_server_android_${SERVER_VERSION}.zip"
           echo "注意: Android ZIP文件包含APK文件（固定命名），用户需要解压后安装APK"
@@ -450,8 +471,9 @@ jobs:
         run: |
           echo "🔍 验证构建产物文件是否存在..."
           
-          CLIENT_VERSION="${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}"
-          SERVER_VERSION="${{ steps.get_versions.outputs.SERVER_FULL_VERSION }}"
+          # 使用从构建产物文件名提取的版本号
+          CLIENT_VERSION="${{ steps.extract_versions_from_artifacts.outputs.CLIENT_FULL_VERSION }}"
+          SERVER_VERSION="${{ steps.extract_versions_from_artifacts.outputs.SERVER_FULL_VERSION }}"
           
           MACOS_FILE="artifacts/HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
           WINDOWS_FILE="artifacts/HelloKnightRCC_windows_${CLIENT_VERSION}.zip"
@@ -499,10 +521,11 @@ jobs:
       # 计算文件hash并生成 GitHub 更新配置文件（必须在 Create Release 之前）
       - name: Calculate File Hashes and Generate GitHub Update Config
         run: |
-          CLIENT_VERSION=${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}
-          CLIENT_VERSION_NUMBER=${{ steps.get_versions.outputs.CLIENT_VERSION_NUM }}
-          SERVER_VERSION=${{ steps.get_versions.outputs.SERVER_FULL_VERSION }}
-          SERVER_VERSION_NUMBER=${{ steps.get_versions.outputs.SERVER_VERSION_NUM }}
+          # 使用从构建产物文件名提取的版本号（从extract_versions_from_artifacts步骤获取）
+          CLIENT_VERSION=${{ steps.extract_versions_from_artifacts.outputs.CLIENT_FULL_VERSION }}
+          CLIENT_VERSION_NUMBER=${{ steps.extract_versions_from_artifacts.outputs.CLIENT_VERSION_NUM }}
+          SERVER_VERSION=${{ steps.extract_versions_from_artifacts.outputs.SERVER_FULL_VERSION }}
+          SERVER_VERSION_NUMBER=${{ steps.extract_versions_from_artifacts.outputs.SERVER_VERSION_NUM }}
           TAG_VERSION=${{ steps.get_versions.outputs.TAG_VERSION }}
           
           # GitHub Releases 下载链接格式（使用内置变量）
@@ -744,18 +767,18 @@ jobs:
             ## Release ${{ steps.get_versions.outputs.RELEASE_VERSION }}
 
             ### Client
-            - **macOS**: HelloKnightRCC_macos_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.zip
-            - **Windows**: HelloKnightRCC_windows_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.zip
+            - **macOS**: HelloKnightRCC_macos_${{ steps.extract_versions_from_artifacts.outputs.CLIENT_FULL_VERSION }}.zip
+            - **Windows**: HelloKnightRCC_windows_${{ steps.extract_versions_from_artifacts.outputs.CLIENT_FULL_VERSION }}.zip
 
             ### Server
-            - **Android**: helloknightrcc_server_android_${{ steps.get_versions.outputs.SERVER_FULL_VERSION }}.zip
+            - **Android**: helloknightrcc_server_android_${{ steps.extract_versions_from_artifacts.outputs.SERVER_FULL_VERSION }}.zip
 
             ### Changes
             - See commit history for details
           files: |
-            artifacts/HelloKnightRCC_macos_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.zip
-            artifacts/HelloKnightRCC_windows_${{ steps.get_versions.outputs.CLIENT_FULL_VERSION }}.zip
-            artifacts/helloknightrcc_server_android_${{ steps.get_versions.outputs.SERVER_FULL_VERSION }}.zip
+            artifacts/HelloKnightRCC_macos_${{ steps.extract_versions_from_artifacts.outputs.CLIENT_FULL_VERSION }}.zip
+            artifacts/HelloKnightRCC_windows_${{ steps.extract_versions_from_artifacts.outputs.CLIENT_FULL_VERSION }}.zip
+            artifacts/helloknightrcc_server_android_${{ steps.extract_versions_from_artifacts.outputs.SERVER_FULL_VERSION }}.zip
           # 注意：update_config_github.json 不再上传到版本 Release，而是上传到固定的 UpdateConfig Release
           draft: false
           prerelease: false
