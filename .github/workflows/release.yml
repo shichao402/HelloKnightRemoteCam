@@ -31,7 +31,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-          cache: 'pip'
 
       - name: Find build tags and workflow runs
         id: find_builds
@@ -106,6 +105,8 @@ jobs:
             let foundBuildTag = null;
             let foundVersion = null;
             
+            let foundTagObject = null;
+            
             // 遍历所有标签，找到符合条件的 build* 标签
             for (const tag of tags) {
               const tagName = tag.name;
@@ -126,6 +127,7 @@ jobs:
                   if (!foundVersion || compareVersions(version, foundVersion) > 0) {
                     foundBuildTag = tagName;
                     foundVersion = version;
+                    foundTagObject = tag; // 保存标签对象，包含commit信息
                   }
                 }
               }
@@ -176,14 +178,8 @@ jobs:
               return;
             }
             
-            // 获取标签对应的 commit SHA
-            const tagRef = await github.rest.git.getRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: `tags/${foundBuildTag}`
-            });
-            
-            const commitSha = tagRef.data.object.sha;
+            // 获取标签对应的 commit SHA（listTags返回的tag对象已经包含commit.sha）
+            const commitSha = foundTagObject.commit.sha;
             console.log(`标签 ${foundBuildTag} 对应的 commit: ${commitSha.substring(0, 7)}`);
             
             // 查找该 commit 对应的总构建工作流运行
@@ -247,7 +243,11 @@ jobs:
             for (const job of jobsData.jobs) {
               const jobName = job.name.toLowerCase();
               
+              // 查找匹配的平台（只匹配一次，避免重复匹配）
               for (const [platform, keywords] of Object.entries(platformKeywords)) {
+                // 如果已经找到该平台的作业，跳过
+                if (workflowRuns[platform]) continue;
+                
                 if (keywords.some(keyword => jobName.includes(keyword))) {
                   if (job.status === 'completed' && job.conclusion === 'success') {
                     workflowRuns[platform] = mainWorkflowRun.id; // 使用主工作流运行ID
@@ -256,7 +256,7 @@ jobs:
                     core.setFailed(`${platform} 平台构建未成功完成（状态: ${job.status}, 结论: ${job.conclusion}）`);
                     return;
                   }
-                  break;
+                  break; // 找到匹配后跳出内层循环
                 }
               }
             }
@@ -357,6 +357,7 @@ jobs:
           path: ./artifacts-temp
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ steps.find_builds.outputs.macos_run_id }}
+        continue-on-error: false
 
       - name: Download Windows artifact from build workflow
         uses: actions/download-artifact@v4
@@ -365,6 +366,7 @@ jobs:
           path: ./artifacts-temp
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ steps.find_builds.outputs.windows_run_id }}
+        continue-on-error: false
 
       - name: Download Android artifact from build workflow
         uses: actions/download-artifact@v4
@@ -373,6 +375,7 @@ jobs:
           path: ./artifacts-temp
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ steps.find_builds.outputs.android_run_id }}
+        continue-on-error: false
 
       - name: Flatten artifacts structure and rename with correct version
         run: |
@@ -387,36 +390,51 @@ jobs:
           echo "  SERVER_VERSION=$SERVER_VERSION"
           
           # macOS文件 - zip文件（zip包里包含dmg文件）
-          MACOS_ZIP=$(find ./artifacts-temp -name "HelloKnightRCC_macos_*.zip" | head -1)
-          if [ -n "$MACOS_ZIP" ]; then
-            mv "$MACOS_ZIP" "./artifacts/HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
-            echo "重命名macOS ZIP: $(basename "$MACOS_ZIP") -> HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
-            echo "注意: macOS ZIP文件包含DMG文件，用户需要解压后打开DMG安装"
-          else
-            echo "警告: 未找到macOS ZIP文件"
+          MACOS_ZIP_COUNT=$(find ./artifacts-temp -name "HelloKnightRCC_macos_*.zip" | wc -l)
+          if [ "$MACOS_ZIP_COUNT" -eq 0 ]; then
+            echo "错误: 未找到macOS ZIP文件"
+            exit 1
+          elif [ "$MACOS_ZIP_COUNT" -gt 1 ]; then
+            echo "错误: 找到多个macOS ZIP文件，请检查构建产物"
+            find ./artifacts-temp -name "HelloKnightRCC_macos_*.zip"
+            exit 1
           fi
+          MACOS_ZIP=$(find ./artifacts-temp -name "HelloKnightRCC_macos_*.zip" | head -1)
+          mv "$MACOS_ZIP" "./artifacts/HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
+          echo "重命名macOS ZIP: $(basename "$MACOS_ZIP") -> HelloKnightRCC_macos_${CLIENT_VERSION}.zip"
+          echo "注意: macOS ZIP文件包含DMG文件，用户需要解压后打开DMG安装"
           
           # Windows文件 - 需要从exe创建zip用于更新
           # 注意：Windows构建只生成exe，需要将其打包为zip
-          WINDOWS_EXE=$(find ./artifacts-temp -name "HelloKnightRCC_windows_*_setup.exe" | head -1)
-          if [ -n "$WINDOWS_EXE" ]; then
-            # 将EXE打包为zip用于更新
-            cd artifacts-temp
-            zip "../artifacts/HelloKnightRCC_windows_${CLIENT_VERSION}.zip" "$(basename "$WINDOWS_EXE")"
-            cd ..
-            echo "已创建Windows更新zip: HelloKnightRCC_windows_${CLIENT_VERSION}.zip"
-          else
-            echo "警告: 未找到Windows EXE文件"
+          WINDOWS_EXE_COUNT=$(find ./artifacts-temp -name "HelloKnightRCC_windows_*_setup.exe" | wc -l)
+          if [ "$WINDOWS_EXE_COUNT" -eq 0 ]; then
+            echo "错误: 未找到Windows EXE文件"
+            exit 1
+          elif [ "$WINDOWS_EXE_COUNT" -gt 1 ]; then
+            echo "错误: 找到多个Windows EXE文件，请检查构建产物"
+            find ./artifacts-temp -name "HelloKnightRCC_windows_*_setup.exe"
+            exit 1
           fi
+          WINDOWS_EXE=$(find ./artifacts-temp -name "HelloKnightRCC_windows_*_setup.exe" | head -1)
+          # 将EXE打包为zip用于更新
+          cd artifacts-temp
+          zip "../artifacts/HelloKnightRCC_windows_${CLIENT_VERSION}.zip" "$(basename "$WINDOWS_EXE")"
+          cd ..
+          echo "已创建Windows更新zip: HelloKnightRCC_windows_${CLIENT_VERSION}.zip"
           
           # Android文件 - 查找并重命名（已经是zip文件）
-          ANDROID_ZIP=$(find ./artifacts-temp -name "helloknightrcc_server_android_*.zip" | head -1)
-          if [ -n "$ANDROID_ZIP" ]; then
-            mv "$ANDROID_ZIP" "./artifacts/helloknightrcc_server_android_${SERVER_VERSION}.zip"
-            echo "重命名Android ZIP: $(basename "$ANDROID_ZIP") -> helloknightrcc_server_android_${SERVER_VERSION}.zip"
-          else
-            echo "警告: 未找到Android ZIP文件"
+          ANDROID_ZIP_COUNT=$(find ./artifacts-temp -name "helloknightrcc_server_android_*.zip" | wc -l)
+          if [ "$ANDROID_ZIP_COUNT" -eq 0 ]; then
+            echo "错误: 未找到Android ZIP文件"
+            exit 1
+          elif [ "$ANDROID_ZIP_COUNT" -gt 1 ]; then
+            echo "错误: 找到多个Android ZIP文件，请检查构建产物"
+            find ./artifacts-temp -name "helloknightrcc_server_android_*.zip"
+            exit 1
           fi
+          ANDROID_ZIP=$(find ./artifacts-temp -name "helloknightrcc_server_android_*.zip" | head -1)
+          mv "$ANDROID_ZIP" "./artifacts/helloknightrcc_server_android_${SERVER_VERSION}.zip"
+          echo "重命名Android ZIP: $(basename "$ANDROID_ZIP") -> helloknightrcc_server_android_${SERVER_VERSION}.zip"
           
           rm -rf ./artifacts-temp
           
