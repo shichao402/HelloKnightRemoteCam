@@ -326,7 +326,7 @@ class UpdateService {
   }) async {
     // 使用局部变量存储当前使用的 updateInfo（可能被 fallback 替换）
     UpdateInfo currentUpdateInfo = updateInfo;
-    
+
     try {
       _logger.log('开始下载更新文件: ${currentUpdateInfo.fileName}', tag: 'UPDATE');
 
@@ -336,12 +336,14 @@ class UpdateService {
 
       // 2. 优先检查已下载完成的文件
       onStatus?.call('正在检查已下载的文件...');
-      final existingCompleteFile = await _checkExistingCompleteFile(currentUpdateInfo);
+      final existingCompleteFile =
+          await _checkExistingCompleteFile(currentUpdateInfo);
       if (existingCompleteFile != null) {
         _logger.log('使用已下载完成的文件: $existingCompleteFile', tag: 'UPDATE');
         // 直接处理文件（hash校验、解压等）
         onStatus?.call('正在处理文件...');
-        return await _processDownloadedFile(existingCompleteFile, currentUpdateInfo);
+        return await _processDownloadedFile(
+            existingCompleteFile, currentUpdateInfo);
       }
 
       // 3. 检查未下载完成的文件（断点续传）
@@ -351,7 +353,8 @@ class UpdateService {
       String filePath;
       if (existingIncompleteFile != null) {
         // 检查文件是否实际已完成（通过hash验证，使用UpdateDownloadProcessor）
-        if (currentUpdateInfo.fileHash != null && currentUpdateInfo.fileHash!.isNotEmpty) {
+        if (currentUpdateInfo.fileHash != null &&
+            currentUpdateInfo.fileHash!.isNotEmpty) {
           onStatus?.call('正在校验文件完整性...');
           final isValid = await _downloadProcessor.verifyFileHash(
               existingIncompleteFile, currentUpdateInfo.fileHash!);
@@ -369,7 +372,7 @@ class UpdateService {
         // 4. 开始新下载（带 fallback 逻辑）
         _logger.log('开始新下载', tag: 'UPDATE');
         onStatus?.call('准备开始下载...');
-        
+
         // 尝试下载，如果失败且是 Gitee URL，则 fallback 到 GitHub
         try {
           filePath = await _fileDownloadService.downloadFile(
@@ -383,12 +386,14 @@ class UpdateService {
           if (currentUpdateInfo.downloadUrl.contains('gitee.com')) {
             _logger.log('Gitee 下载失败，尝试从 GitHub fallback', tag: 'UPDATE');
             onStatus?.call('Gitee 下载失败，尝试从 GitHub 下载...');
-            
+
             // 尝试从 GitHub 配置获取 downloadUrl
             try {
-              final githubUpdateInfo = await _getGitHubUpdateInfo(currentUpdateInfo);
+              final githubUpdateInfo =
+                  await _getGitHubUpdateInfo(currentUpdateInfo);
               if (githubUpdateInfo != null) {
-                _logger.log('从 GitHub 获取到更新信息，使用 GitHub downloadUrl', tag: 'UPDATE');
+                _logger.log('从 GitHub 获取到更新信息，使用 GitHub downloadUrl',
+                    tag: 'UPDATE');
                 filePath = await _fileDownloadService.downloadFile(
                   url: githubUpdateInfo.downloadUrl,
                   fileName: githubUpdateInfo.fileName,
@@ -402,7 +407,7 @@ class UpdateService {
                 rethrow;
               }
             } catch (fallbackError, fallbackStackTrace) {
-              _logger.logError('GitHub fallback 也失败', 
+              _logger.logError('GitHub fallback 也失败',
                   error: fallbackError, stackTrace: fallbackStackTrace);
               rethrow; // 抛出原始错误
             }
@@ -431,7 +436,7 @@ class UpdateService {
       if (_updateCheckUrls.isEmpty) {
         await initializeUpdateUrls();
       }
-      
+
       // 找到 GitHub URL（通常是第二个）
       String? githubUrl;
       for (int i = 0; i < _updateCheckUrls.length; i++) {
@@ -440,17 +445,17 @@ class UpdateService {
           break;
         }
       }
-      
+
       if (githubUrl == null || githubUrl.isEmpty) {
         _logger.log('未找到 GitHub 更新检查 URL', tag: 'UPDATE');
         return null;
       }
-      
+
       _logger.log('从 GitHub 获取更新信息: $githubUrl', tag: 'UPDATE');
-      
+
       // 获取当前版本号
       final currentVersionNumber = await _versionService.getVersionNumber();
-      
+
       // 使用 UpdateCheckService 从 GitHub 获取更新信息
       final result = await _updateCheckService.checkForUpdate(
         updateCheckUrls: [githubUrl],
@@ -459,15 +464,18 @@ class UpdateService {
         target: 'client',
         avoidCache: true,
       );
-      
+
       if (result.hasUpdate && result.updateInfo != null) {
         final githubUpdateInfo = result.updateInfo!;
         // 确保版本号匹配
         if (githubUpdateInfo.version == currentUpdateInfo.version) {
-          _logger.log('从 GitHub 获取到匹配的更新信息: ${githubUpdateInfo.downloadUrl}', tag: 'UPDATE');
+          _logger.log('从 GitHub 获取到匹配的更新信息: ${githubUpdateInfo.downloadUrl}',
+              tag: 'UPDATE');
           return githubUpdateInfo;
         } else {
-          _logger.log('GitHub 版本不匹配: ${githubUpdateInfo.version} != ${currentUpdateInfo.version}', tag: 'UPDATE');
+          _logger.log(
+              'GitHub 版本不匹配: ${githubUpdateInfo.version} != ${currentUpdateInfo.version}',
+              tag: 'UPDATE');
           return null;
         }
       } else {
