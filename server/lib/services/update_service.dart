@@ -22,7 +22,7 @@ class UpdateService {
   final UpdateSettingsService _updateSettings = UpdateSettingsService();
   final Dio _dio = Dio();
   final FileDownloadService _fileDownloadService = FileDownloadService();
-  
+
   // 使用shared包的服务，注入logger回调
   late final UpdateCheckService _updateCheckService = UpdateCheckService(
     onLog: (message, {tag}) => _logger.log(message, tag: tag ?? 'UPDATE'),
@@ -38,12 +38,32 @@ class UpdateService {
         _logger.logError(message, error: error, stackTrace: stackTrace),
   );
 
-  // 默认更新检查URL（可以从设置中配置）
-  String _updateCheckUrl = '';
+  // 更新检查 URL 列表（优先从 VERSION.yaml 读取）
+  List<String> _updateCheckUrls = [];
 
-  /// 设置更新检查URL
+  /// 初始化更新检查 URL（从 VERSION.yaml 读取）
+  Future<void> initializeUpdateUrls() async {
+    try {
+      _updateCheckUrls = await UpdateUrlConfigService.getUpdateCheckUrls();
+      if (_updateCheckUrls.isNotEmpty) {
+        _logger.log('从 VERSION.yaml 读取更新检查 URL: ${_updateCheckUrls.length} 个',
+            tag: 'UPDATE');
+        for (int i = 0; i < _updateCheckUrls.length; i++) {
+          final source = i == 0 ? 'Gitee' : 'GitHub';
+          _logger.log('  $source: ${_updateCheckUrls[i]}', tag: 'UPDATE');
+        }
+      } else {
+        _logger.log('VERSION.yaml 中未找到更新检查 URL 配置', tag: 'UPDATE');
+      }
+    } catch (e, stackTrace) {
+      _logger.logError('读取更新检查 URL 配置失败', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  /// 设置更新检查URL（向后兼容，单个 URL）
+  @Deprecated('使用 initializeUpdateUrls 从 VERSION.yaml 读取')
   void setUpdateCheckUrl(String url) {
-    _updateCheckUrl = url;
+    _updateCheckUrls = [url];
     _logger.log('设置更新检查URL: $url', tag: 'UPDATE');
   }
 
@@ -60,7 +80,12 @@ class UpdateService {
 
   /// 检查更新
   Future<UpdateCheckResult> checkForUpdate({bool avoidCache = true}) async {
-    if (_updateCheckUrl.isEmpty) {
+    // 如果 URL 列表为空，尝试初始化
+    if (_updateCheckUrls.isEmpty) {
+      await initializeUpdateUrls();
+    }
+
+    if (_updateCheckUrls.isEmpty) {
       return UpdateCheckResult(
         hasUpdate: false,
         error: '更新检查URL未设置',
@@ -71,12 +96,12 @@ class UpdateService {
       // 获取当前版本
       final currentVersion = await _versionService.getVersion();
       final currentVersionNumber = await _versionService.getVersionNumber();
-      
+
       _logger.log('当前版本: $currentVersion', tag: 'UPDATE');
 
-      // 使用shared包的UpdateCheckService检查更新
+      // 使用shared包的UpdateCheckService检查更新（支持多个 URL）
       final result = await _updateCheckService.checkForUpdate(
-        updateCheckUrl: _updateCheckUrl,
+        updateCheckUrls: _updateCheckUrls,
         currentVersionNumber: currentVersionNumber,
         getPlatform: _getCurrentPlatform,
         target: 'server',
@@ -105,29 +130,30 @@ class UpdateService {
   Future<void> _saveUpdateInfo(UpdateInfo? updateInfo) async {
     await _updateSettings.saveUpdateInfo(updateInfo);
   }
-  
+
   /// 获取保存的更新信息
   Future<UpdateInfo?> getSavedUpdateInfo() async {
     return await _updateSettings.getUpdateInfo();
   }
-  
+
   /// 检查是否有可用的更新
   Future<bool> hasUpdate() async {
     return await _updateSettings.hasUpdate();
   }
-  
+
   /// 打开下载链接（在浏览器中打开）
   Future<bool> openDownloadUrl(String url) async {
     try {
       _logger.log('打开下载链接: $url', tag: 'UPDATE');
       final uri = Uri.parse(url);
-      
+
       // 检查URL是否有效
-      if (!uri.hasScheme || (!uri.scheme.startsWith('http') && !uri.scheme.startsWith('https'))) {
+      if (!uri.hasScheme ||
+          (!uri.scheme.startsWith('http') && !uri.scheme.startsWith('https'))) {
         _logger.logError('无效的URL格式', error: 'URL: $url');
         return false;
       }
-      
+
       // 尝试检查是否可以启动URL
       bool canLaunch = false;
       try {
@@ -137,7 +163,7 @@ class UpdateService {
         // 即使检查失败，也尝试直接打开
         canLaunch = true;
       }
-      
+
       if (canLaunch) {
         try {
           await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -151,7 +177,8 @@ class UpdateService {
             _logger.log('已使用platform模式打开下载链接', tag: 'UPDATE');
             return true;
           } catch (e2, stackTrace2) {
-            _logger.logError('platform模式打开链接也失败', error: e2, stackTrace: stackTrace2);
+            _logger.logError('platform模式打开链接也失败',
+                error: e2, stackTrace: stackTrace2);
             return false;
           }
         }
@@ -164,30 +191,30 @@ class UpdateService {
       return false;
     }
   }
-  
+
   /// 请求存储权限（Android需要）
   Future<bool> requestStoragePermission() async {
     if (!Platform.isAndroid) {
       return true; // 非Android平台不需要权限
     }
-    
+
     try {
       _logger.log('请求存储权限', tag: 'UPDATE');
-      
+
       // Android 13+ (API 33+) 使用新的权限模型
-      if (await Permission.photos.isGranted || 
+      if (await Permission.photos.isGranted ||
           await Permission.videos.isGranted ||
           await Permission.audio.isGranted) {
         _logger.log('媒体权限已授予', tag: 'UPDATE');
         return true;
       }
-      
+
       // Android 10-12 (API 29-32) 需要存储权限
       if (await Permission.storage.isGranted) {
         _logger.log('存储权限已授予', tag: 'UPDATE');
         return true;
       }
-      
+
       // 请求权限
       final status = await Permission.storage.request();
       if (status.isGranted) {
@@ -209,10 +236,10 @@ class UpdateService {
     if (!Platform.isAndroid) {
       return true; // 非Android平台不需要权限
     }
-    
+
     try {
       _logger.log('检查安装APK权限', tag: 'UPDATE');
-      
+
       // 尝试检查权限状态（如果permission_handler支持）
       try {
         final status = await Permission.requestInstallPackages.status;
@@ -225,7 +252,7 @@ class UpdateService {
         // permission_handler可能不支持此权限，这是正常的
         _logger.log('无法检查安装APK权限（可能不支持），将直接尝试打开文件', tag: 'UPDATE');
       }
-      
+
       // 即使权限检查失败，也返回true，让open_file插件处理
       // open_file插件会引导用户到设置页面开启"允许从此来源安装应用"
       return true;
@@ -235,13 +262,12 @@ class UpdateService {
       return true;
     }
   }
-  
 
   /// 下载更新文件
-  /// 
+  ///
   /// [updateInfo] 更新信息
   /// [onProgress] 进度回调 (received, total)
-  /// 
+  ///
   /// 返回下载文件的路径（如果是zip则返回解压后的文件路径）
   Future<String?> downloadUpdateFile(
     UpdateInfo updateInfo, {
@@ -249,7 +275,7 @@ class UpdateService {
   }) async {
     try {
       _logger.log('开始下载更新文件: ${updateInfo.fileName}', tag: 'UPDATE');
-      
+
       // Android需要请求存储权限
       if (Platform.isAndroid) {
         final hasPermission = await requestStoragePermission();
@@ -257,13 +283,13 @@ class UpdateService {
           throw Exception('存储权限被拒绝，无法下载文件');
         }
       }
-      
+
       final filePath = await _fileDownloadService.downloadFile(
         url: updateInfo.downloadUrl,
         fileName: updateInfo.fileName,
         onProgress: onProgress,
       );
-      
+
       _logger.log('更新文件下载完成: $filePath', tag: 'UPDATE');
 
       // 使用shared包的UpdateDownloadProcessor处理文件（hash校验、zip解压等）
@@ -277,12 +303,12 @@ class UpdateService {
       rethrow;
     }
   }
-  
+
   /// 打开下载的文件
   Future<bool> openDownloadedFile(String filePath) async {
     try {
       _logger.log('打开下载的文件: $filePath', tag: 'UPDATE');
-      
+
       final file = File(filePath);
       if (!await file.exists()) {
         _logger.logError('文件不存在', error: 'Path: $filePath');
@@ -298,9 +324,9 @@ class UpdateService {
           // OpenFile插件会尝试打开，如果权限不足会返回错误
         }
       }
-      
+
       final result = await OpenFile.open(filePath);
-      
+
       if (result.type == ResultType.done) {
         _logger.log('已打开文件', tag: 'UPDATE');
         return true;
@@ -320,10 +346,12 @@ class UpdateService {
             _logger.logError('打开应用设置页面失败', error: e, stackTrace: stackTrace);
           }
         }
-        _logger.logError('打开文件失败', error: 'Result: ${result.type}, Message: ${result.message}');
+        _logger.logError('打开文件失败',
+            error: 'Result: ${result.type}, Message: ${result.message}');
         return false;
       } else {
-        _logger.logError('打开文件失败', error: 'Result: ${result.type}, Message: ${result.message}');
+        _logger.logError('打开文件失败',
+            error: 'Result: ${result.type}, Message: ${result.message}');
         return false;
       }
     } catch (e, stackTrace) {
@@ -332,4 +360,3 @@ class UpdateService {
     }
   }
 }
-

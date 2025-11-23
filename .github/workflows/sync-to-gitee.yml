@@ -379,12 +379,64 @@ jobs:
           
           REPO_FULL_NAME=$(echo "$REPO_CHECK_BODY" | jq -r '.full_name // empty' 2>/dev/null || echo "")
           REPO_DESCRIPTION=$(echo "$REPO_CHECK_BODY" | jq -r '.description // empty' 2>/dev/null || echo "")
+          REPO_DEFAULT_BRANCH=$(echo "$REPO_CHECK_BODY" | jq -r '.default_branch // "master"' 2>/dev/null || echo "master")
           echo "✅ Gitee 仓库验证通过"
           if [ -n "$REPO_FULL_NAME" ]; then
             echo "  仓库全名: ${REPO_FULL_NAME}"
           fi
           if [ -n "$REPO_DESCRIPTION" ]; then
             echo "  仓库描述: ${REPO_DESCRIPTION}"
+          fi
+          echo "  默认分支: ${REPO_DEFAULT_BRANCH}"
+          
+          # 如果获取到了 commit SHA，检查该 commit 是否存在于 Gitee 仓库
+          if [ -n "$TARGET_COMMITISH" ] && [ "$TARGET_COMMITISH" != "" ]; then
+            echo "🔍 检查 commit ${TARGET_COMMITISH:0:7}... 是否存在于 Gitee 仓库..."
+            COMMIT_CHECK_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/git/commits/${TARGET_COMMITISH}"
+            echo "  API URL: ${COMMIT_CHECK_API_URL}"
+            
+            COMMIT_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              "${COMMIT_CHECK_API_URL}")
+            
+            COMMIT_CHECK_HTTP_CODE=$(echo "$COMMIT_CHECK" | tail -n1)
+            COMMIT_CHECK_BODY=$(echo "$COMMIT_CHECK" | sed '$d')
+            
+            echo "  HTTP 状态码: ${COMMIT_CHECK_HTTP_CODE}"
+            
+            if [ "$COMMIT_CHECK_HTTP_CODE" != "200" ]; then
+              ERROR_MSG=$(echo "$COMMIT_CHECK_BODY" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$COMMIT_CHECK_BODY")
+              echo "⚠️ Commit ${TARGET_COMMITISH:0:7}... 不存在于 Gitee 仓库 (HTTP ${COMMIT_CHECK_HTTP_CODE})"
+              echo "  错误信息: ${ERROR_MSG}"
+              echo ""
+              echo "  尝试使用默认分支 ${REPO_DEFAULT_BRANCH} 的最新 commit..."
+              
+              # 获取默认分支的最新 commit
+              BRANCH_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/branches/${REPO_DEFAULT_BRANCH}"
+              BRANCH_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
+                -H "Authorization: token ${GITEE_TOKEN}" \
+                "${BRANCH_API_URL}")
+              
+              BRANCH_CHECK_HTTP_CODE=$(echo "$BRANCH_CHECK" | tail -n1)
+              BRANCH_CHECK_BODY=$(echo "$BRANCH_CHECK" | sed '$d')
+              
+              if [ "$BRANCH_CHECK_HTTP_CODE" = "200" ]; then
+                BRANCH_COMMIT_SHA=$(echo "$BRANCH_CHECK_BODY" | jq -r '.commit.sha // empty' 2>/dev/null || echo "")
+                if [ -n "$BRANCH_COMMIT_SHA" ]; then
+                  echo "✅ 使用默认分支 ${REPO_DEFAULT_BRANCH} 的最新 commit: ${BRANCH_COMMIT_SHA:0:7}..."
+                  TARGET_COMMITISH="${BRANCH_COMMIT_SHA}"
+                else
+                  echo "⚠️ 无法获取默认分支的 commit，将使用分支名"
+                  TARGET_COMMITISH="${REPO_DEFAULT_BRANCH}"
+                fi
+              else
+                echo "⚠️ 无法获取默认分支信息，将使用分支名"
+                TARGET_COMMITISH="${REPO_DEFAULT_BRANCH}"
+              fi
+            else
+              echo "✅ Commit ${TARGET_COMMITISH:0:7}... 存在于 Gitee 仓库"
+            fi
+            echo ""
           fi
           
           # 检查标签是否存在，如果不存在则创建
@@ -528,10 +580,10 @@ jobs:
               }" | jq -c .)
             else
               REQUEST_BODY=$(echo "{
-                \"tag_name\": \"${TAG_NAME}\",
-                \"name\": \"${RELEASE_NAME}\",
+              \"tag_name\": \"${TAG_NAME}\",
+              \"name\": \"${RELEASE_NAME}\",
                 \"body\": ${CREATE_BODY_JSON},
-                \"prerelease\": false
+              \"prerelease\": false
               }" | jq -c .)
             fi
             echo "  请求体: ${REQUEST_BODY}"
@@ -708,12 +760,9 @@ jobs:
           echo "  Repo Name: ${GITEE_REPO_NAME}"
           echo "  仓库: ${GITEE_REPO}"
           
-          # 确保在 main 分支上
-          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          echo "  当前分支: ${CURRENT_BRANCH}"
-          
-          git checkout main || git checkout -b main origin/main
-          git pull origin main || true
+          # URL 编码
+          GITEE_REPO_OWNER_ENCODED=$(printf '%s' "${GITEE_REPO_OWNER}" | jq -sRr @uri)
+          GITEE_REPO_NAME_ENCODED=$(printf '%s' "${GITEE_REPO_NAME}" | jq -sRr @uri)
           
           # 读取 GitHub 的更新配置文件
           if [ -f "update_config_github.json" ]; then
@@ -728,11 +777,14 @@ jobs:
             echo ""
             echo "  转换配置为 Gitee 格式..."
             echo "  Gitee 仓库: ${GITEE_REPO}"
-            echo "  Release 标签: ${TAG_NAME}"
             
-            # 使用 jq 修改 URL
+            # 固定 Release Tag 名称（简短，无特殊字符）
+            CONFIG_RELEASE_TAG="config"
+            CONFIG_RELEASE_TAG_ENCODED=$(printf '%s' "${CONFIG_RELEASE_TAG}" | jq -sRr @uri)
+            
+            # 使用 jq 修改 URL，updateCheckUrl 指向固定 Release
             cat update_config_github.json | jq "
-              .updateCheckUrl = \"https://gitee.com/${GITEE_REPO}/raw/main/update_config_gitee.json\" |
+              .updateCheckUrl = \"https://gitee.com/${GITEE_REPO}/releases/download/${CONFIG_RELEASE_TAG}/update_config_gitee.json\" |
               .client.platforms.macos.downloadUrl = (.client.platforms.macos.downloadUrl | gsub(\"github.com.*releases\"; \"gitee.com/${GITEE_REPO}/releases\")) |
               .client.platforms.windows.downloadUrl = (.client.platforms.windows.downloadUrl | gsub(\"github.com.*releases\"; \"gitee.com/${GITEE_REPO}/releases\")) |
               .server.platforms.android.downloadUrl = (.server.platforms.android.downloadUrl | gsub(\"github.com.*releases\"; \"gitee.com/${GITEE_REPO}/releases\"))
@@ -740,88 +792,220 @@ jobs:
             
             echo "✅ 已生成 Gitee 更新配置文件"
             echo "  文件路径: $(realpath update_config_gitee.json 2>/dev/null || echo 'update_config_gitee.json')"
-            echo "  更新检查 URL: https://gitee.com/${GITEE_REPO}/raw/main/update_config_gitee.json"
+            echo "  更新检查 URL: https://gitee.com/${GITEE_REPO}/releases/download/${CONFIG_RELEASE_TAG}/update_config_gitee.json"
             echo ""
             echo "  Gitee 配置内容:"
             cat update_config_gitee.json | jq '.' 2>/dev/null || cat update_config_gitee.json
             
-            # 提交到 Gitee 仓库
-            git config --global user.name "GitHub Actions"
-            git config --global user.email "actions@github.com"
+            # 获取 master 分支的最新 commit SHA（用于创建/更新 Release）
+            echo ""
+            echo "🔍 获取 master 分支的最新 commit..."
+            BRANCH_INFO=$(curl -s -X GET \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/branches/master")
             
-            # 添加 Gitee remote（如果还没有）
-            GITEE_REMOTE_URL="https://gitee.com/${GITEE_REPO}.git"
-            if ! git remote get-url gitee >/dev/null 2>&1; then
-              echo ""
-              echo "  添加 Gitee remote..."
-              echo "  Remote URL: ${GITEE_REMOTE_URL}"
-              git remote add gitee https://${GITEE_TOKEN}@gitee.com/${GITEE_REPO}.git
+            MASTER_COMMIT_SHA=$(echo "$BRANCH_INFO" | jq -r '.commit.sha // empty' 2>/dev/null || echo "")
+            
+            if [ -z "$MASTER_COMMIT_SHA" ] || [ "$MASTER_COMMIT_SHA" == "null" ]; then
+              echo "⚠️ 无法获取 master 分支的 commit SHA，使用默认分支"
+              MASTER_COMMIT_SHA="master"
             else
-              EXISTING_REMOTE=$(git remote get-url gitee)
-              echo ""
-              echo "  Gitee remote 已存在"
-              echo "  Remote URL: ${EXISTING_REMOTE}"
+              echo "✅ Master 分支最新 commit: ${MASTER_COMMIT_SHA:0:7}..."
             fi
             
-            # 显示所有 remotes
+            # 检查配置 Release 是否存在
             echo ""
-            echo "  所有 remotes:"
-            git remote -v
+            echo "🔍 检查配置 Release 是否存在..."
+            RELEASE_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/tags/${CONFIG_RELEASE_TAG_ENCODED}")
             
-            # 切换到 main 分支并推送
-            echo ""
-            echo "  获取 Gitee main 分支..."
-            git fetch gitee main || true
+            RELEASE_CHECK_HTTP_CODE=$(echo "$RELEASE_CHECK" | tail -n1)
+            RELEASE_CHECK_BODY=$(echo "$RELEASE_CHECK" | sed '$d')
             
-            CURRENT_BRANCH_BEFORE=$(git rev-parse --abbrev-ref HEAD)
-            echo "  获取前分支: ${CURRENT_BRANCH_BEFORE}"
+            echo "  HTTP 状态码: ${RELEASE_CHECK_HTTP_CODE}"
             
-            git checkout -b main gitee/main 2>/dev/null || git checkout main
-            
-            CURRENT_BRANCH_AFTER=$(git rev-parse --abbrev-ref HEAD)
-            echo "  获取后分支: ${CURRENT_BRANCH_AFTER}"
-            
-            echo ""
-            echo "  检查文件更改..."
-            git add update_config_gitee.json
-            
-            if git diff --staged --quiet; then
-              echo "⚠️ 没有更改需要提交（配置文件可能已是最新）"
-              echo "  当前文件内容:"
-              cat update_config_gitee.json | jq '.' 2>/dev/null || cat update_config_gitee.json
-            else
-              echo "  检测到更改，准备提交..."
-              echo "  更改内容:"
-              git diff --staged update_config_gitee.json || echo "  无法显示 diff"
-              
-              COMMIT_MSG="Sync update config from GitHub Release ${TAG_NAME}"
-              echo ""
-              echo "  提交更改..."
-              echo "  提交信息: ${COMMIT_MSG}"
-              git commit -m "${COMMIT_MSG}"
-              
-              echo ""
-              echo "  推送到 Gitee..."
-              echo "  目标分支: main"
-              echo "  目标仓库: gitee"
-              
-              if git push gitee main; then
-                echo "✅ 更新配置已推送到 Gitee"
-                echo "  推送成功，可以在以下 URL 查看:"
-                echo "  https://gitee.com/${GITEE_REPO}/blob/main/update_config_gitee.json"
+            if [ "$RELEASE_CHECK_HTTP_CODE" = "200" ]; then
+              RELEASE_ID=$(echo "$RELEASE_CHECK_BODY" | jq -r '.id // empty' 2>/dev/null || echo "")
+              if [ -n "$RELEASE_ID" ] && [ "$RELEASE_ID" != "null" ]; then
+                echo "✅ Release ${CONFIG_RELEASE_TAG} 已存在 (ID: ${RELEASE_ID})"
+                USE_EXISTING_RELEASE=true
               else
-                PUSH_ERROR=$?
-                echo "⚠️ 推送失败 (退出码: ${PUSH_ERROR})"
-                echo "  可能原因："
-                echo "    1. 权限不足"
-                echo "    2. 分支已是最新版本"
-                echo "    3. 网络问题"
+                echo "⚠️ 无法获取 Release ID，将创建新的 Release"
+                USE_EXISTING_RELEASE=false
+              fi
+            else
+              echo "⚠️ Release ${CONFIG_RELEASE_TAG} 不存在，将创建新的 Release"
+              USE_EXISTING_RELEASE=false
+            fi
+            
+            # 确保 tag 存在（Release 需要 tag）
+            echo ""
+            echo "🔍 确保 Tag ${CONFIG_RELEASE_TAG} 存在..."
+            TAG_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/tags/${CONFIG_RELEASE_TAG_ENCODED}")
+            
+            TAG_CHECK_HTTP_CODE=$(echo "$TAG_CHECK" | tail -n1)
+            
+            if [ "$TAG_CHECK_HTTP_CODE" != "200" ]; then
+              echo "  Tag 不存在，创建 Tag..."
+              CREATE_TAG_BODY=$(echo "{
+                \"refs\": \"${MASTER_COMMIT_SHA}\",
+                \"tag_name\": \"${CONFIG_RELEASE_TAG}\",
+                \"message\": \"Tag for update config release\"
+              }" | jq -c .)
+              
+              CREATE_TAG_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+                -H "Content-Type: application/json" \
+                -H "Authorization: token ${GITEE_TOKEN}" \
+                -d "${CREATE_TAG_BODY}" \
+                "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/tags")
+              
+              CREATE_TAG_HTTP_CODE=$(echo "$CREATE_TAG_RESPONSE" | tail -n1)
+              
+              if [ "$CREATE_TAG_HTTP_CODE" = "200" ] || [ "$CREATE_TAG_HTTP_CODE" = "201" ]; then
+                echo "✅ Tag ${CONFIG_RELEASE_TAG} 创建成功"
+              else
+                ERROR_MSG=$(echo "$CREATE_TAG_RESPONSE" | sed '$d' | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "")
+                if echo "$ERROR_MSG" | grep -qi "已存在\|already exists\|duplicate\|标签名已存在"; then
+                  echo "✅ Tag 已存在"
+                else
+                  echo "⚠️ Tag 创建失败，但继续执行"
+                fi
+              fi
+            else
+              echo "✅ Tag ${CONFIG_RELEASE_TAG} 已存在"
+            fi
+            
+            # 创建或更新 Release
+            echo ""
+            if [ "$USE_EXISTING_RELEASE" = false ]; then
+              echo "📝 创建配置 Release..."
+              
+              RELEASE_NAME="Update Configuration"
+              RELEASE_BODY="This release contains the update configuration file for the application."
+              
+              CREATE_RELEASE_BODY=$(echo "{
+                \"tag_name\": \"${CONFIG_RELEASE_TAG}\",
+                \"name\": \"${RELEASE_NAME}\",
+                \"body\": \"${RELEASE_BODY}\",
+                \"target_commitish\": \"${MASTER_COMMIT_SHA}\",
+                \"prerelease\": false
+              }" | jq -c .)
+              
+              CREATE_RELEASE_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+                -H "Content-Type: application/json" \
+                -H "Authorization: token ${GITEE_TOKEN}" \
+                -d "${CREATE_RELEASE_BODY}" \
+                "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases")
+              
+              CREATE_RELEASE_HTTP_CODE=$(echo "$CREATE_RELEASE_RESPONSE" | tail -n1)
+              CREATE_RELEASE_BODY_RESPONSE=$(echo "$CREATE_RELEASE_RESPONSE" | sed '$d')
+              
+              echo "  响应 HTTP 状态码: ${CREATE_RELEASE_HTTP_CODE}"
+              
+              if [ "$CREATE_RELEASE_HTTP_CODE" = "200" ] || [ "$CREATE_RELEASE_HTTP_CODE" = "201" ]; then
+                RELEASE_ID=$(echo "$CREATE_RELEASE_BODY_RESPONSE" | jq -r '.id // empty' 2>/dev/null || echo "")
+                echo "✅ Release 创建成功 (ID: ${RELEASE_ID})"
+              else
+                ERROR_MSG=$(echo "$CREATE_RELEASE_BODY_RESPONSE" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$CREATE_RELEASE_BODY_RESPONSE")
+                echo "❌ Release 创建失败 (HTTP ${CREATE_RELEASE_HTTP_CODE})"
+                echo "  错误信息: ${ERROR_MSG}"
                 exit 1
+              fi
+            else
+              echo "📝 更新现有 Release..."
+              
+              RELEASE_NAME="Update Configuration"
+              RELEASE_BODY="This release contains the update configuration file for the application. Updated at $(date -u +'%Y-%m-%d %H:%M:%S')"
+              
+              UPDATE_RELEASE_BODY=$(echo "{
+                \"name\": \"${RELEASE_NAME}\",
+                \"body\": \"${RELEASE_BODY}\",
+                \"target_commitish\": \"${MASTER_COMMIT_SHA}\",
+                \"prerelease\": false
+              }" | jq -c .)
+              
+              UPDATE_RELEASE_RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
+                -H "Content-Type: application/json" \
+                -H "Authorization: token ${GITEE_TOKEN}" \
+                -d "${UPDATE_RELEASE_BODY}" \
+                "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}")
+              
+              UPDATE_RELEASE_HTTP_CODE=$(echo "$UPDATE_RELEASE_RESPONSE" | tail -n1)
+              
+              echo "  响应 HTTP 状态码: ${UPDATE_RELEASE_HTTP_CODE}"
+              
+              if [ "$UPDATE_RELEASE_HTTP_CODE" = "200" ] || [ "$UPDATE_RELEASE_HTTP_CODE" = "201" ]; then
+                echo "✅ Release 更新成功"
+              else
+                ERROR_MSG=$(echo "$UPDATE_RELEASE_RESPONSE" | sed '$d' | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "")
+                echo "⚠️ Release 更新失败 (HTTP ${UPDATE_RELEASE_HTTP_CODE})，但继续执行"
+                echo "  错误信息: ${ERROR_MSG}"
               fi
             fi
             
+            # 上传配置文件到 Release
             echo ""
-            echo "✅ 更新配置同步完成"
+            echo "📤 上传配置文件到 Release..."
+            
+            # 检查文件是否已存在
+            ASSETS_CHECK=$(curl -s -X GET \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}/attach_files")
+            
+            EXISTING_ASSET_ID=$(echo "$ASSETS_CHECK" | jq -r ".[] | select(.name == \"update_config_gitee.json\") | .id" 2>/dev/null | head -1)
+            
+            if [ -n "$EXISTING_ASSET_ID" ] && [ "$EXISTING_ASSET_ID" != "null" ]; then
+              echo "  文件已存在 (ID: ${EXISTING_ASSET_ID})，删除旧文件..."
+              DELETE_ASSET_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
+                -H "Authorization: token ${GITEE_TOKEN}" \
+                "https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}/attach_files/${EXISTING_ASSET_ID}")
+              
+              DELETE_ASSET_HTTP_CODE=$(echo "$DELETE_ASSET_RESPONSE" | tail -n1)
+              echo "  删除响应 HTTP 状态码: ${DELETE_ASSET_HTTP_CODE}"
+              sleep 2
+            fi
+            
+            echo "  上传新文件..."
+            UPLOAD_API_URL="https://gitee.com/api/v5/repos/${GITEE_REPO_OWNER_ENCODED}/${GITEE_REPO_NAME_ENCODED}/releases/${RELEASE_ID}/attach_files"
+            
+            FILE_SIZE=$(stat -f%z update_config_gitee.json 2>/dev/null || stat -c%s update_config_gitee.json 2>/dev/null || echo "unknown")
+            echo "  文件大小: ${FILE_SIZE} bytes"
+            
+            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              -F "file=@update_config_gitee.json" \
+              -F "name=update_config_gitee.json" \
+              "${UPLOAD_API_URL}")
+            
+            UPLOAD_HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
+            UPLOAD_BODY_RESPONSE=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+            
+            echo "  响应 HTTP 状态码: ${UPLOAD_HTTP_CODE}"
+            
+            if [ "$UPLOAD_HTTP_CODE" = "200" ] || [ "$UPLOAD_HTTP_CODE" = "201" ]; then
+              ASSET_NAME=$(echo "$UPLOAD_BODY_RESPONSE" | jq -r '.name // empty' 2>/dev/null || echo "")
+              ASSET_URL=$(echo "$UPLOAD_BODY_RESPONSE" | jq -r '.browser_download_url // empty' 2>/dev/null || echo "")
+              echo "✅ 文件上传成功"
+              if [ -n "$ASSET_NAME" ]; then
+                echo "  文件名: ${ASSET_NAME}"
+              fi
+              if [ -n "$ASSET_URL" ]; then
+                echo "  下载 URL: ${ASSET_URL}"
+              fi
+            else
+              ERROR_MSG=$(echo "$UPLOAD_BODY_RESPONSE" | jq -r '.message // .error // "未知错误"' 2>/dev/null || echo "$UPLOAD_BODY_RESPONSE")
+              echo "❌ 文件上传失败 (HTTP ${UPLOAD_HTTP_CODE})"
+              echo "  错误信息: ${ERROR_MSG}"
+              echo "  完整响应: ${UPLOAD_BODY_RESPONSE}"
+              exit 1
+            fi
+            
+            echo ""
+            echo "✅ 更新配置文件已成功同步到 Gitee Release: ${CONFIG_RELEASE_TAG}"
+            echo "  访问 URL: https://gitee.com/${GITEE_REPO}/releases/download/${CONFIG_RELEASE_TAG}/update_config_gitee.json"
           else
             echo "⚠️ update_config_github.json 未找到，跳过配置同步"
             echo "  当前目录: $(pwd)"

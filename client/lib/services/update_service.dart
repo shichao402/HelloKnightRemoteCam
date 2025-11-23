@@ -41,15 +41,35 @@ class UpdateService {
         _logger.logError(message, error: error, stackTrace: stackTrace),
   );
 
-  // 默认更新检查URL（可以从设置中配置）
-  String _updateCheckUrl = '';
+  // 更新检查 URL 列表（优先从 VERSION.yaml 读取）
+  List<String> _updateCheckUrls = [];
 
   // 内存中的更新信息（不持久化）
   UpdateInfo? _currentUpdateInfo;
 
-  /// 设置更新检查URL
+  /// 初始化更新检查 URL（从 VERSION.yaml 读取）
+  Future<void> initializeUpdateUrls() async {
+    try {
+      _updateCheckUrls = await UpdateUrlConfigService.getUpdateCheckUrls();
+      if (_updateCheckUrls.isNotEmpty) {
+        _logger.log('从 VERSION.yaml 读取更新检查 URL: ${_updateCheckUrls.length} 个',
+            tag: 'UPDATE');
+        for (int i = 0; i < _updateCheckUrls.length; i++) {
+          final source = i == 0 ? 'Gitee' : 'GitHub';
+          _logger.log('  $source: ${_updateCheckUrls[i]}', tag: 'UPDATE');
+        }
+      } else {
+        _logger.log('VERSION.yaml 中未找到更新检查 URL 配置', tag: 'UPDATE');
+      }
+    } catch (e, stackTrace) {
+      _logger.logError('读取更新检查 URL 配置失败', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  /// 设置更新检查URL（向后兼容，单个 URL）
+  @Deprecated('使用 initializeUpdateUrls 从 VERSION.yaml 读取')
   void setUpdateCheckUrl(String url) {
-    _updateCheckUrl = url;
+    _updateCheckUrls = [url];
     _logger.log('设置更新检查URL: $url', tag: 'UPDATE');
   }
 
@@ -72,7 +92,12 @@ class UpdateService {
 
   /// 检查更新
   Future<UpdateCheckResult> checkForUpdate({bool avoidCache = true}) async {
-    if (_updateCheckUrl.isEmpty) {
+    // 如果 URL 列表为空，尝试初始化
+    if (_updateCheckUrls.isEmpty) {
+      await initializeUpdateUrls();
+    }
+
+    if (_updateCheckUrls.isEmpty) {
       return UpdateCheckResult(
         hasUpdate: false,
         error: '更新检查URL未设置',
@@ -86,9 +111,9 @@ class UpdateService {
 
       _logger.log('当前版本: $currentVersion', tag: 'UPDATE');
 
-      // 使用shared包的UpdateCheckService检查更新
+      // 使用shared包的UpdateCheckService检查更新（支持多个 URL）
       final result = await _updateCheckService.checkForUpdate(
-        updateCheckUrl: _updateCheckUrl,
+        updateCheckUrls: _updateCheckUrls,
         currentVersionNumber: currentVersionNumber,
         getPlatform: _getCurrentPlatform,
         target: 'client',
@@ -136,7 +161,6 @@ class UpdateService {
   Future<bool> hasUpdate() async {
     return _currentUpdateInfo != null;
   }
-
 
   /// 清理旧的更新包
   Future<void> _cleanupOldUpdatePackages(UpdateInfo oldUpdateInfo) async {

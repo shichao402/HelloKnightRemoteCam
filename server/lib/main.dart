@@ -4,7 +4,6 @@ import 'screens/server_home_page.dart';
 import 'services/logger_service.dart';
 import 'services/version_compatibility_service.dart';
 import 'services/update_service.dart';
-import 'services/update_settings_service.dart';
 
 List<CameraDescription> cameras = [];
 
@@ -13,40 +12,29 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   final logger = LoggerService();
   await logger.initialize();
-  
+
   // 初始化版本兼容性服务
   final versionCompatibilityService = VersionCompatibilityService();
   await versionCompatibilityService.initialize();
-  
+
   // 初始化更新服务
   final updateService = UpdateService();
-  final updateSettings = UpdateSettingsService();
-  
-  // 设置更新检查URL（如果未设置或使用旧的 GitLab URL）
-  final updateCheckUrl = await updateSettings.getUpdateCheckUrl();
-  const defaultUrl = 'https://raw.githubusercontent.com/shichao402/HelloKnightRemoteCam/main/update_config_github.json';
-  
-  if (updateCheckUrl.isEmpty || updateCheckUrl.contains('jihulab.com') || updateCheckUrl.contains('gitlab')) {
-    // 如果未设置或使用旧的 GitLab URL，更新为新的 GitHub URL
-    logger.log('更新检查URL为空或使用旧的GitLab URL，更新为GitHub URL', tag: 'UPDATE');
-    await updateSettings.setUpdateCheckUrl(defaultUrl);
-    updateService.setUpdateCheckUrl(defaultUrl);
-  } else {
-    updateService.setUpdateCheckUrl(updateCheckUrl);
-  }
-  
+
+  // 从 VERSION.yaml 初始化更新检查 URL（优先 Gitee，失败后 GitHub）
+  await updateService.initializeUpdateUrls();
+
   try {
     cameras = await availableCameras();
   } catch (e) {
     logger.logError('获取相机列表失败', error: e);
   }
-  
+
   // 启动应用
   runApp(const RemoteCamServerApp());
-  
+
   // 应用启动后，独立检查更新（不阻塞启动，不依赖UI状态）
   // 等待一小段时间确保应用已完全启动
   Future.delayed(const Duration(milliseconds: 500), () {
@@ -55,16 +43,17 @@ void main() async {
 }
 
 /// 独立的更新检查逻辑，检查到更新后立即弹窗
-Future<void> _checkForUpdateOnStartup(UpdateService updateService, LoggerService logger) async {
+Future<void> _checkForUpdateOnStartup(
+    UpdateService updateService, LoggerService logger) async {
   try {
     logger.log('启动时开始检查更新', tag: 'UPDATE');
-    
+
     // 始终从网络检查更新
     final result = await updateService.checkForUpdate(avoidCache: true);
-    
+
     if (result.hasUpdate && result.updateInfo != null) {
       logger.log('启动时发现新版本: ${result.updateInfo!.version}', tag: 'UPDATE');
-      
+
       // 检查到更新后，立即弹窗提示
       final context = navigatorKey.currentContext;
       if (context != null) {
@@ -74,7 +63,8 @@ Future<void> _checkForUpdateOnStartup(UpdateService updateService, LoggerService
         Future.delayed(const Duration(milliseconds: 500), () {
           final context = navigatorKey.currentContext;
           if (context != null) {
-            _showUpdateDialog(context, updateService, result.updateInfo!, logger);
+            _showUpdateDialog(
+                context, updateService, result.updateInfo!, logger);
           }
         });
       }
@@ -87,7 +77,7 @@ Future<void> _checkForUpdateOnStartup(UpdateService updateService, LoggerService
 }
 
 /// 显示更新对话框
-void _showUpdateDialog(BuildContext context, UpdateService updateService, 
+void _showUpdateDialog(BuildContext context, UpdateService updateService,
     dynamic updateInfo, LoggerService logger) {
   showDialog(
     context: context,
@@ -125,50 +115,50 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   /// 将技术性错误转换为友好的中文提示
   String _getFriendlyErrorMessage(dynamic error) {
     final errorString = error.toString().toLowerCase();
-    
+
     // 404错误 - 文件不存在
     if (errorString.contains('404') || errorString.contains('not found')) {
       return '下载失败：更新文件不存在，请稍后重试或联系开发者';
     }
-    
+
     // 网络连接错误
-    if (errorString.contains('network') || 
+    if (errorString.contains('network') ||
         errorString.contains('connection') ||
         errorString.contains('timeout') ||
         errorString.contains('socket') ||
         errorString.contains('failed host lookup')) {
       return '下载失败：网络连接异常，请检查网络设置后重试';
     }
-    
+
     // 权限错误
-    if (errorString.contains('permission') || 
+    if (errorString.contains('permission') ||
         errorString.contains('denied') ||
         errorString.contains('unauthorized')) {
       return '下载失败：存储权限不足，请在设置中授予存储权限';
     }
-    
+
     // 磁盘空间不足
-    if (errorString.contains('space') || 
+    if (errorString.contains('space') ||
         errorString.contains('disk') ||
         errorString.contains('storage')) {
       return '下载失败：存储空间不足，请清理空间后重试';
     }
-    
+
     // 文件路径相关错误
-    if (errorString.contains('path') || 
+    if (errorString.contains('path') ||
         errorString.contains('file') ||
         errorString.contains('directory')) {
       return '下载失败：无法保存文件，请检查存储权限';
     }
-    
+
     // 服务器错误
-    if (errorString.contains('500') || 
+    if (errorString.contains('500') ||
         errorString.contains('502') ||
         errorString.contains('503') ||
         errorString.contains('server error')) {
       return '下载失败：服务器暂时不可用，请稍后重试';
     }
-    
+
     // 其他错误 - 显示简化后的错误信息
     if (errorString.contains('dioexception')) {
       if (errorString.contains('bad response')) {
@@ -176,7 +166,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       }
       return '下载失败：网络请求异常，请检查网络连接';
     }
-    
+
     // 默认错误提示
     return '下载失败：请检查网络连接后重试，如问题持续存在请联系开发者';
   }
@@ -189,7 +179,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
 
     try {
       widget.logger.log('开始下载更新文件', tag: 'UPDATE');
-      
+
       final filePath = await widget.updateService.downloadUpdateFile(
         widget.updateInfo,
         onProgress: (received, total) {
@@ -207,7 +197,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       }
 
       widget.logger.log('下载完成，打开文件: $filePath', tag: 'UPDATE');
-      
+
       // 关闭对话框
       if (mounted) {
         Navigator.of(context).pop();
@@ -266,7 +256,8 @@ class _UpdateDialogState extends State<_UpdateDialog> {
             ),
             if (_isDownloading) ...[
               const SizedBox(height: 16),
-              const Text('正在下载...', style: TextStyle(fontWeight: FontWeight.bold)),
+              const Text('正在下载...',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               if (_totalBytes > 0)
                 LinearProgressIndicator(
@@ -326,4 +317,3 @@ class RemoteCamServerApp extends StatelessWidget {
     );
   }
 }
-

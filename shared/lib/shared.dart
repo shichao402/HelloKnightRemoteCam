@@ -20,5 +20,5 @@ export 'services/archive_service.dart';
 export 'services/file_verification_service.dart';
 export 'services/update_check_service.dart';
 export 'services/update_download_processor.dart';
+export 'services/update_url_config_service.dart';
 export 'services/log_file_manager.dart';
-

@@ -1,44 +1,43 @@
 {
   "client": {
-    "version": "1.0.7+6",
+    "version": "1.0.7+7",
     "versionNumber": "1.0.7",
     "platforms": {
       "macos": {
-        "version": "1.0.7+6",
+        "version": "1.0.7+7",
         "versionNumber": "1.0.7",
-        "downloadUrl": "https://gitee.com/YOUR_USERNAME/YOUR_REPO/releases/download/v1.0.7/HelloKnightRCC_macos_1.0.7+6.zip",
-        "fileName": "HelloKnightRCC_macos_1.0.7+6.zip",
+        "downloadUrl": "https://gitee.com/firoyang/HelloKnightRemoteCam/releases/download/v1.0.7/HelloKnightRCC_macos_1.0.7+7.zip",
+        "fileName": "HelloKnightRCC_macos_1.0.7+7.zip",
         "fileType": "zip",
         "platform": "macos",
-        "fileHash": ""
+        "fileHash": "4f5cf3ad20c114d4b5052cd72915e75aa506666978e804af1a54a078525c6681"
       },
       "windows": {
-        "version": "1.0.7+6",
+        "version": "1.0.7+7",
         "versionNumber": "1.0.7",
-        "downloadUrl": "https://gitee.com/YOUR_USERNAME/YOUR_REPO/releases/download/v1.0.7/HelloKnightRCC_windows_1.0.7+6.zip",
-        "fileName": "HelloKnightRCC_windows_1.0.7+6.zip",
+        "downloadUrl": "https://gitee.com/firoyang/HelloKnightRemoteCam/releases/download/v1.0.7/HelloKnightRCC_windows_1.0.7+7.zip",
+        "fileName": "HelloKnightRCC_windows_1.0.7+7.zip",
         "fileType": "zip",
         "platform": "windows",
-        "fileHash": ""
+        "fileHash": "ca56df7ac7f6d36063d5a092e63669074f73b1bd1763adbffd6eea1a73bef51a"
       }
     }
   },
   "server": {
-    "version": "1.0.7+6",
+    "version": "1.0.7+7",
     "versionNumber": "1.0.7",
     "platforms": {
       "android": {
-        "version": "1.0.7+6",
+        "version": "1.0.7+7",
         "versionNumber": "1.0.7",
-        "downloadUrl": "https://gitee.com/YOUR_USERNAME/YOUR_REPO/releases/download/v1.0.7/helloknightrcc_server_android_1.0.7+6.zip",
-        "fileName": "helloknightrcc_server_android_1.0.7+6.zip",
+        "downloadUrl": "https://gitee.com/firoyang/HelloKnightRemoteCam/releases/download/v1.0.7/helloknightrcc_server_android_1.0.7+7.zip",
+        "fileName": "helloknightrcc_server_android_1.0.7+7.zip",
         "fileType": "zip",
         "platform": "android",
-        "fileHash": ""
+        "fileHash": "3a5691df0d09c38764f6b904fb65d9567db7359b1dace2549e00dd0dd651c7ce"
       }
     }
   },
-  "updateCheckUrl": "https://gitee.com/YOUR_USERNAME/YOUR_REPO/raw/main/update_config_gitee.json",
-  "lastUpdated": "2025-01-01T00:00:00Z"
+  "updateCheckUrl": "https://gitee.com/firoyang/HelloKnightRemoteCam/releases/download/update-config/update_config_gitee.json",
+  "lastUpdated": "2025-11-23T06:04:23Z"
 }
-

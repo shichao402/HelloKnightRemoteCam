@@ -101,3 +101,10 @@ app.*.symbols
 !**/ios/**/default.perspectivev3
 
 .gitlab_env
+
+# Test scripts and files
+scripts/test_*.sh
+scripts/push_update_config_to_gitee.sh
+test_*.json
+test_release_file.bin
+*.bin.test
