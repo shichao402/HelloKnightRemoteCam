@@ -18,6 +18,38 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# 显示帮助信息
+show_help() {
+    echo "用法: $0 [version] [选项]"
+    echo ""
+    echo "创建 GitHub Release，重用已构建的产物"
+    echo ""
+    echo "参数:"
+    echo "  version              版本号（如 1.0.7），如果不提供则使用最新的构建结果"
+    echo ""
+    echo "选项:"
+    echo "  -h, --help          显示此帮助信息"
+    echo ""
+    echo "示例:"
+    echo "  $0                    # 使用最新的构建结果创建 Release"
+    echo "  $0 1.0.7              # 使用版本 1.0.7 的构建结果创建 Release"
+    echo ""
+    echo "说明:"
+    echo "  - 如果不指定版本号，会查找最新的 build* 标签对应的构建结果"
+    echo "  - 如果指定版本号，会查找版本号 <= 指定版本的最大 build* 标签"
+    echo "  - Release 工作流会自动查找对应的构建产物并创建 Release"
+}
+
+# 检查帮助参数
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+    esac
+done
+
 # 获取版本号
 USE_LATEST=false
 VERSION=""
@@ -27,10 +59,13 @@ if [ $# -eq 0 ]; then
     USE_LATEST=true
     echo -e "${BLUE}未指定版本号，将使用最新的构建结果${NC}"
 else
-    VERSION=$1
-    # 验证版本号格式 (x.y.z)
-    if ! [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo -e "${RED}错误: 版本号格式不正确，应为 x.y.z (例如: 1.0.7)${NC}"
+    # 检查是否是版本号格式
+    if [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        VERSION=$1
+    else
+        echo -e "${RED}错误: 未知参数 '$1'${NC}"
+        echo ""
+        show_help
         exit 1
     fi
 fi
