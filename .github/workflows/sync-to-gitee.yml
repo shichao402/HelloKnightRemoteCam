@@ -417,7 +417,7 @@ jobs:
             echo "  创建标签 API URL: ${CREATE_TAG_API_URL}"
             
             CREATE_TAG_BODY=$(echo "{
-              \"ref\": \"${TARGET_COMMITISH}\",
+              \"refs\": \"${TARGET_COMMITISH}\",
               \"tag_name\": \"${TAG_NAME}\",
               \"message\": \"Release ${TAG_NAME}\"
             }" | jq -c .)
