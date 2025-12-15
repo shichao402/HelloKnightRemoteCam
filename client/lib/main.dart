@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
-import 'screens/device_connection_screen.dart';
+import 'screens/home_screen.dart';
 import 'services/logger_service.dart';
 import 'services/api_service_manager.dart';
 import 'package:shared/shared.dart';
@@ -260,7 +260,7 @@ class _RemoteCamClientAppState extends State<RemoteCamClientApp>
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      home: const DeviceConnectionScreen(),
+      home: const HomeScreen(),
     );
   }
 }

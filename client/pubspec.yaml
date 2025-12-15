@@ -51,6 +51,10 @@ dependencies:
   # Storage
   sqflite: ^2.3.0
   shared_preferences: ^2.2.2
+  
+  # Database ORM
+  drift: ^2.14.1
+  sqlite3_flutter_libs: ^0.5.18
 
   # Media
   mjpeg_stream: ^1.0.1
@@ -77,6 +81,10 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
+  
+  # Code generation
+  drift_dev: ^2.14.1
+  build_runner: ^2.4.8
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

@@ -12,7 +12,6 @@ import '../services/orientation_preferences_service.dart';
 import 'settings_selection_screen.dart';
 import 'file_manager_screen.dart';
 import 'download_manager_screen.dart';
-import 'device_connection_screen.dart';
 import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
@@ -21,6 +20,7 @@ import 'package:shared/shared.dart';
 import '../services/update_service.dart';
 import '../models/connection_error.dart';
 import '../utils/retry_helper.dart';
+import '../core/core.dart';
 
 class CameraControlScreen extends StatefulWidget {
   final ApiService apiService;
@@ -810,12 +810,11 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     }
   }
 
-  // 返回连接页面
+  // 返回上一页面
   void _returnToConnectionScreen() {
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (context) => const DeviceConnectionScreen()),
-      (route) => false,
-    );
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
   }
 
   Future<void> _refreshFileList() async {
@@ -1120,6 +1119,9 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   Future<void> _showDownloadSuccess(String fileName, String filePath) async {
     final downloadDir = await _downloadSettings.getDownloadPath();
 
+    // 自动导入到媒体库
+    await _importToMediaLibrary(filePath, fileName);
+
     if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1128,15 +1130,15 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('下载完成: $fileName'),
-            Text(
-              '保存位置: $downloadDir',
-              style: const TextStyle(fontSize: 12),
+            Text('已保存: $fileName'),
+            const Text(
+              '已自动导入到媒体库',
+              style: TextStyle(fontSize: 12),
             ),
           ],
         ),
         backgroundColor: Colors.green,
-        duration: const Duration(seconds: 5),
+        duration: const Duration(seconds: 3),
         action: SnackBarAction(
           label: '打开文件夹',
           onPressed: () {
@@ -1145,6 +1147,31 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         ),
       ),
     );
+  }
+
+  /// 将下载的文件导入到媒体库
+  Future<void> _importToMediaLibrary(String filePath, String fileName) async {
+    try {
+      final libraryService = MediaLibraryService.instance;
+      // 确保媒体库服务已初始化
+      await libraryService.init();
+      
+      // 导入文件，使用 "phone_camera" 作为来源标识
+      // copyFile: false 表示不复制文件，只建立索引（文件已在下载目录）
+      final result = await libraryService.importFile(
+        filePath,
+        sourceId: 'phone_camera',
+        copyFile: false,
+      );
+      
+      if (result.success && result.mediaItem != null) {
+        _logger.log('文件已导入媒体库: $fileName, id=${result.mediaItem!.id}', tag: 'MEDIA_IMPORT');
+      } else {
+        _logger.log('文件导入媒体库失败: $fileName, error=${result.error}', tag: 'MEDIA_IMPORT');
+      }
+    } catch (e) {
+      _logger.logError('导入媒体库失败: $fileName', error: e);
+    }
   }
 
   Future<void> _openFolder(String folderPath) async {

@@ -9,7 +9,6 @@ import 'package:shared/shared.dart';
 import '../services/update_service.dart';
 import '../models/connection_error.dart';
 import 'camera_control_screen.dart';
-import 'client_settings_screen.dart';
 
 class DeviceConnectionScreen extends StatefulWidget {
   const DeviceConnectionScreen({Key? key}) : super(key: key);
@@ -302,7 +301,7 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
 
         // 连接成功，跳转到控制页面
         if (!mounted) return;
-        Navigator.of(context).pushReplacement(
+        Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => CameraControlScreen(apiService: apiService),
           ),
@@ -375,21 +374,6 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('连接设备'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: () async {
-              await Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => const ClientSettingsScreen(),
-                ),
-              );
-              // 设置页面返回后，刷新更新信息（从本地缓存读取）
-              _loadUpdateInfo();
-            },
-            tooltip: '应用设置',
-          ),
-        ],
       ),
       body: Column(
         children: [
