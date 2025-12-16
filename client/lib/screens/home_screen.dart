@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'library/library_screen.dart';
-import 'device_connection_screen.dart';
+import 'capture/source_selector_screen.dart';
 import 'client_settings_screen.dart';
 import '../core/core.dart';
 import '../services/logger_service.dart';
@@ -78,7 +78,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _openCamera() {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => const DeviceConnectionScreen(),
+        builder: (context) => const SourceSelectorScreen(),
       ),
     ).then((_) => _loadStats()); // 返回时刷新统计
   }
@@ -157,7 +157,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _buildToolCard(
           icon: Icons.camera_alt,
           label: '拍摄',
-          subtitle: '连接手机相机',
+          subtitle: '本机或手机相机',
           color: Colors.blue,
           onTap: _openCamera,
         ),

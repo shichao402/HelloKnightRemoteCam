@@ -6,6 +6,9 @@ enum SourceType {
   /// 手机相机（远程手机服务端）
   phoneCamera,
 
+  /// 本地摄像头（客户端设备摄像头）
+  localCamera,
+
   /// IP 摄像头（RTSP/ONVIF）
   ipCamera,
 
