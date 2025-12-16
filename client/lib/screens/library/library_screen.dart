@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 
 import '../../core/media/media.dart';
+import '../../services/logger_service.dart';
 import 'media_grid_item.dart';
 import 'media_detail_screen.dart';
 
 /// 媒体库主页面
+/// 本地管理为主，远端补充（Google Photos 风格）
 class LibraryScreen extends StatefulWidget {
   /// 可选的外部传入的 MediaLibraryService
   final MediaLibraryService? libraryService;
@@ -18,6 +20,7 @@ class LibraryScreen extends StatefulWidget {
 
 class _LibraryScreenState extends State<LibraryScreen> {
   MediaLibraryService? _libraryService;
+  final ClientLoggerService _logger = ClientLoggerService();
 
   List<MediaItem> _mediaItems = [];
   MediaFilter _filter = MediaFilter.defaultFilter;
@@ -30,10 +33,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
   MediaType? _typeFilter;
   bool _starredOnly = false;
 
+  // 待同步数量
+  int _pendingSyncCount = 0;
+
   @override
   void initState() {
     super.initState();
     _initializeAndLoad();
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
   }
 
   Future<void> _initializeAndLoad() async {
@@ -60,8 +71,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
     try {
       final items = await _libraryService!.getMedia(_filter);
+      
+      // 计算待同步数量（远端文件未下载）
+      final pending = items.where((item) => 
+        item.syncStatus == SyncStatus.pending ||
+        item.syncStatus == SyncStatus.failed
+      ).length;
+      
       setState(() {
         _mediaItems = items;
+        _pendingSyncCount = pending;
         _isLoading = false;
         _error = null;
       });
@@ -105,12 +124,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
   void _selectAll() {
     setState(() {
       _selectedIds.addAll(_mediaItems.map((m) => m.id));
-    });
-  }
-
-  void _clearSelection() {
-    setState(() {
-      _selectedIds.clear();
     });
   }
 
@@ -176,7 +189,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('确认删除'),
-        content: Text('确定要删除选中的 ${_selectedIds.length} 个项目吗？'),
+        content: Text('确定要删除选中的 ${_selectedIds.length} 个项目吗？\n\n注意：这只会删除本地文件，远端文件不受影响。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -229,11 +242,60 @@ class _LibraryScreenState extends State<LibraryScreen> {
       appBar: _buildAppBar(),
       body: Column(
         children: [
+          // 统计信息栏
+          _buildStatsBar(),
+          // 筛选栏
           _buildFilterBar(),
+          // 主体内容
           Expanded(child: _buildBody()),
         ],
       ),
       floatingActionButton: _selectionMode ? null : _buildFAB(),
+    );
+  }
+
+  /// 统计信息栏
+  Widget _buildStatsBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.grey.withOpacity(0.05),
+        border: Border(
+          bottom: BorderSide(
+            color: Colors.grey.withOpacity(0.2),
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          // 统计信息
+          Text(
+            '共 ${_mediaItems.length} 项',
+            style: TextStyle(
+              fontSize: 13,
+              color: Colors.grey[600],
+            ),
+          ),
+          // 待同步数量
+          if (_pendingSyncCount > 0) ...[
+            const SizedBox(width: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '$_pendingSyncCount 张待同步',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.orange[700],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -406,7 +468,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              '点击右下角按钮导入媒体文件',
+              '使用手机相机拍摄或点击右下角按钮导入',
               style: TextStyle(color: Colors.grey[500]),
             ),
           ],

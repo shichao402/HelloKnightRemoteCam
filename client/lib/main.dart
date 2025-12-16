@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
-import 'screens/home_screen.dart';
+import 'widgets/adaptive_shell.dart';
 import 'services/logger_service.dart';
 import 'services/api_service_manager.dart';
 import 'package:shared/shared.dart';
@@ -43,7 +43,7 @@ void main() async {
 Future<void> _initializeWindow() async {
   await windowManager.ensureInitialized();
 
-  const minSize = Size(800, 600);
+  const minSize = Size(400, 400);
   const defaultSize = Size(1200, 800);
 
   // 设置最小窗口尺寸
@@ -260,7 +260,7 @@ class _RemoteCamClientAppState extends State<RemoteCamClientApp>
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      home: const AdaptiveShell(),
     );
   }
 }

@@ -5,8 +5,6 @@ import '../services/api_service_manager.dart';
 import '../services/connection_settings_service.dart';
 import '../services/device_config_service.dart';
 import '../services/logger_service.dart';
-import 'package:shared/shared.dart';
-import '../services/update_service.dart';
 import '../models/connection_error.dart';
 import 'camera_control_screen.dart';
 
@@ -25,33 +23,15 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
   final _connectionSettings = ConnectionSettingsService();
   final _deviceConfigService = DeviceConfigService();
   final _logger = ClientLoggerService();
-  final _updateService = UpdateService();
 
   bool _isConnecting = false;
   bool _isAutoConnecting = false;
   bool _autoConnectEnabled = true;
-  UpdateInfo? _updateInfo;
 
   @override
   void initState() {
     super.initState();
     _loadSettingsAndAutoConnect();
-    _loadUpdateInfo();
-  }
-  
-  /// 只读取本地缓存的更新信息，用于UI持久化状态显示
-  Future<void> _loadUpdateInfo() async {
-    final savedUpdateInfo = await _updateService.getSavedUpdateInfo();
-    if (mounted) {
-      setState(() {
-        _updateInfo = savedUpdateInfo;
-      });
-    }
-  }
-
-  /// 显示更新对话框
-  void _showUpdateDialog(UpdateInfo updateInfo) {
-    _updateService.showUpdateDialog(context, updateInfo);
   }
 
   Future<void> _loadSettingsAndAutoConnect() async {
@@ -375,38 +355,7 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
       appBar: AppBar(
         title: const Text('连接设备'),
       ),
-      body: Column(
-        children: [
-          if (_updateInfo != null)
-            Container(
-              width: double.infinity,
-              color: Colors.orange,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: InkWell(
-                onTap: () {
-                  // 显示更新下载对话框
-                  _showUpdateDialog(_updateInfo!);
-                },
-                child: Row(
-                  children: [
-                    const Icon(Icons.system_update, color: Colors.white),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '有新版本可用: ${_updateInfo!.version}，点击下载',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    const Icon(Icons.arrow_forward, color: Colors.white),
-                  ],
-                ),
-              ),
-            ),
-          Expanded(
-            child: Center(
+      body: Center(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(24),
                 child: Form(
@@ -518,9 +467,6 @@ class _DeviceConnectionScreenState extends State<DeviceConnectionScreen> {
                 ),
               ),
             ),
-          ),
-        ],
-      ),
     );
   }
 }

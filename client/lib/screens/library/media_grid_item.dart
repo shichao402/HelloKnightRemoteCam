@@ -4,6 +4,7 @@ import '../../core/media/models/media_item.dart';
 import '../../core/media/models/media_type.dart';
 
 /// 媒体网格项组件
+/// 支持显示同步状态（Google Photos 风格）
 class MediaGridItem extends StatelessWidget {
   final MediaItem item;
   final bool isSelected;
@@ -35,6 +36,9 @@ class MediaGridItem extends StatelessWidget {
 
           // 视频时长标识
           if (item.type == MediaType.video) _buildVideoBadge(),
+
+          // 同步状态标识（云端/下载中）
+          if (!selectionMode) _buildSyncStatusBadge(),
 
           // 选中状态
           if (selectionMode) _buildSelectionOverlay(),
@@ -159,6 +163,50 @@ class MediaGridItem extends StatelessWidget {
           Icons.star,
           size: 16,
           color: Colors.amber,
+        ),
+      ),
+    );
+  }
+
+  /// 同步状态标识（Google Photos 风格）
+  Widget _buildSyncStatusBadge() {
+    // 只有非本地状态才显示标识
+    if (item.syncStatus == SyncStatus.local || 
+        item.syncStatus == SyncStatus.synced) {
+      return const SizedBox.shrink();
+    }
+
+    IconData icon;
+    Color color;
+    
+    switch (item.syncStatus) {
+      case SyncStatus.pending:
+        // 云端未下载 - 显示云朵图标
+        icon = Icons.cloud_outlined;
+        color = Colors.white;
+        break;
+      case SyncStatus.failed:
+        // 同步失败 - 显示警告图标
+        icon = Icons.cloud_off;
+        color = Colors.orange;
+        break;
+      default:
+        return const SizedBox.shrink();
+    }
+
+    return Positioned(
+      right: 4,
+      top: 4,
+      child: Container(
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          color: Colors.black54,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Icon(
+          icon,
+          size: 14,
+          color: color,
         ),
       ),
     );

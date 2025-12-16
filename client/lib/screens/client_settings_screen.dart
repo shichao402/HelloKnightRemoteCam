@@ -4,12 +4,23 @@ import 'dart:io';
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
 import '../services/version_service.dart';
+import '../services/capture_settings_service.dart';
+import '../services/connection_settings_service.dart';
 import 'package:shared/shared.dart';
 import '../services/update_service.dart';
 import 'package:file_picker/file_picker.dart';
 
 class ClientSettingsScreen extends StatefulWidget {
-  const ClientSettingsScreen({Key? key}) : super(key: key);
+  /// 拍摄来源变更回调
+  final VoidCallback? onCaptureSourceChanged;
+  /// 更新状态变更回调
+  final VoidCallback? onUpdateStatusChanged;
+
+  const ClientSettingsScreen({
+    Key? key,
+    this.onCaptureSourceChanged,
+    this.onUpdateStatusChanged,
+  }) : super(key: key);
 
   @override
   State<ClientSettingsScreen> createState() => _ClientSettingsScreenState();
@@ -20,12 +31,18 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   final DownloadSettingsService _downloadSettings = DownloadSettingsService();
   final VersionService _versionService = VersionService();
   final UpdateService _updateService = UpdateService();
+  final CaptureSettingsService _captureSettings = CaptureSettingsService();
+  final ConnectionSettingsService _connectionSettings = ConnectionSettingsService();
+  
   bool _debugMode = false;
   bool _isLoading = true;
   String _downloadPath = '';
   String _version = '加载中...';
   bool _isCheckingUpdate = false;
   UpdateInfo? _updateInfo;
+  CaptureSource _captureSource = CaptureSource.remoteCamera;
+  String _serverHost = '';
+  int _serverPort = 8080;
 
   @override
   void initState() {
@@ -36,6 +53,8 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   Future<void> _loadSettings() async {
     final downloadPath = await _downloadSettings.getDownloadPath();
     final version = await _versionService.getVersion();
+    final captureSource = await _captureSettings.getCaptureSource();
+    final connectionSettings = await _connectionSettings.getConnectionSettings();
 
     // 注意：更新检查 URL 现在从 VERSION.yaml 读取，不再从设置中读取
     // 如果 URL 列表为空，尝试初始化（从 VERSION.yaml 读取）
@@ -49,6 +68,9 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
       _downloadPath = downloadPath;
       _version = version;
       _updateInfo = updateInfo;
+      _captureSource = captureSource;
+      _serverHost = connectionSettings['host'] as String;
+      _serverPort = connectionSettings['port'] as int;
       _isLoading = false;
     });
   }
@@ -430,6 +452,137 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
     _updateService.showUpdateDialog(context, updateInfo);
   }
 
+  /// 显示拍摄来源选择对话框
+  void _showCaptureSourceDialog() {
+    final isLocalSupported = _captureSettings.isLocalCameraSupported();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('选择拍摄来源'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            RadioListTile<CaptureSource>(
+              title: const Text('本机摄像头'),
+              subtitle: Text(isLocalSupported 
+                  ? '使用当前设备的摄像头' 
+                  : '桌面平台暂不支持'),
+              value: CaptureSource.localCamera,
+              groupValue: _captureSource,
+              onChanged: isLocalSupported 
+                  ? (value) => _setCaptureSource(value!, context)
+                  : null,
+            ),
+            RadioListTile<CaptureSource>(
+              title: const Text('远端相机'),
+              subtitle: const Text('连接手机作为远程相机'),
+              value: CaptureSource.remoteCamera,
+              groupValue: _captureSource,
+              onChanged: (value) => _setCaptureSource(value!, context),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _setCaptureSource(CaptureSource source, BuildContext dialogContext) async {
+    await _captureSettings.setCaptureSource(source);
+    setState(() {
+      _captureSource = source;
+    });
+    widget.onCaptureSourceChanged?.call();
+    if (mounted) {
+      Navigator.pop(dialogContext);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('拍摄来源已设置为: ${source == CaptureSource.localCamera ? "本机摄像头" : "远端相机"}'),
+        ),
+      );
+    }
+  }
+
+  /// 显示服务器设置对话框
+  void _showServerSettingsDialog() {
+    final hostController = TextEditingController(text: _serverHost);
+    final portController = TextEditingController(text: _serverPort.toString());
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('远端服务器设置'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: hostController,
+              decoration: const InputDecoration(
+                labelText: '服务器IP地址',
+                hintText: '例如: 192.168.1.100',
+                prefixIcon: Icon(Icons.dns),
+              ),
+              keyboardType: TextInputType.number,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: portController,
+              decoration: const InputDecoration(
+                labelText: '端口',
+                prefixIcon: Icon(Icons.settings_ethernet),
+              ),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final host = hostController.text.trim();
+              final port = int.tryParse(portController.text) ?? 8080;
+              
+              if (host.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('请输入服务器地址')),
+                );
+                return;
+              }
+              
+              await _connectionSettings.saveConnectionSettings(
+                host: host,
+                port: port,
+                autoConnect: true,
+              );
+              
+              setState(() {
+                _serverHost = host;
+                _serverPort = port;
+              });
+              
+              if (mounted) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('服务器设置已保存: $host:$port')),
+                );
+              }
+            },
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -440,6 +593,36 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               children: [
+                // 拍摄设置
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                    '拍摄设置',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.camera_alt),
+                  title: const Text('拍摄来源'),
+                  subtitle: Text(_captureSource == CaptureSource.localCamera 
+                      ? '本机摄像头' 
+                      : '远端相机（手机）'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _showCaptureSourceDialog,
+                ),
+                if (_captureSource == CaptureSource.remoteCamera) ...[
+                  ListTile(
+                    leading: const Icon(Icons.dns),
+                    title: const Text('远端服务器'),
+                    subtitle: Text('$_serverHost:$_serverPort'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: _showServerSettingsDialog,
+                  ),
+                ],
+                const Divider(),
                 const Padding(
                   padding: EdgeInsets.all(16),
                   child: Text(

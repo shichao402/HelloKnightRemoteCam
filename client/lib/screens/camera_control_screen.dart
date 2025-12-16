@@ -10,14 +10,12 @@ import '../models/download_task.dart';
 import '../widgets/transformed_preview_widget.dart';
 import '../services/orientation_preferences_service.dart';
 import 'settings_selection_screen.dart';
-import 'file_manager_screen.dart';
 import 'download_manager_screen.dart';
+import 'library/library_screen.dart';
 import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
 import '../services/connection_settings_service.dart';
-import 'package:shared/shared.dart';
-import '../services/update_service.dart';
 import '../models/connection_error.dart';
 import '../utils/retry_helper.dart';
 import '../core/core.dart';
@@ -51,12 +49,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   RetryHelper? _reconnectHelper; // 重连助手
   RetryHelper? _webSocketReconnectHelper; // WebSocket重连助手
   final ClientLoggerService _logger = ClientLoggerService();
-  final UpdateService _updateService = UpdateService();
   bool _isAuthFailure = false; // 标记是否是认证失败（版本不兼容等）
-  UpdateInfo? _updateInfo;
-
-  // 左右布局比例（0.0-1.0，表示左侧占比）
-  double _leftPanelRatio = 0.3; // 默认左侧30%，可手动调整
 
   // 设备方向（0=竖屏, 90=横屏右转, 180=倒置, 270=横屏左转）
   // 使用ValueNotifier，只更新预览部分，不影响文件列表
@@ -145,22 +138,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     _initializeOrientationLock();
     // 异步获取预览流URL（包含版本号）
     _loadPreviewStreamUrl();
-    // 检查更新
-    _checkForUpdate();
-  }
-  
-  Future<void> _checkForUpdate() async {
-    final updateInfo = await _updateService.getSavedUpdateInfo();
-    if (mounted) {
-      setState(() {
-        _updateInfo = updateInfo;
-      });
-    }
-  }
-
-  /// 显示更新对话框
-  void _showUpdateDialog(UpdateInfo updateInfo) {
-    _updateService.showUpdateDialog(context, updateInfo);
   }
 
   /// 加载预览流URL（包含客户端版本号）
@@ -1502,129 +1479,21 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       ),
       body: Column(
         children: [
-          if (_updateInfo != null)
-            Container(
-              width: double.infinity,
-              color: Colors.orange,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: InkWell(
-                onTap: () {
-                  _showUpdateDialog(_updateInfo!);
-                },
-                child: Row(
-                  children: [
-                    const Icon(Icons.system_update, color: Colors.white),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '有新版本可用: ${_updateInfo!.version}，点击下载',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    const Icon(Icons.arrow_forward, color: Colors.white),
-                  ],
-                ),
-              ),
-            ),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final totalWidth = constraints.maxWidth;
                 final totalHeight = constraints.maxHeight;
-                const dividerWidth = 4.0; // 分割线宽度
-                final leftWidth = totalWidth * _leftPanelRatio;
-                // 右侧宽度 = 总宽度 - 左侧宽度 - 分割线宽度，确保不溢出
-                final rightWidth = totalWidth - leftWidth - dividerWidth;
                 
-                // 记录左侧窗口尺寸
+                // 记录窗口尺寸
                 _logger.log(
-                    '左侧窗口尺寸: ${leftWidth.toInt()}x${totalHeight.toInt()} (比例=${(_leftPanelRatio * 100).toStringAsFixed(1)}%)',
+                    '预览窗口尺寸: ${totalWidth.toInt()}x${totalHeight.toInt()}',
                     tag: 'PREVIEW');
 
-                return Row(
-            children: [
-              // 左侧：视频预览区域（根据视频分辨率动态调整宽高比）
-              SizedBox(
-                width: leftWidth,
-                child: Column(
+                // 简化布局：全屏预览 + 底部控制栏
+                return Column(
                   children: [
-                    // 控制按钮区域
-                    Container(
-                      margin: const EdgeInsets.all(8),
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[800],
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          // 拍照按钮
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: (_isOperating || _isRecording)
-                                  ? null
-                                  : _takePicture,
-                              icon: const Icon(Icons.camera, size: 18),
-                              label: const Text('拍照',
-                                  style: TextStyle(fontSize: 12)),
-                              style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.all(8),
-                                backgroundColor: Colors.blue,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          // 录像按钮
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: _isOperating ? null : _toggleRecording,
-                              icon: Icon(
-                                  _isRecording ? Icons.stop : Icons.videocam,
-                                  size: 18),
-                              label: Text(_isRecording ? '停止' : '录像',
-                                  style: const TextStyle(fontSize: 12)),
-                              style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.all(8),
-                                backgroundColor:
-                                    _isRecording ? Colors.red : Colors.green,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          // 旋转按钮（只在锁定状态时显示）
-                          if (_orientationLocked)
-                            IconButton(
-                              icon: const Icon(Icons.rotate_90_degrees_cw),
-                              color: Colors.blue,
-                              onPressed: _rotatePreview,
-                              tooltip: '旋转预览（当前: ${_lockedRotationAngle}°）',
-                              style: IconButton.styleFrom(
-                                  backgroundColor:
-                                      Colors.blue.withOpacity(0.2)),
-                            ),
-                          // 方向锁定按钮
-                          IconButton(
-                            icon: Icon(_orientationLocked
-                                ? Icons.lock
-                                : Icons.lock_open),
-                            color: _orientationLocked
-                                ? Colors.orange
-                                : Colors.grey,
-                            onPressed: _toggleOrientationLock,
-                            tooltip: _orientationLocked ? '方向已锁定' : '方向已解锁',
-                            style: IconButton.styleFrom(
-                              backgroundColor: _orientationLocked
-                                  ? Colors.orange.withOpacity(0.2)
-                                  : Colors.transparent,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // 预览区域
+                    // 预览区域（占据大部分空间）
                     Expanded(
                       child: Container(
                         margin: const EdgeInsets.all(8),
@@ -1637,7 +1506,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                           borderRadius: BorderRadius.circular(8),
                           child: Stack(
                             children: [
-                              // 预览窗口：使用转置预览组件
+                              // 预览窗口
                               Positioned.fill(
                                 child: ValueListenableBuilder<Map<String, int>>(
                                   valueListenable: _previewSizeNotifier,
@@ -1645,15 +1514,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                                     return ValueListenableBuilder<int>(
                                       valueListenable: _rotationAngleNotifier,
                                       builder: (context, rotationAngle, _) {
-                                        // 如果预览流URL还未加载，显示加载指示器
-                                        if (_previewStreamUrl == null) {
-                                          return const Center(
-                                            child: CircularProgressIndicator(),
-                                          );
-                                        }
-
-                                        // 如果预览未初始化，显示加载指示器
-                                        if (!_previewInitialized) {
+                                        if (_previewStreamUrl == null || !_previewInitialized) {
                                           return const Center(
                                             child: CircularProgressIndicator(),
                                           );
@@ -1669,7 +1530,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                                           originalWidth: originalWidth,
                                           originalHeight: originalHeight,
                                           onSizeDetermined: (width, height) {
-                                            // 转置后尺寸确定回调（由TransformedPreviewWidget内部处理）
                                             if (mounted) {
                                               _transformedPreviewSizeNotifier.value = {
                                                 'width': width,
@@ -1683,6 +1543,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                                   },
                                 ),
                               ),
+                              // 录像中指示器
                               if (_isRecording)
                                 Positioned(
                                   top: 16,
@@ -1721,48 +1582,96 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                         ),
                       ),
                     ),
-                  ],
-                ),
-              ),
-
-              // 可拖拽的分割线
-              GestureDetector(
-                onPanUpdate: (details) {
-                  setState(() {
-                    final newLeftWidth = leftWidth + details.delta.dx;
-                    final newRatio = newLeftWidth / totalWidth;
-                    // 限制比例在 0.2 到 0.7 之间
-                    _leftPanelRatio = newRatio.clamp(0.2, 0.7);
-                  });
-                },
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.resizeColumn,
-                  child: SizedBox(
-                    width: dividerWidth,
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(vertical: 8),
+                    // 底部控制栏
+                    Container(
+                      margin: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                       decoration: BoxDecoration(
-                        color: Colors.grey[400],
-                        borderRadius: BorderRadius.circular(2),
+                        color: Colors.grey[800],
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          // 旋转按钮（只在锁定状态时显示）
+                          if (_orientationLocked)
+                            IconButton(
+                              icon: const Icon(Icons.rotate_90_degrees_cw),
+                              color: Colors.blue,
+                              onPressed: _rotatePreview,
+                              tooltip: '旋转预览（当前: ${_lockedRotationAngle}°）',
+                              style: IconButton.styleFrom(
+                                  backgroundColor: Colors.blue.withOpacity(0.2)),
+                            ),
+                          // 方向锁定按钮
+                          IconButton(
+                            icon: Icon(_orientationLocked
+                                ? Icons.lock
+                                : Icons.lock_open),
+                            color: _orientationLocked
+                                ? Colors.orange
+                                : Colors.grey,
+                            onPressed: _toggleOrientationLock,
+                            tooltip: _orientationLocked ? '方向已锁定' : '方向已解锁',
+                            style: IconButton.styleFrom(
+                              backgroundColor: _orientationLocked
+                                  ? Colors.orange.withOpacity(0.2)
+                                  : Colors.transparent,
+                            ),
+                          ),
+                          const SizedBox(width: 24),
+                          // 拍照按钮（大按钮）
+                          SizedBox(
+                            width: 80,
+                            height: 80,
+                            child: ElevatedButton(
+                              onPressed: (_isOperating || _isRecording)
+                                  ? null
+                                  : _takePicture,
+                              style: ElevatedButton.styleFrom(
+                                shape: const CircleBorder(),
+                                padding: const EdgeInsets.all(16),
+                                backgroundColor: Colors.white,
+                                foregroundColor: Colors.black,
+                              ),
+                              child: const Icon(Icons.camera_alt, size: 32),
+                            ),
+                          ),
+                          const SizedBox(width: 24),
+                          // 录像按钮
+                          SizedBox(
+                            width: 60,
+                            height: 60,
+                            child: ElevatedButton(
+                              onPressed: _isOperating ? null : _toggleRecording,
+                              style: ElevatedButton.styleFrom(
+                                shape: const CircleBorder(),
+                                padding: const EdgeInsets.all(12),
+                                backgroundColor: _isRecording ? Colors.red : Colors.red[300],
+                              ),
+                              child: Icon(
+                                _isRecording ? Icons.stop : Icons.fiber_manual_record,
+                                size: 28,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 24),
+                          // 媒体库入口
+                          IconButton(
+                            icon: const Icon(Icons.photo_library),
+                            color: Colors.white,
+                            onPressed: _navigateToMediaLibrary,
+                            tooltip: '媒体库',
+                            style: IconButton.styleFrom(
+                              backgroundColor: Colors.grey[700],
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                ),
-              ),
-
-              // 右侧：直接嵌入完整的文件管理界面（无 AppBar）
-              SizedBox(
-                width: rightWidth,
-                child: ClipRect(
-                  child: FileManagerScreen(
-                    apiService: widget.apiService,
-                    highlightFileName: null,
-                    showAppBar: false,
-                  ),
-                ),
-              ),
-            ],
-          );
+                  ],
+                );
               },
             ),
           ),
@@ -1771,15 +1680,12 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     );
   }
 
-  /// 导航到文件管理并定位到指定文件（全屏模式）
-  void _navigateToFileManager(String? fileName) {
+  /// 导航到媒体库
+  void _navigateToMediaLibrary() {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => FileManagerScreen(
-          apiService: widget.apiService,
-          highlightFileName: fileName,
-        ),
+        builder: (context) => const LibraryScreen(),
       ),
     );
   }
@@ -1794,209 +1700,5 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         ),
       ),
     );
-  }
-
-  /// 在系统资源管理器中打开并选中文件
-  Future<void> _openInFileManager(FileInfo file) async {
-    try {
-      final downloadDir = await _downloadSettings.getDownloadPath();
-      final localPath = path.join(downloadDir, file.name);
-      final localFile = File(localPath);
-
-      if (!await localFile.exists()) {
-        _showInfo('文件不存在');
-        return;
-      }
-
-      // 跨平台打开文件管理器并选中文件
-      if (Platform.isMacOS) {
-        // macOS: open -R
-        await Process.run('open', ['-R', localPath]);
-      } else if (Platform.isWindows) {
-        // Windows: explorer /select,filepath
-        await Process.run('explorer', ['/select,', localPath]);
-      } else if (Platform.isLinux) {
-        // Linux: xdg-open (打开目录)
-        final dirPath = path.dirname(localPath);
-        await Process.run('xdg-open', [dirPath]);
-      } else {
-        _showInfo('不支持的操作系统');
-      }
-
-      _showInfo('已在资源管理器中打开');
-    } catch (e) {
-      _showInfo('打开资源管理器失败: $e');
-    }
-  }
-
-  /// 复制文件到剪贴板（跨平台）
-  Future<void> _copyFile(FileInfo file) async {
-    try {
-      final downloadDir = await _downloadSettings.getDownloadPath();
-      final localPath = path.join(downloadDir, file.name);
-      final localFile = File(localPath);
-
-      if (!await localFile.exists()) {
-        _showInfo('文件不存在');
-        return;
-      }
-
-      // 跨平台复制文件到剪贴板
-      if (Platform.isMacOS) {
-        // macOS: 使用 osascript 复制文件引用
-        try {
-          final escapedPath =
-              localPath.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
-          // 使用 POSIX file 复制文件引用，而不是文件内容
-          final script = 'set the clipboard to POSIX file "$escapedPath"';
-          final result = await Process.run('osascript', ['-e', script]);
-          if (result.exitCode == 0) {
-            _showInfo('文件已复制到剪贴板');
-          } else {
-            // 如果失败，复制文件路径
-            await Clipboard.setData(ClipboardData(text: localPath));
-            _showInfo('文件路径已复制到剪贴板');
-          }
-        } catch (e) {
-          // 如果失败，复制文件路径
-          await Clipboard.setData(ClipboardData(text: localPath));
-          _showInfo('文件路径已复制到剪贴板');
-        }
-      } else if (Platform.isWindows) {
-        // Windows: 使用 PowerShell 复制文件
-        try {
-          final escapedPath =
-              localPath.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
-          final result = await Process.run('powershell', [
-            '-Command',
-            'Set-Clipboard -Path "$escapedPath"',
-          ]);
-          if (result.exitCode == 0) {
-            _showInfo('文件已复制到剪贴板');
-          } else {
-            await Clipboard.setData(ClipboardData(text: localPath));
-            _showInfo('文件路径已复制到剪贴板');
-          }
-        } catch (e) {
-          await Clipboard.setData(ClipboardData(text: localPath));
-          _showInfo('文件路径已复制到剪贴板');
-        }
-      } else if (Platform.isLinux) {
-        // Linux: 使用 xclip 复制文件
-        try {
-          final fileBytes = await localFile.readAsBytes();
-          final process = await Process.start('xclip', [
-            '-selection',
-            'clipboard',
-            '-t',
-            file.isVideo ? 'video/mp4' : 'image/png'
-          ]);
-          process.stdin.add(fileBytes);
-          await process.stdin.close();
-          final exitCode = await process.exitCode;
-          if (exitCode == 0) {
-            _showInfo('文件已复制到剪贴板');
-          } else {
-            throw Exception('xclip failed with exit code $exitCode');
-          }
-        } catch (e) {
-          try {
-            final fileBytes = await localFile.readAsBytes();
-            final process =
-                await Process.start('xsel', ['--clipboard', '--input']);
-            process.stdin.add(fileBytes);
-            await process.stdin.close();
-            final exitCode = await process.exitCode;
-            if (exitCode == 0) {
-              _showInfo('文件已复制到剪贴板');
-            } else {
-              throw Exception('xsel failed with exit code $exitCode');
-            }
-          } catch (e2) {
-            await Clipboard.setData(ClipboardData(text: localPath));
-            _showInfo('文件路径已复制到剪贴板（请安装 xclip 或 xsel 以支持文件复制）');
-          }
-        }
-      } else {
-        await Clipboard.setData(ClipboardData(text: localPath));
-        _showInfo('文件路径已复制到剪贴板');
-      }
-    } catch (e) {
-      _showInfo('复制失败: $e');
-    }
-  }
-
-  /// 删除本地文件
-  Future<void> _deleteLocalFile(FileInfo file) async {
-    try {
-      final downloadDir = await _downloadSettings.getDownloadPath();
-      final localPath = path.join(downloadDir, file.name);
-      final localFile = File(localPath);
-
-      if (!await localFile.exists()) {
-        _showInfo('文件不存在');
-        return;
-      }
-
-      // 确认对话框
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('确认删除'),
-          content: Text('确定要删除本地文件 ${file.name} 吗？'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              style: TextButton.styleFrom(foregroundColor: Colors.red),
-              child: const Text('删除'),
-            ),
-          ],
-        ),
-      );
-
-      if (confirmed != true) return;
-
-      await localFile.delete();
-      _downloadedStatusCache[file.name] = false;
-      setState(() {});
-      _showInfo('本地文件已删除');
-    } catch (e) {
-      _showInfo('删除失败: $e');
-    }
-  }
-
-  /// 下载文件
-  Future<void> _downloadFile(FileInfo file) async {
-    try {
-      // 检查是否已下载
-      final isDownloaded = _downloadedStatusCache[file.name] == true;
-      if (isDownloaded) {
-        _showInfo('文件已下载');
-        return;
-      }
-
-      // 检查是否正在下载
-      final existingTask = await _downloadManager.findTaskByFileName(file.name);
-      if (existingTask != null &&
-          (existingTask.status == DownloadStatus.downloading ||
-              existingTask.status == DownloadStatus.pending)) {
-        _showInfo('文件正在下载中');
-        return;
-      }
-
-      await _downloadManager.addDownload(
-        remoteFilePath: file.path,
-        fileName: file.name,
-      );
-
-      final downloadDir = await _downloadSettings.getDownloadPath();
-      _showInfo('已添加到下载队列\n保存位置: $downloadDir');
-    } catch (e) {
-      _showInfo('添加下载失败: $e');
-    }
   }
 }

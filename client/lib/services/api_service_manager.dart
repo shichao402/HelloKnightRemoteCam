@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'api_service.dart';
+import 'websocket_connection.dart';
 import 'logger_service.dart';
 
 /// 全局ApiService管理器
@@ -10,14 +12,33 @@ class ApiServiceManager {
 
   final ClientLoggerService _logger = ClientLoggerService();
   ApiService? _currentApiService;
+  
+  // 连接状态流
+  final _connectionStateController = StreamController<bool>.broadcast();
+  
+  /// 连接状态变化流（简化版：true=已连接，false=未连接）
+  Stream<bool> get connectionStateStream => _connectionStateController.stream;
+  
+  /// 详细连接状态变化流
+  Stream<ConnectionStateChange>? get detailedConnectionStateStream =>
+      _currentApiService?.connectionStateStream;
+  
+  /// 是否有活跃连接
+  bool get hasActiveConnection => 
+      _currentApiService != null && _currentApiService!.isWebSocketConnected;
+
+  /// 当前连接状态
+  ConnectionState? get connectionState => _currentApiService?.connectionState;
 
   /// 设置当前的ApiService实例
   void setCurrentApiService(ApiService? apiService) {
     _currentApiService = apiService;
     if (apiService != null) {
       _logger.log('设置当前ApiService实例', tag: 'LIFECYCLE');
+      _connectionStateController.add(true);
     } else {
       _logger.log('清除当前ApiService实例', tag: 'LIFECYCLE');
+      _connectionStateController.add(false);
     }
   }
 
@@ -59,4 +80,3 @@ class ApiServiceManager {
     }
   }
 }
-

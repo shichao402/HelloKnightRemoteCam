@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../core/sources/sources.dart';
+import '../../services/api_service_manager.dart';
 import '../device_connection_screen.dart';
+import '../camera_control_screen.dart';
 import 'local_camera_screen.dart';
 
 /// 拍摄来源选择界面
@@ -9,12 +12,47 @@ import 'local_camera_screen.dart';
 /// 让用户选择使用哪种拍摄来源：
 /// - 本地摄像头（客户端设备）
 /// - 手机相机（远程连接）
-class SourceSelectorScreen extends StatelessWidget {
+class SourceSelectorScreen extends StatefulWidget {
   const SourceSelectorScreen({super.key});
+
+  @override
+  State<SourceSelectorScreen> createState() => _SourceSelectorScreenState();
+}
+
+class _SourceSelectorScreenState extends State<SourceSelectorScreen> {
+  final ApiServiceManager _apiManager = ApiServiceManager();
+  bool _isRemoteConnected = false;
+  StreamSubscription? _connectionSubscription;
 
   /// 检查本地摄像头是否可用（仅 Android、iOS、Web 支持）
   bool get _isLocalCameraSupported =>
       Platform.isAndroid || Platform.isIOS;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkConnection();
+  }
+
+  @override
+  void dispose() {
+    _connectionSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _checkConnection() {
+    setState(() {
+      _isRemoteConnected = _apiManager.hasActiveConnection;
+    });
+    
+    _connectionSubscription = _apiManager.connectionStateStream.listen((connected) {
+      if (mounted) {
+        setState(() {
+          _isRemoteConnected = connected;
+        });
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -67,10 +105,13 @@ class SourceSelectorScreen extends StatelessWidget {
                       context,
                       icon: Icons.phone_android,
                       title: '手机相机',
-                      subtitle: '连接手机作为远程相机',
-                      color: Colors.blue,
+                      subtitle: _isRemoteConnected 
+                          ? '已连接，点击开始拍摄' 
+                          : '连接手机作为远程相机',
+                      color: _isRemoteConnected ? Colors.green : Colors.blue,
                       sourceType: SourceType.phoneCamera,
                       enabled: true,
+                      isConnected: _isRemoteConnected,
                       onTap: () => _openPhoneCamera(context),
                     ),
                   ],
@@ -92,6 +133,7 @@ class SourceSelectorScreen extends StatelessWidget {
     required SourceType sourceType,
     required VoidCallback onTap,
     bool enabled = true,
+    bool isConnected = false,
   }) {
     return Card(
       elevation: enabled ? 4 : 1,
@@ -154,6 +196,27 @@ class SourceSelectorScreen extends StatelessWidget {
                             ),
                           ),
                         ],
+                        if (isConnected) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.green[100],
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              '已连接',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.green[800],
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -206,10 +269,23 @@ class SourceSelectorScreen extends StatelessWidget {
   }
 
   void _openPhoneCamera(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => const DeviceConnectionScreen(),
-      ),
-    );
+    if (_isRemoteConnected) {
+      // 已连接，直接进入相机控制页面
+      final apiService = _apiManager.getCurrentApiService();
+      if (apiService != null) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => CameraControlScreen(apiService: apiService),
+          ),
+        );
+      }
+    } else {
+      // 未连接，进入连接页面
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => const DeviceConnectionScreen(),
+        ),
+      );
+    }
   }
 }

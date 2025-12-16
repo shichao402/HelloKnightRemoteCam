@@ -18,6 +18,9 @@ enum ConnectionErrorCode {
   /// 服务器拒绝连接（其他原因）
   connectionRefused,
   
+  /// 连接被拒绝（如独占连接）
+  connectionRejected,
+  
   /// 连接超时
   connectionTimeout,
   
@@ -190,6 +193,8 @@ class ConnectionError {
       case ConnectionErrorCode.connectionTimeout:
         return '连接超时\n\n请检查：\n1. 服务器地址和端口是否正确\n2. 网络连接是否正常\n3. 防火墙设置';
       case ConnectionErrorCode.connectionRefused:
+        return '连接被拒绝\n\n$message';
+      case ConnectionErrorCode.connectionRejected:
         return '连接被拒绝\n\n$message';
       case ConnectionErrorCode.serverError:
         return '服务器错误\n\n服务器内部错误，请稍后重试';

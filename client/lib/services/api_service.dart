@@ -1,48 +1,61 @@
-import 'dart:convert';
-import 'dart:io';
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
-import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/camera_settings.dart';
 import '../models/file_info.dart';
 import '../models/connection_error.dart';
 import 'logger_service.dart';
 import 'version_service.dart';
-import 'version_compatibility_service.dart';
+import 'websocket_connection.dart';
 
+/// API服务
+/// 
+/// 职责：
+/// - 提供业务API（拍照、录像、文件管理等）
+/// - 封装HTTP请求（文件下载、缩略图等）
+/// 
+/// 不负责：
+/// - 连接管理（由 WebSocketConnection 处理）
+/// - 连接状态维护（由 WebSocketConnection 处理）
 class ApiService {
   final String baseUrl;
   final String host;
   final int port;
   final ClientLoggerService logger = ClientLoggerService();
   final VersionService _versionService = VersionService();
-  final VersionCompatibilityService _versionCompatibilityService =
-      VersionCompatibilityService();
   late final HttpClient _httpClient;
 
-  // WebSocket连接管理
-  WebSocketChannel? _webSocketChannel;
-  StreamSubscription? _webSocketSubscription;
-  final Map<String, Completer<Map<String, dynamic>>> _pendingRequests = {};
-  int _messageIdCounter = 0;
-  bool _useWebSocket = true; // 是否使用WebSocket（默认true，保留用于状态标记）
+  // WebSocket连接管理器
+  late final WebSocketConnection _connection;
+  
+  /// 获取连接管理器（供外部访问连接状态）
+  WebSocketConnection get connection => _connection;
 
-  // 存储最后一次连接错误
-  ConnectionError? _lastConnectionError;
+  /// 获取连接状态
+  ConnectionState get connectionState => _connection.state;
 
-  // WebSocket通知流（用于监听服务器推送的通知）
-  // 注意：这个stream会与_handleWebSocketMessage共享同一个stream，所以需要创建一个广播stream
-  StreamController<Map<String, dynamic>>? _notificationController;
+  /// 连接状态流
+  Stream<ConnectionStateChange> get connectionStateStream =>
+      _connection.stateStream;
 
-  Stream<Map<String, dynamic>>? get webSocketNotifications {
-    if (_webSocketChannel == null) {
-      return null;
-    }
-    // 如果还没有创建通知控制器，创建一个广播stream
-    _notificationController ??=
-        StreamController<Map<String, dynamic>>.broadcast();
-    return _notificationController!.stream;
-  }
+  /// 通知流（用于监听服务器推送的通知）
+  Stream<Map<String, dynamic>> get webSocketNotifications =>
+      _connection.notificationStream;
+
+  /// 是否已连接
+  bool get isWebSocketConnected => _connection.isConnected;
+
+  /// 是否已注册
+  bool get isRegistered => _connection.isRegistered;
+
+  /// 最后一次连接错误
+  ConnectionError? get lastConnectionError => _connection.lastError;
+
+  /// 服务器版本
+  String? get serverVersion => _connection.serverVersion;
+
+  /// 预览尺寸
+  Map<String, dynamic>? get previewSize => _connection.previewSize;
 
   ApiService({
     required String host,
@@ -50,693 +63,125 @@ class ApiService {
   })  : baseUrl = 'http://$host:$port',
         host = host,
         port = port {
+    // 创建WebSocket连接管理器
+    _connection = WebSocketConnection(host: host, port: port);
+    
     // 创建自定义的HttpClient，强制使用IPv4
     _httpClient = HttpClient();
     _httpClient.autoUncompress = true;
-    _httpClient.connectionTimeout = const Duration(seconds: 3); // 缩短连接超时时间
-    _httpClient.idleTimeout = const Duration(seconds: 5); // 设置空闲超时
+    _httpClient.connectionTimeout = const Duration(seconds: 3);
+    _httpClient.idleTimeout = const Duration(seconds: 5);
   }
 
-  // 断开WebSocket连接（不断开HTTP客户端）
+  // ==================== 连接管理 ====================
+
+  /// 连接到服务器
+  Future<ConnectionError?> connect() async {
+    return await _connection.connect();
+  }
+
+  /// 连接WebSocket（兼容旧API）
+  Future<void> connectWebSocket() async {
+    final error = await _connection.connect();
+    if (error != null) {
+      throw Exception(error.message);
+    }
+  }
+
+  /// 断开WebSocket连接
   void disconnectWebSocket() {
-    _webSocketSubscription?.cancel();
-    _webSocketSubscription = null;
-    _webSocketChannel?.sink.close();
-    _webSocketChannel = null;
-    _notificationController?.close();
-    _notificationController = null;
-    _useWebSocket = false;
-    _pendingRequests.clear();
+    _connection.disconnect();
   }
 
-  // 检查WebSocket是否已连接
-  bool get isWebSocketConnected => _webSocketChannel != null;
-
-  // 优雅关闭连接（尝试发送断开通知后关闭）
+  /// 优雅关闭连接
   Future<void> gracefulDisconnect() async {
-    if (_webSocketChannel == null) {
-      logger.log('WebSocket未连接，跳过断开操作', tag: 'LIFECYCLE');
-      return;
-    }
-
-    try {
-      logger.log('开始优雅关闭WebSocket连接', tag: 'LIFECYCLE');
-
-      // WebSocket关闭时会自动触发服务器端的onDone回调，服务器会自动清理连接
-      // 不需要发送额外的断开消息，直接关闭即可
-      disconnectWebSocket();
-
-      logger.log('WebSocket连接已优雅关闭', tag: 'LIFECYCLE');
-    } catch (e, stackTrace) {
-      logger.logError('优雅关闭连接失败', error: e, stackTrace: stackTrace);
-      // 即使失败也尝试强制断开
-      disconnectWebSocket();
-    }
+    logger.log('开始优雅关闭WebSocket连接', tag: 'LIFECYCLE');
+    await _connection.disconnect();
+    logger.log('WebSocket连接已优雅关闭', tag: 'LIFECYCLE');
   }
 
-  // 释放资源
+  /// 释放资源
   void dispose() {
-    disconnectWebSocket();
+    _connection.dispose();
     _httpClient.close(force: true);
   }
 
-  // 认证预检查：在连接WebSocket之前进行认证检查（版本检查、用户认证等）
-  Future<ConnectionError?> authenticatePrecheck() async {
-    try {
-      // 获取客户端版本号
-      final clientVersion = await _versionService.getVersion();
+  // ==================== 业务API ====================
 
-      logger.log('执行认证预检查 (客户端版本: $clientVersion)', tag: 'AUTH');
-
-      // 调用认证预检查端点
-      final httpUri =
-          Uri.parse('$baseUrl/auth/precheck').replace(queryParameters: {
-        'clientVersion': clientVersion,
-      });
-      final request = await _httpClient.getUrl(httpUri);
-      await _addVersionHeader(request);
-      final response = await request.close();
-
-      if (response.statusCode == 200) {
-        // 认证通过
-        try {
-          final responseBody = await response.transform(utf8.decoder).join();
-          final responseData =
-              json.decode(responseBody) as Map<String, dynamic>?;
-          if (responseData != null && responseData['success'] == true) {
-            final serverVersion = responseData['serverVersion'] as String?;
-            logger.log('认证预检查通过 (服务器版本: $serverVersion)', tag: 'AUTH');
-            
-            // 检查服务器版本是否符合客户端要求的最小版本
-            if (serverVersion != null) {
-              final (isCompatible, reason) = await _versionCompatibilityService.checkServerVersion(serverVersion);
-              if (!isCompatible) {
-                logger.log('服务器版本不兼容: $reason', tag: 'AUTH');
-                final connectionError = ConnectionError(
-                  code: ConnectionErrorCode.serverVersionTooLow,
-                  message: reason ?? '服务器版本过低',
-                  serverVersion: serverVersion,
-                  minRequiredVersion: await _versionCompatibilityService.getMinServerVersion(),
-                  clientVersion: clientVersion,
-                );
-                _lastConnectionError = connectionError;
-                return connectionError;
-              }
-            }
-            
-            _lastConnectionError = null; // 清除之前的错误
-            return null; // 成功
-          }
-        } catch (e) {
-          logger.logError('解析认证预检查响应失败', error: e);
-        }
-      } else if (response.statusCode == 403 || response.statusCode == 401) {
-        // 认证失败，解析错误响应
-        ConnectionError connectionError;
-        try {
-          final responseBody = await response.transform(utf8.decoder).join();
-          final errorData = json.decode(responseBody) as Map<String, dynamic>?;
-          if (errorData != null) {
-            connectionError = ConnectionError.fromServerResponse(errorData);
-            connectionError = ConnectionError(
-              code: connectionError.code,
-              message: connectionError.message,
-              details: connectionError.details,
-              minRequiredVersion: connectionError.minRequiredVersion,
-              clientVersion: clientVersion,
-              serverVersion: connectionError.serverVersion,
-            );
-          } else {
-            connectionError = ConnectionError(
-              code: response.statusCode == 403
-                  ? ConnectionErrorCode.versionIncompatible
-                  : ConnectionErrorCode.authenticationFailed,
-              message: '认证失败',
-              clientVersion: clientVersion,
-            );
-          }
-        } catch (e) {
-          logger.logError('解析认证失败响应失败', error: e);
-          connectionError = ConnectionError(
-            code: response.statusCode == 403
-                ? ConnectionErrorCode.versionIncompatible
-                : ConnectionErrorCode.authenticationFailed,
-            message: '认证失败',
-            details: e.toString(),
-            clientVersion: clientVersion,
-          );
-        }
-
-        _lastConnectionError = connectionError;
-        logger.log('认证预检查失败: ${connectionError.message}', tag: 'AUTH');
-        return connectionError;
-      } else {
-        // 其他HTTP错误
-        final connectionError = ConnectionError(
-          code: ConnectionErrorCode.serverError,
-          message: '服务器错误: HTTP ${response.statusCode}',
-          clientVersion: clientVersion,
-        );
-        _lastConnectionError = connectionError;
-        logger.log('认证预检查失败: ${connectionError.message}', tag: 'AUTH');
-        return connectionError;
-      }
-    } catch (e, stackTrace) {
-      logger.logError('认证预检查异常', error: e, stackTrace: stackTrace);
-      final connectionError = ConnectionError.fromException(e);
-      _lastConnectionError = connectionError;
-      return connectionError;
-    }
-
-    // 默认返回未知错误
-    final connectionError = ConnectionError(
-      code: ConnectionErrorCode.unknown,
-      message: '认证预检查失败：未知错误',
-    );
-    _lastConnectionError = connectionError;
-    return connectionError;
-  }
-
-  // 连接WebSocket
-  Future<void> connectWebSocket() async {
-    if (_webSocketChannel != null) {
-      return; // 已经连接
-    }
-
-    try {
-      // 获取客户端版本号
-      final clientVersion = await _versionService.getVersion();
-
-      // 先进行认证预检查（版本检查、用户认证等）
-      logger.log('开始认证预检查...', tag: 'WEBSOCKET');
-      final precheckError = await authenticatePrecheck();
-
-      if (precheckError != null) {
-        // 认证预检查失败，不尝试连接WebSocket
-        logger.log('认证预检查失败，取消WebSocket连接: ${precheckError.message}',
-            tag: 'WEBSOCKET');
-        _handleConnectionFailure(
-          precheckError.message,
-          isAuthFailure: precheckError.code ==
-                  ConnectionErrorCode.versionIncompatible ||
-              precheckError.code == ConnectionErrorCode.authenticationFailed,
-          minRequiredVersion: precheckError.minRequiredVersion,
-        );
-        return;
-      }
-
-      // 认证预检查通过，继续连接WebSocket
-      logger.log('认证预检查通过，开始连接WebSocket...', tag: 'WEBSOCKET');
-
-      final wsUrl = baseUrl
-          .replaceFirst('http://', 'ws://')
-          .replaceFirst('https://', 'wss://');
-      // 在URL查询参数中包含客户端版本号
-      final uri = Uri.parse('$wsUrl/ws').replace(queryParameters: {
-        'clientVersion': clientVersion,
-      });
-      logger.log('连接WebSocket: $uri (客户端版本: $clientVersion)', tag: 'WEBSOCKET');
-
-      // 存储clientVersion供错误处理使用
-      final clientVersionForError = clientVersion;
-
-      // 创建通知控制器（如果还没有创建）
-      _notificationController ??=
-          StreamController<Map<String, dynamic>>.broadcast();
-
-      // 尝试连接WebSocket，设置超时
-      _webSocketChannel = WebSocketChannel.connect(uri);
-
-      // 使用Completer来跟踪连接状态
-      final connectionCompleter = Completer<bool>();
-      bool connectionEstablished = false;
-      String? connectionError;
-      bool isAuthFailure = false;
-
-      // 监听连接状态
-      _webSocketSubscription = _webSocketChannel!.stream.listen(
-        (message) {
-          if (!connectionEstablished) {
-            connectionEstablished = true;
-            if (!connectionCompleter.isCompleted) {
-              connectionCompleter.complete(true);
-            }
-          }
-          _handleWebSocketMessage(message);
-        },
-        onError: (error) {
-          logger.logError('WebSocket错误', error: error);
-          connectionError = error.toString();
-
-          // 检查是否是HTTP错误（403 Forbidden等）
-          // 注意：WebSocket升级失败时可能返回500，但实际是403认证失败
-          final errorStr = error.toString();
-
-          // 如果已经有_lastConnectionError（从HTTP预检查中获取），优先使用它
-          if (_lastConnectionError != null &&
-              (_lastConnectionError!.code ==
-                      ConnectionErrorCode.versionIncompatible ||
-                  _lastConnectionError!.code ==
-                      ConnectionErrorCode.authenticationFailed)) {
-            logger.log('使用HTTP预检查的错误信息: ${_lastConnectionError!.message}',
-                tag: 'WEBSOCKET');
-            _handleConnectionFailure(
-              _lastConnectionError!.message,
-              isAuthFailure: true,
-              minRequiredVersion: _lastConnectionError!.minRequiredVersion,
-            );
-          } else if (errorStr.contains('403') ||
-              errorStr.contains('Forbidden') ||
-              errorStr.contains('VERSION_INCOMPATIBLE') ||
-              (errorStr.contains('500') &&
-                  errorStr.contains('was not upgraded to websocket'))) {
-            // WebSocket升级失败，可能是版本不兼容
-            isAuthFailure = true;
-            // 创建版本不兼容错误（如果没有更详细的信息）
-            // 注意：由于已经通过预检查，这种情况理论上不应该发生
-            // 使用之前存储的clientVersion
-            final connectionError = ConnectionError(
-              code: ConnectionErrorCode.versionIncompatible,
-              message: '版本不兼容：客户端版本 $clientVersionForError 低于服务器要求的最小版本',
-              details: errorStr,
-              clientVersion: clientVersionForError,
-            );
-            _lastConnectionError = connectionError;
-            _handleConnectionFailure(
-              connectionError.message,
-              isAuthFailure: true,
-            );
-          } else {
-            final connectionError = ConnectionError.fromException(error);
-            _lastConnectionError = connectionError;
-            _handleConnectionFailure(connectionError.message);
-          }
-
-          if (!connectionCompleter.isCompleted) {
-            connectionCompleter.complete(false);
-          }
-
-          _webSocketChannel = null;
-          _notificationController?.close();
-          _notificationController = null;
-          _useWebSocket = false;
-        },
-        onDone: () {
-          logger.log('WebSocket连接关闭', tag: 'WEBSOCKET');
-
-          // 如果连接立即关闭且没有建立连接，可能是认证失败
-          if (!connectionEstablished && connectionError == null) {
-            // 检查是否有_lastConnectionError（从HTTP预检查中获取）
-            if (_lastConnectionError != null &&
-                (_lastConnectionError!.code ==
-                        ConnectionErrorCode.versionIncompatible ||
-                    _lastConnectionError!.code ==
-                        ConnectionErrorCode.authenticationFailed)) {
-              _handleConnectionFailure(
-                _lastConnectionError!.message,
-                isAuthFailure: true,
-                minRequiredVersion: _lastConnectionError!.minRequiredVersion,
-              );
-            } else {
-              _handleConnectionFailure(
-                '连接被拒绝：可能是版本不兼容或认证失败',
-                isAuthFailure: true,
-              );
-            }
-          }
-
-          if (!connectionCompleter.isCompleted) {
-            connectionCompleter.complete(false);
-          }
-
-          _webSocketChannel = null;
-          _notificationController?.close();
-          _notificationController = null;
-          _useWebSocket = false;
-        },
-        cancelOnError: false,
-      );
-
-      // 等待连接建立或超时（2秒，缩短超时时间）
-      try {
-        final connected = await connectionCompleter.future.timeout(
-          const Duration(seconds: 2),
-          onTimeout: () {
-            logger.log('WebSocket连接超时', tag: 'WEBSOCKET');
-            // 如果连接立即关闭，可能是认证失败
-            if (!connectionEstablished) {
-              _handleConnectionFailure(
-                '连接超时：服务器可能拒绝了连接（可能是版本不兼容）',
-                isAuthFailure: true,
-              );
-            } else {
-              _handleConnectionFailure('连接超时：服务器可能拒绝了连接');
-            }
-            return false;
-          },
-        );
-
-        if (connected) {
-          logger.log('WebSocket连接成功', tag: 'WEBSOCKET');
-        } else {
-          // 连接失败，清理资源
-          _webSocketChannel?.sink.close();
-          _webSocketChannel = null;
-          _notificationController?.close();
-          _notificationController = null;
-          _useWebSocket = false;
-        }
-      } catch (e) {
-        logger.logError('等待WebSocket连接时出错', error: e);
-        _handleConnectionFailure('连接失败: $e', isAuthFailure: isAuthFailure);
-        _webSocketChannel?.sink.close();
-        _webSocketChannel = null;
-        _notificationController?.close();
-        _notificationController = null;
-        _useWebSocket = false;
-      }
-    } catch (e, stackTrace) {
-      logger.logError('WebSocket连接失败', error: e, stackTrace: stackTrace);
-
-      // 获取客户端版本号（用于错误信息）
-      String? clientVersion;
-      try {
-        clientVersion = await _versionService.getVersion();
-      } catch (e) {
-        logger.logError('获取客户端版本失败', error: e);
-      }
-
-      // 检查是否是认证失败
-      // 如果已经有_lastConnectionError（从HTTP预检查中获取），使用它
-      if (_lastConnectionError != null &&
-          (_lastConnectionError!.code ==
-                  ConnectionErrorCode.versionIncompatible ||
-              _lastConnectionError!.code ==
-                  ConnectionErrorCode.authenticationFailed)) {
-        _handleConnectionFailure(
-          _lastConnectionError!.message,
-          isAuthFailure: true,
-          minRequiredVersion: _lastConnectionError!.minRequiredVersion,
-        );
-      } else {
-        final errorStr = e.toString();
-        final isAuthFailure = errorStr.contains('403') ||
-            errorStr.contains('Forbidden') ||
-            errorStr.contains('VERSION_INCOMPATIBLE') ||
-            (errorStr.contains('500') &&
-                errorStr.contains('was not upgraded to websocket'));
-
-        if (isAuthFailure) {
-          final connectionError = ConnectionError(
-            code: ConnectionErrorCode.versionIncompatible,
-            message: clientVersion != null
-                ? '版本不兼容：客户端版本 $clientVersion 低于服务器要求的最小版本'
-                : '版本不兼容：客户端版本过低',
-            details: errorStr,
-            clientVersion: clientVersion,
-          );
-          _lastConnectionError = connectionError;
-          _handleConnectionFailure(
-            connectionError.message,
-            isAuthFailure: true,
-          );
-        } else {
-          final connectionError = ConnectionError.fromException(e);
-          _lastConnectionError = connectionError;
-          _handleConnectionFailure(connectionError.message);
-        }
-      }
-
-      _webSocketChannel = null;
-      _useWebSocket = false;
-    }
-  }
-
-  // 处理连接失败
-  void _handleConnectionFailure(
-    String errorMessage, {
-    bool isAuthFailure = false,
-    String? minRequiredVersion,
-  }) {
-    logger.log('WebSocket连接失败: $errorMessage', tag: 'WEBSOCKET');
-
-    // 检查是否是版本不兼容错误
-    final isVersionIncompatible = isAuthFailure ||
-        errorMessage.contains('版本不兼容') ||
-        errorMessage.contains('VERSION_INCOMPATIBLE') ||
-        errorMessage.contains('低于服务器要求');
-
-    // 如果没有_lastConnectionError，创建一个
-    if (_lastConnectionError == null) {
-      _lastConnectionError = ConnectionError(
-        code: isVersionIncompatible
-            ? ConnectionErrorCode.versionIncompatible
-            : ConnectionErrorCode.networkError,
-        message: errorMessage,
-        minRequiredVersion: minRequiredVersion,
-      );
-    }
-
-    // 发送连接失败通知（包含完整的ConnectionError信息）
-    _notificationController?.add({
-      'type': 'notification',
-      'event': 'connection_failed',
-      'data': {
-        'reason':
-            isVersionIncompatible ? 'version_incompatible' : 'connection_error',
-        'message': errorMessage,
-        'isAuthFailure': isAuthFailure,
-        if (minRequiredVersion != null)
-          'minRequiredVersion': minRequiredVersion,
-        'error': _lastConnectionError!.toJson(), // 包含完整的错误信息
-      },
-    });
-  }
-
-  // 处理WebSocket消息
-  void _handleWebSocketMessage(dynamic message) {
-    try {
-      final data = json.decode(message) as Map<String, dynamic>;
-      final messageType = data['type'] as String?;
-
-      if (messageType == 'response') {
-        // 处理响应消息
-        final messageId = data['id'] as String?;
-        if (messageId != null && _pendingRequests.containsKey(messageId)) {
-          final completer = _pendingRequests.remove(messageId)!;
-          if (data['success'] == true) {
-            // 服务器端返回的数据在data字段中，需要转换类型
-            final responseData = data['data'];
-            if (responseData is Map) {
-              completer.complete(_convertMap(responseData));
-            } else {
-              completer.complete(responseData as Map<String, dynamic>? ?? {});
-            }
-          } else {
-            completer.complete({
-              'success': false,
-              'error': data['error'] as String? ?? '未知错误',
-            });
-          }
-        }
-      } else if (messageType == 'notification') {
-        // 处理通知消息（如new_files、connected、version_incompatible）
-        final event = data['event'] as String?;
-
-        if (event == 'version_incompatible') {
-          // 版本不兼容通知
-          final notificationData = data['data'] as Map<String, dynamic>?;
-          final message = notificationData?['message'] as String? ?? '版本不兼容';
-          logger.log('版本不兼容: $message', tag: 'VERSION_COMPAT');
-          // 广播版本不兼容通知
-          _notificationController?.add(data);
-          // 主动断开连接
-          disconnectWebSocket();
-        } else if (event == 'connected') {
-          // 连接成功通知，检查服务器版本
-          final notificationData = data['data'] as Map<String, dynamic>?;
-          final serverVersion = notificationData?['serverVersion'] as String?;
-          if (serverVersion != null) {
-            _checkServerVersion(serverVersion);
-          }
-          // 广播连接通知
-          _notificationController?.add(data);
-        } else {
-          // 其他通知消息
-          logger.log('收到WebSocket通知: $data', tag: 'WEBSOCKET');
-          _notificationController?.add(data);
-        }
-      }
-    } catch (e) {
-      logger.logError('解析WebSocket消息失败', error: e);
-    }
-  }
-
-  // 检查服务器版本兼容性
-  Future<void> _checkServerVersion(String serverVersion) async {
-    try {
-      final (isCompatible, reason) =
-          await _versionCompatibilityService.checkServerVersion(serverVersion);
-      if (!isCompatible) {
-        logger.log('服务器版本不兼容: $reason', tag: 'VERSION_COMPAT');
-        // 发送版本不兼容通知
-        _notificationController?.add({
-          'type': 'notification',
-          'event': 'server_version_incompatible',
-          'data': {
-            'reason': 'server_version_incompatible',
-            'message': reason ?? '服务器版本不兼容',
-            'serverVersion': serverVersion,
-          },
-        });
-        // 断开连接
-        disconnectWebSocket();
-      } else {
-        logger.log('服务器版本兼容: $serverVersion', tag: 'VERSION_COMPAT');
-      }
-    } catch (e, stackTrace) {
-      logger.logError('检查服务器版本失败', error: e, stackTrace: stackTrace);
-    }
-  }
-
-  // 转换Map类型（从Map<Object?, Object?>转换为Map<String, dynamic>）
-  Map<String, dynamic> _convertMap(Map map) {
-    return Map<String, dynamic>.fromEntries(
-      map.entries.map((entry) {
-        final key = entry.key.toString();
-        final value = entry.value;
-        if (value is Map) {
-          return MapEntry(key, _convertMap(value));
-        } else if (value is List) {
-          return MapEntry(
-              key,
-              value.map((item) {
-                if (item is Map) {
-                  return _convertMap(item);
-                }
-                return item;
-              }).toList());
-        } else {
-          return MapEntry(key, value);
-        }
-      }),
-    );
-  }
-
-  // 通过WebSocket发送请求
-  Future<Map<String, dynamic>> _sendWebSocketRequest(
-      String action, Map<String, dynamic> params) async {
-    if (_webSocketChannel == null) {
-      await connectWebSocket();
-    }
-
-    if (_webSocketChannel == null) {
-      throw Exception('WebSocket未连接');
-    }
-
-    final messageId =
-        'msg_${++_messageIdCounter}_${DateTime.now().millisecondsSinceEpoch}';
-    final completer = Completer<Map<String, dynamic>>();
-    _pendingRequests[messageId] = completer;
-
-    try {
-      final request = json.encode({
-        'id': messageId,
-        'type': 'request',
-        'action': action,
-        'params': params,
-      });
-
-      _webSocketChannel!.sink.add(request);
-
-      // 设置超时（10秒）
-      return await completer.future.timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          _pendingRequests.remove(messageId);
-          return {'success': false, 'error': '请求超时'};
-        },
-      );
-    } catch (e) {
-      _pendingRequests.remove(messageId);
-      rethrow;
-    }
-  }
-
-  // 测试连接（完全使用WebSocket）
-  /// 返回null表示成功，返回ConnectionError表示失败
+  /// 测试连接（ping）
   Future<ConnectionError?> ping() async {
     try {
       logger.logCommand('ping', details: '测试服务器连接（WebSocket）');
 
-      // 如果WebSocket未连接，先尝试连接
-      if (_webSocketChannel == null) {
-        try {
-          await connectWebSocket();
-        } catch (e) {
-          logger.log('WebSocket连接失败: $e', tag: 'CONNECTION');
-          final error =
-              _lastConnectionError ?? ConnectionError.fromException(e);
+      // 如果未连接，先连接
+      if (!_connection.isConnected) {
+        final connectError = await _connection.connect();
+        if (connectError != null) {
           logger.logCommandResponse('ping',
-              success: false, error: error.message);
-          return error;
+              success: false, error: connectError.message);
+          return connectError;
         }
       }
 
-      // 使用WebSocket ping
-      if (_webSocketChannel == null) {
-        final error = _lastConnectionError ??
-            ConnectionError(
-              code: ConnectionErrorCode.networkError,
-              message: 'WebSocket未连接',
-            );
-        logger.logCommandResponse('ping', success: false, error: error.message);
-        return error;
-      }
+      // 发送ping请求
+      logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'ping'});
+      final result = await _connection.sendRequest('ping', {});
+      final success = result['success'] == true;
+      logger.logCommandResponse('ping', success: success, result: result);
 
-      try {
-        logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'ping'});
-        final result = await _sendWebSocketRequest('ping', {});
-        final success = result['success'] == true;
-        logger.logCommandResponse('ping', success: success, result: result);
-
-        if (success) {
-          _lastConnectionError = null; // 清除错误
-          return null; // 成功
-        } else {
-          final error = ConnectionError(
-            code: ConnectionErrorCode.connectionRefused,
-            message: result['error'] as String? ?? '连接失败',
-          );
-          _lastConnectionError = error;
-          return error;
-        }
-      } catch (e) {
-        logger.log('WebSocket ping失败: $e', tag: 'CONNECTION');
-        final error = ConnectionError.fromException(e);
-        _lastConnectionError = error;
-        logger.logCommandResponse('ping', success: false, error: error.message);
-        // WebSocket ping失败，重置连接状态
-        _webSocketChannel = null;
-        _useWebSocket = false;
-        return error;
+      if (success) {
+        return null;
+      } else {
+        return ConnectionError(
+          code: ConnectionErrorCode.connectionRefused,
+          message: result['error'] as String? ?? '连接失败',
+        );
       }
     } catch (e, stackTrace) {
       logger.logError('Ping失败', error: e, stackTrace: stackTrace);
-      logger.log('连接错误详情: $e', tag: 'CONNECTION');
       final error = ConnectionError.fromException(e);
-      _lastConnectionError = error;
       logger.logCommandResponse('ping', success: false, error: error.message);
       return error;
     }
   }
 
-  // 拍照（完全使用WebSocket）
+  /// 注册设备
+  Future<Map<String, dynamic>> registerDevice(String deviceModel) async {
+    try {
+      final clientVersion = await _versionService.getVersion();
+
+      logger.logCommand('registerDevice',
+          params: {'deviceModel': deviceModel, 'clientVersion': clientVersion},
+          details: '注册设备');
+      logger.logApiCall('WEBSOCKET', '/ws', params: {
+        'action': 'registerDevice',
+        'deviceModel': deviceModel,
+        'clientVersion': clientVersion
+      });
+
+      final error = await _connection.registerDevice(deviceModel);
+      if (error != null) {
+        logger.logCommandResponse('registerDevice',
+            success: false, error: error.message);
+        return {'success': false, 'error': error.message};
+      }
+
+      logger.logCommandResponse('registerDevice', success: true);
+      return {'success': true, 'exclusive': true};
+    } catch (e, stackTrace) {
+      logger.logError('注册设备失败', error: e, stackTrace: stackTrace);
+      logger.logCommandResponse('registerDevice',
+          success: false, error: e.toString());
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// 拍照
   Future<Map<String, dynamic>> capture() async {
     try {
       logger.logCommand('capture', details: '拍照指令');
       logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'capture'});
-      final result = await _sendWebSocketRequest('capture', {});
+      final result = await _connection.sendRequest('capture', {});
       logger.logCommandResponse('capture',
           success: result['success'] == true,
           result: result,
@@ -749,13 +194,13 @@ class ApiService {
     }
   }
 
-  // 开始录像（完全使用WebSocket）
+  /// 开始录像
   Future<Map<String, dynamic>> startRecording() async {
     try {
       logger.logCommand('startRecording', details: '开始录像指令');
-      logger
-          .logApiCall('WEBSOCKET', '/ws', params: {'action': 'startRecording'});
-      final result = await _sendWebSocketRequest('startRecording', {});
+      logger.logApiCall('WEBSOCKET', '/ws',
+          params: {'action': 'startRecording'});
+      final result = await _connection.sendRequest('startRecording', {});
       logger.logCommandResponse('startRecording',
           success: result['success'] == true,
           result: result,
@@ -769,13 +214,13 @@ class ApiService {
     }
   }
 
-  // 停止录像（完全使用WebSocket）
+  /// 停止录像
   Future<Map<String, dynamic>> stopRecording() async {
     try {
       logger.logCommand('stopRecording', details: '停止录像指令');
-      logger
-          .logApiCall('WEBSOCKET', '/ws', params: {'action': 'stopRecording'});
-      final result = await _sendWebSocketRequest('stopRecording', {});
+      logger.logApiCall('WEBSOCKET', '/ws',
+          params: {'action': 'stopRecording'});
+      final result = await _connection.sendRequest('stopRecording', {});
       logger.logCommandResponse('stopRecording',
           success: result['success'] == true,
           result: result,
@@ -789,10 +234,7 @@ class ApiService {
     }
   }
 
-  // 获取文件列表（支持分页和增量获取，完全使用WebSocket）
-  /// [page] 页码，从1开始
-  /// [pageSize] 每页大小
-  /// [since] 增量获取：只获取该时间之后新增/修改的文件（时间戳，毫秒）
+  /// 获取文件列表（支持分页和增量获取）
   Future<Map<String, dynamic>> getFileList({
     int? page,
     int? pageSize,
@@ -808,9 +250,9 @@ class ApiService {
           details: '获取文件列表指令${params.isNotEmpty ? ' ($params)' : ''}');
       logger.logApiCall('WEBSOCKET', '/ws',
           params: {'action': 'getFiles', ...params});
-      final result = await _sendWebSocketRequest('getFiles', params);
+      final result = await _connection.sendRequest('getFiles', params);
 
-      if (result['success']) {
+      if (result['success'] == true) {
         // 将JSON转换为FileInfo对象
         result['pictures'] = (result['pictures'] as List?)
                 ?.map((json) => FileInfo.fromJson(json))
@@ -841,7 +283,7 @@ class ApiService {
     }
   }
 
-  // 删除文件（完全使用WebSocket）
+  /// 删除文件
   Future<Map<String, dynamic>> deleteFile(String remotePath) async {
     try {
       logger.logCommand('deleteFile',
@@ -849,7 +291,7 @@ class ApiService {
       logger.logApiCall('WEBSOCKET', '/ws',
           params: {'action': 'deleteFile', 'path': remotePath});
       final result =
-          await _sendWebSocketRequest('deleteFile', {'path': remotePath});
+          await _connection.sendRequest('deleteFile', {'path': remotePath});
       logger.logCommandResponse('deleteFile',
           success: result['success'] == true,
           result: result,
@@ -863,7 +305,7 @@ class ApiService {
     }
   }
 
-  // 切换文件星标状态（完全使用WebSocket）
+  /// 切换文件星标状态
   Future<Map<String, dynamic>> toggleStarred(String remotePath) async {
     try {
       logger.logCommand('toggleStarred',
@@ -871,7 +313,7 @@ class ApiService {
       logger.logApiCall('WEBSOCKET', '/ws',
           params: {'action': 'toggleStarred', 'path': remotePath});
       final result =
-          await _sendWebSocketRequest('toggleStarred', {'path': remotePath});
+          await _connection.sendRequest('toggleStarred', {'path': remotePath});
       logger.logCommandResponse('toggleStarred',
           success: result['success'] == true,
           result: result,
@@ -885,12 +327,12 @@ class ApiService {
     }
   }
 
-  // 获取设置状态（完全使用WebSocket）
+  /// 获取设置状态
   Future<Map<String, dynamic>> getSettingsStatus() async {
     try {
       logger.logCommand('getSettingsStatus', details: '获取设置状态指令');
       logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'getStatus'});
-      final result = await _sendWebSocketRequest('getStatus', {});
+      final result = await _connection.sendRequest('getStatus', {});
       logger.logCommandResponse('getSettingsStatus',
           success: result['success'] == true,
           result: result,
@@ -904,7 +346,7 @@ class ApiService {
     }
   }
 
-  // 更新设置（完全使用WebSocket）
+  /// 更新设置
   Future<Map<String, dynamic>> updateSettings(CameraSettings settings) async {
     try {
       logger.logCommand('updateSettings',
@@ -912,7 +354,7 @@ class ApiService {
       logger.logApiCall('WEBSOCKET', '/ws',
           params: {'action': 'updateSettings', ...settings.toJson()});
       final result =
-          await _sendWebSocketRequest('updateSettings', settings.toJson());
+          await _connection.sendRequest('updateSettings', settings.toJson());
       logger.logCommandResponse('updateSettings',
           success: result['success'] == true,
           result: result,
@@ -926,15 +368,15 @@ class ApiService {
     }
   }
 
-  // 设置方向锁定状态（完全使用WebSocket）
+  /// 设置方向锁定状态
   Future<Map<String, dynamic>> setOrientationLock(bool locked) async {
     try {
       logger.logCommand('setOrientationLock',
           params: {'locked': locked}, details: '设置方向锁定: $locked');
       logger.logApiCall('WEBSOCKET', '/ws',
           params: {'action': 'setOrientationLock', 'locked': locked});
-      final result =
-          await _sendWebSocketRequest('setOrientationLock', {'locked': locked});
+      final result = await _connection
+          .sendRequest('setOrientationLock', {'locked': locked});
       logger.logCommandResponse('setOrientationLock',
           success: result['success'] == true,
           result: result,
@@ -948,15 +390,15 @@ class ApiService {
     }
   }
 
-  // 设置锁定状态下的旋转角度（完全使用WebSocket）
+  /// 设置锁定状态下的旋转角度
   Future<Map<String, dynamic>> setLockedRotationAngle(int angle) async {
     try {
       logger.logCommand('setLockedRotationAngle',
           params: {'angle': angle}, details: '设置锁定旋转角度: $angle');
       logger.logApiCall('WEBSOCKET', '/ws',
           params: {'action': 'setLockedRotationAngle', 'angle': angle});
-      final result = await _sendWebSocketRequest(
-          'setLockedRotationAngle', {'angle': angle});
+      final result = await _connection
+          .sendRequest('setLockedRotationAngle', {'angle': angle});
       logger.logCommandResponse('setLockedRotationAngle',
           success: result['success'] == true,
           result: result,
@@ -970,22 +412,22 @@ class ApiService {
     }
   }
 
-  // 获取当前设置（完全使用WebSocket）
+  /// 获取当前设置
   Future<Map<String, dynamic>> getSettings() async {
     try {
       logger.logCommand('getSettings', details: '获取相机设置指令');
       logger.logApiCall('WEBSOCKET', '/ws', params: {'action': 'getSettings'});
-      final result = await _sendWebSocketRequest('getSettings', {});
+      final result = await _connection.sendRequest('getSettings', {});
 
-      if (result['success'] && result['settings'] != null) {
-        // 转换Map类型，确保是Map<String, dynamic>
+      if (result['success'] == true && result['settings'] != null) {
         final settingsMap = result['settings'];
         if (settingsMap is Map) {
           result['settings'] =
               CameraSettings.fromJson(_convertMap(settingsMap));
         } else {
           logger.logError('设置数据格式错误',
-              error: Exception('settings不是Map类型: ${settingsMap.runtimeType}'));
+              error:
+                  Exception('settings不是Map类型: ${settingsMap.runtimeType}'));
         }
       }
 
@@ -1002,28 +444,15 @@ class ApiService {
     }
   }
 
-  // 获取预览流URL
-  // 获取预览流URL（包含客户端版本号）
-  Future<String> getPreviewStreamUrl() async {
-    try {
-      final clientVersion = await _versionService.getVersion();
-      return '$baseUrl/preview/stream?clientVersion=$clientVersion';
-    } catch (e) {
-      logger.logError('获取预览流URL失败', error: e);
-      // 即使失败也返回基本URL（向后兼容）
-      return '$baseUrl/preview/stream';
-    }
-  }
-
-  // 获取指定相机的能力信息（完全使用WebSocket）
+  /// 获取指定相机的能力信息
   Future<Map<String, dynamic>> getCameraCapabilities(String cameraId) async {
     try {
       logger.logCommand('getCameraCapabilities',
           params: {'cameraId': cameraId}, details: '获取相机能力信息');
       logger.logApiCall('WEBSOCKET', '/ws',
           params: {'action': 'getCameraCapabilities', 'cameraId': cameraId});
-      final result = await _sendWebSocketRequest(
-          'getCameraCapabilities', {'cameraId': cameraId});
+      final result = await _connection
+          .sendRequest('getCameraCapabilities', {'cameraId': cameraId});
       logger.logCommandResponse('getCameraCapabilities',
           success: result['success'] == true,
           result: result,
@@ -1037,14 +466,14 @@ class ApiService {
     }
   }
 
-  // 获取所有相机的能力信息（完全使用WebSocket）
+  /// 获取所有相机的能力信息
   Future<Map<String, dynamic>> getAllCameraCapabilities() async {
     try {
       logger.logCommand('getAllCameraCapabilities', details: '获取所有相机能力信息');
       logger.logApiCall('WEBSOCKET', '/ws',
           params: {'action': 'getAllCameraCapabilities'});
       final result =
-          await _sendWebSocketRequest('getAllCameraCapabilities', {});
+          await _connection.sendRequest('getAllCameraCapabilities', {});
       logger.logCommandResponse('getAllCameraCapabilities',
           success: result['success'] == true,
           result: result,
@@ -1058,13 +487,13 @@ class ApiService {
     }
   }
 
-  // 获取设备信息（完全使用WebSocket）
+  /// 获取设备信息
   Future<Map<String, dynamic>> getDeviceInfo() async {
     try {
       logger.logCommand('getDeviceInfo', details: '获取设备信息');
-      logger
-          .logApiCall('WEBSOCKET', '/ws', params: {'action': 'getDeviceInfo'});
-      final result = await _sendWebSocketRequest('getDeviceInfo', {});
+      logger.logApiCall('WEBSOCKET', '/ws',
+          params: {'action': 'getDeviceInfo'});
+      final result = await _connection.sendRequest('getDeviceInfo', {});
       logger.logCommandResponse('getDeviceInfo',
           success: result['success'] == true,
           result: result,
@@ -1078,66 +507,36 @@ class ApiService {
     }
   }
 
-  // 注册设备（完全使用WebSocket，包含客户端版本信息）
-  Future<Map<String, dynamic>> registerDevice(String deviceModel) async {
-    try {
-      // 获取客户端版本号
-      final clientVersion = await _versionService.getVersion();
+  // ==================== HTTP API ====================
 
-      logger.logCommand('registerDevice',
-          params: {'deviceModel': deviceModel, 'clientVersion': clientVersion},
-          details: '注册设备');
-      logger.logApiCall('WEBSOCKET', '/ws', params: {
-        'action': 'registerDevice',
-        'deviceModel': deviceModel,
-        'clientVersion': clientVersion
-      });
-      final result = await _sendWebSocketRequest('registerDevice', {
-        'deviceModel': deviceModel,
-        'clientVersion': clientVersion,
-      });
-      logger.logCommandResponse('registerDevice',
-          success: result['success'] == true,
-          result: result,
-          error: result['error']);
-      return result;
-    } catch (e, stackTrace) {
-      logger.logError('注册设备失败', error: e, stackTrace: stackTrace);
-      logger.logCommandResponse('registerDevice',
-          success: false, error: e.toString());
-      return {'success': false, 'error': e.toString()};
+  /// 获取预览流URL
+  Future<String> getPreviewStreamUrl() async {
+    try {
+      final clientVersion = await _versionService.getVersion();
+      return '$baseUrl/preview/stream?clientVersion=$clientVersion';
+    } catch (e) {
+      logger.logError('获取预览流URL失败', error: e);
+      return '$baseUrl/preview/stream';
     }
   }
 
-  // 获取文件下载URL
+  /// 获取文件下载URL
   String getFileDownloadUrl(String remotePath) {
     return '$baseUrl/file/download?path=${Uri.encodeComponent(remotePath)}';
   }
 
-  // 获取缩略图URL（支持照片和视频，包含客户端版本号）
+  /// 获取缩略图URL
   Future<String> getThumbnailUrl(String remotePath, bool isVideo) async {
     try {
       final clientVersion = await _versionService.getVersion();
       return '$baseUrl/file/thumbnail?path=${Uri.encodeComponent(remotePath)}&type=${isVideo ? 'video' : 'image'}&clientVersion=$clientVersion';
     } catch (e) {
       logger.logError('获取缩略图URL失败', error: e);
-      // 即使失败也返回基本URL（向后兼容）
       return '$baseUrl/file/thumbnail?path=${Uri.encodeComponent(remotePath)}&type=${isVideo ? 'video' : 'image'}';
     }
   }
 
-  // 为HTTP请求添加版本头
-  Future<void> _addVersionHeader(HttpClientRequest request) async {
-    try {
-      final clientVersion = await _versionService.getVersion();
-      request.headers.add('X-Client-Version', clientVersion);
-    } catch (e) {
-      logger.logError('添加版本头失败', error: e);
-      // 即使失败也继续，不阻塞请求
-    }
-  }
-
-  // 下载缩略图（支持照片和视频）
+  /// 下载缩略图
   Future<Uint8List?> downloadThumbnail(String remotePath, bool isVideo) async {
     try {
       final thumbnailUrl = await getThumbnailUrl(remotePath, isVideo);
@@ -1158,5 +557,41 @@ class ApiService {
       logger.logError('下载缩略图失败', error: e);
       return null;
     }
+  }
+
+  // ==================== 私有方法 ====================
+
+  /// 为HTTP请求添加版本头
+  Future<void> _addVersionHeader(HttpClientRequest request) async {
+    try {
+      final clientVersion = await _versionService.getVersion();
+      request.headers.add('X-Client-Version', clientVersion);
+    } catch (e) {
+      logger.logError('添加版本头失败', error: e);
+    }
+  }
+
+  /// 转换Map类型
+  Map<String, dynamic> _convertMap(Map map) {
+    return Map<String, dynamic>.fromEntries(
+      map.entries.map((entry) {
+        final key = entry.key.toString();
+        final value = entry.value;
+        if (value is Map) {
+          return MapEntry(key, _convertMap(value));
+        } else if (value is List) {
+          return MapEntry(
+              key,
+              value.map((item) {
+                if (item is Map) {
+                  return _convertMap(item);
+                }
+                return item;
+              }).toList());
+        } else {
+          return MapEntry(key, value);
+        }
+      }),
+    );
   }
 }

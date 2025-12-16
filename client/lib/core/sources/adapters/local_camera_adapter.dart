@@ -5,7 +5,7 @@ import 'package:camera/camera.dart' as cam;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 // 隐藏与 camera 包冲突的类型，使用 capture_controller.dart 中定义的版本
-import '../base/sources_base.dart';
+import '../base/sources_base.dart' hide FlashMode;
 import '../base/capture_controller.dart' show FlashMode, CameraPosition;
 import '../../../services/logger_service.dart';
 

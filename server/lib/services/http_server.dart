@@ -20,6 +20,7 @@ import 'media_scanner_service.dart';
 import 'orientation_service.dart';
 import 'version_compatibility_service.dart';
 import 'auth_service.dart';
+import 'client_connection.dart';
 import '../models/camera_settings.dart';
 import '../models/camera_capabilities.dart';
 import '../models/camera_status.dart';
@@ -27,50 +28,8 @@ import '../models/file_info.dart';
 import '../screens/server_settings_screen.dart';
 import '../main.dart' as main_app;
 
-class ConnectedDevice {
-  final String ipAddress;
-  final DateTime connectedAt;
-  DateTime lastActivity;
-  // 心跳历史记录：记录最近10秒内的心跳时间戳（用于计算健康度）
-  final List<DateTime> _heartbeatHistory = [];
-  static const int _heartbeatHistoryWindowSeconds = 10; // 记录最近10秒的心跳
-
-  ConnectedDevice({
-    required this.ipAddress,
-    required this.connectedAt,
-    required this.lastActivity,
-  });
-
-  // 记录一次心跳
-  void recordHeartbeat() {
-    final now = DateTime.now();
-    lastActivity = now;
-    _heartbeatHistory.add(now);
-    
-    // 只保留最近10秒的心跳记录
-    final cutoffTime = now.subtract(Duration(seconds: _heartbeatHistoryWindowSeconds));
-    _heartbeatHistory.removeWhere((timestamp) => timestamp.isBefore(cutoffTime));
-  }
-
-  // 计算心跳健康度（百分比）：最近10秒内应该收到10次心跳（1秒一次）
-  double getHeartbeatHealth() {
-    if (_heartbeatHistory.isEmpty) {
-      return 0.0;
-    }
-    
-    final now = DateTime.now();
-    final cutoffTime = now.subtract(Duration(seconds: _heartbeatHistoryWindowSeconds));
-    final recentHeartbeats = _heartbeatHistory.where((timestamp) => 
-      timestamp.isAfter(cutoffTime)
-    ).length;
-    
-    // 理想情况下，10秒内应该有10次心跳（1秒一次）
-    final expectedHeartbeats = _heartbeatHistoryWindowSeconds;
-    final health = (recentHeartbeats / expectedHeartbeats * 100).clamp(0.0, 100.0);
-    
-    return health;
-  }
-}
+// ConnectedDevice 类已移至 client_connection.dart，这里保留别名以保持兼容性
+typedef ConnectedDevice = ClientConnection;
 
 class HttpServerService {
   final CameraService cameraService;
@@ -86,7 +45,26 @@ class HttpServerService {
   HttpServer? _server;
   String? _ipAddress;
   int _port = 8080;
-  final Map<String, ConnectedDevice> _connectedDevices = {};
+  
+  // 统一的客户端连接管理器（新架构）
+  final ClientConnectionManager _connectionManager = ClientConnectionManager();
+  
+  // 兼容层：保留旧的数据结构，但通过 _connectionManager 同步
+  Map<String, ClientConnection> get _connectedDevices {
+    // 从 _connectionManager 获取连接列表，转换为 Map
+    final result = <String, ClientConnection>{};
+    for (final conn in _connectionManager.connections) {
+      result[conn.ipAddress] = conn;
+    }
+    return result;
+  }
+  
+  // WebSocket连接列表（兼容层）
+  List<WebSocketChannel> get _webSocketChannels =>
+      _connectionManager.connections.map((c) => c.channel).toList();
+  
+  // 独占连接信息（兼容层）
+  String? get _exclusiveClientDeviceModel => _connectionManager.exclusiveDeviceModel;
   
   // 预览流连接跟踪：记录每个客户端IP对应的StreamController
   final Map<String, StreamController<List<int>>> _previewStreamControllers = {};
@@ -94,16 +72,6 @@ class HttpServerService {
   // 单一预览帧广播循环
   Timer? _previewBroadcastTimer;
   int _globalFrameCount = 0;
-  
-  // WebSocket连接：用于双向通讯通知客户端有新文件
-  final List<WebSocketChannel> _webSocketChannels = [];
-  
-  // WebSocket channel到IP地址的映射
-  final Map<WebSocketChannel, String> _webSocketChannelToIp = {};
-  
-  // 独占连接：当前连接的客户端标识（设备型号）
-  String? _exclusiveClientDeviceModel;
-  WebSocketChannel? _exclusiveWebSocketChannel;
   
   // 自动停止相关
   Timer? _autoStopTimer;
@@ -149,56 +117,31 @@ class HttpServerService {
       return;
     }
     
-    final now = DateTime.now();
-    final wasNew = !_connectedDevices.containsKey(ipAddress);
+    // 查找现有连接
+    final existingConnection = _connectionManager.findByIp(ipAddress);
     
-    if (_connectedDevices.containsKey(ipAddress)) {
-      _connectedDevices[ipAddress]!.recordHeartbeat();
+    if (existingConnection != null) {
+      // 记录心跳
+      _connectionManager.recordHeartbeat(existingConnection);
     } else {
-      final device = ConnectedDevice(
-        ipAddress: ipAddress,
-        connectedAt: now,
-        lastActivity: now,
-      );
-      device.recordHeartbeat(); // 记录首次心跳
-      _connectedDevices[ipAddress] = device;
-      logger.log('新设备连接: $ipAddress', tag: 'CONNECTION');
+      // 注意：新连接应该在 WebSocket 连接建立时添加，这里只处理心跳
+      // 如果找不到连接，可能是预览流等其他连接，暂时忽略
+      logger.log('收到未知IP的心跳: $ipAddress', tag: 'CONNECTION');
     }
     
-    // 清理10秒未活动的设备（基于ping心跳：客户端每1秒ping一次，10秒是10个周期）
-    final heartbeatTimeoutSeconds = 10; // 心跳超时10秒
-    final removed = <String>[];
-    _connectedDevices.removeWhere((ip, device) {
-      final inactive = now.difference(device.lastActivity).inSeconds > heartbeatTimeoutSeconds;
-      if (inactive) {
-        removed.add(ip);
-        logger.log('设备断开连接: $ip (ping心跳超时${heartbeatTimeoutSeconds}秒)', tag: 'CONNECTION');
-      }
-      return inactive;
-    });
+    // 清理超时连接
+    final timeoutConnections = _connectionManager.cleanupTimeoutConnections(timeoutSeconds: 10);
+    for (final conn in timeoutConnections) {
+      logger.log('设备断开连接: ${conn.ipAddress} (ping心跳超时10秒)', tag: 'CONNECTION');
+    }
     
-    // 如果有变化，通知监听者（如果实现了）
-    if (wasNew || removed.isNotEmpty) {
+    // 检查独占连接状态一致性
+    _connectionManager.checkExclusiveConsistency();
+    
+    // 如果有变化，通知监听者
+    if (timeoutConnections.isNotEmpty) {
       _notifyListeners();
     }
-  }
-  
-  // 检查自动停止状态（简化版本：只清理过期连接，不管理定时器）
-  void _checkAutoStop() {
-    if (!_autoStopEnabled || !isRunning) {
-      return;
-    }
-    
-    // 清理过期的连接（10秒未活动视为断开，基于ping心跳）
-    final heartbeatTimeoutSeconds = 10; // 心跳超时10秒
-    final now = DateTime.now();
-    _connectedDevices.removeWhere((ip, device) {
-      final inactive = now.difference(device.lastActivity).inSeconds > heartbeatTimeoutSeconds;
-      if (inactive) {
-        logger.log('设备断开连接: $ip (ping心跳超时${heartbeatTimeoutSeconds}秒)', tag: 'CONNECTION');
-      }
-      return inactive;
-    });
   }
   
   // 启动自动停止定时器（简化版本：持续运行，定期检查）
@@ -225,39 +168,36 @@ class HttpServerService {
         return;
       }
       
-      final now = DateTime.now();
+      // 清理超时连接
+      final timeoutConnections = _connectionManager.cleanupTimeoutConnections(timeoutSeconds: 10);
+      for (final conn in timeoutConnections) {
+        logger.log('设备断开连接: ${conn.ipAddress} (ping心跳超时10秒)', tag: 'CONNECTION');
+      }
       
-      // 清理过期连接（10秒未活动视为断开，基于ping心跳）
-      final heartbeatTimeoutSeconds = 10; // 心跳超时10秒
-      _connectedDevices.removeWhere((ip, device) {
-        final inactiveSeconds = now.difference(device.lastActivity).inSeconds;
-        final inactive = inactiveSeconds > heartbeatTimeoutSeconds;
-        if (inactive) {
-          logger.log('设备断开连接: $ip (ping心跳超时${heartbeatTimeoutSeconds}秒，实际不活跃${inactiveSeconds}秒)', tag: 'CONNECTION');
-        }
-        return inactive;
-      });
+      // 检查独占连接状态一致性
+      _connectionManager.checkExclusiveConsistency();
       
       // 检查连接状态
-      if (_connectedDevices.isEmpty) {
+      if (_connectionManager.connectionCount == 0) {
         // 没有连接，开始或继续计时
+        final now = DateTime.now();
         if (_noConnectionStartTime == null) {
           _noConnectionStartTime = now;
-          logger.log('开始自动停止计时，无连接时间: ${_noConnectionStartTime}', tag: 'AUTO_STOP');
+          logger.log('开始自动停止计时，无连接时间: $_noConnectionStartTime', tag: 'AUTO_STOP');
         } else {
           final elapsed = now.difference(_noConnectionStartTime!);
           final elapsedSeconds = elapsed.inSeconds;
           
           // 每5秒记录一次进度（避免日志过多）
           if (elapsedSeconds % 5 == 0) {
-            logger.log('自动停止计时中：已无连接 ${elapsedSeconds}秒 / ${_autoStopSeconds}秒', tag: 'AUTO_STOP');
+            logger.log('自动停止计时中：已无连接 $elapsedSeconds秒 / $_autoStopSeconds秒', tag: 'AUTO_STOP');
           }
           
           // 如果达到设定的秒数，执行自动停止
           if (elapsedSeconds >= _autoStopSeconds) {
             timer.cancel();
             _autoStopTimer = null;
-            logger.log('自动停止服务器：无客户端连接已超过${_autoStopSeconds}秒', tag: 'AUTO_STOP');
+            logger.log('自动停止服务器：无客户端连接已超过$_autoStopSeconds秒', tag: 'AUTO_STOP');
             if (_onAutoStop != null) {
               logger.log('调用自动停止回调', tag: 'AUTO_STOP');
               _onAutoStop!();
@@ -547,8 +487,17 @@ class HttpServerService {
       // 调用webSocketHandler，并在回调中使用捕获的IP地址和版本号
       return webSocketHandler((WebSocketChannel channel, String? protocol) async {
         
-        // 检查是否已有独占客户端连接
-        if (_exclusiveWebSocketChannel != null && _exclusiveWebSocketChannel != channel) {
+        // 创建客户端连接对象
+        final clientConnection = ClientConnection(
+          channel: channel,
+          ipAddress: clientIpForChannel ?? 'unknown',
+          clientVersion: clientVersionForChannel,
+        );
+        
+        // 尝试添加连接（会检查独占状态）
+        final accepted = _connectionManager.addConnection(clientConnection);
+        
+        if (!accepted) {
           logger.log('拒绝新WebSocket连接：已有独占客户端连接（设备: $_exclusiveClientDeviceModel）', tag: 'WEBSOCKET');
           // 发送拒绝消息并关闭连接
           channel.sink.add(json.encode({
@@ -566,21 +515,8 @@ class HttpServerService {
           return;
         }
         
-        _webSocketChannels.add(channel);
-        
-        // 存储WebSocket channel到IP地址的映射
-        if (clientIpForChannel != null) {
-          _webSocketChannelToIp[channel] = clientIpForChannel;
-          logger.log('WebSocket连接客户端IP: $clientIpForChannel (版本: ${clientVersionForChannel ?? "未知"})', tag: 'WEBSOCKET');
-        }
-        
-        // 如果是第一个连接，设置为独占连接
-        if (_exclusiveWebSocketChannel == null) {
-          _exclusiveWebSocketChannel = channel;
-          logger.log('设置独占WebSocket连接，当前连接数: ${_webSocketChannels.length}', tag: 'WEBSOCKET');
-        }
-        
-        logger.log('客户端已连接WebSocket，当前连接数: ${_webSocketChannels.length}', tag: 'WEBSOCKET');
+        logger.log('WebSocket连接客户端IP: ${clientConnection.ipAddress} (版本: ${clientVersionForChannel ?? "未知"})', tag: 'WEBSOCKET');
+        logger.log('客户端已连接WebSocket，当前连接数: ${_connectionManager.connectionCount}', tag: 'WEBSOCKET');
         
         // 发送初始连接确认（包含预览尺寸和服务器版本）
         // 如果相机未初始化，预览尺寸可能为null，使用默认值
@@ -592,7 +528,7 @@ class HttpServerService {
           'event': 'connected',
           'data': {
             'status': 'connected',
-            'exclusive': _exclusiveWebSocketChannel == channel,
+            'exclusive': _connectionManager.exclusiveConnection == clientConnection,
             'previewSize': previewSize, // 包含预览尺寸（如果相机未初始化，使用默认值640x480）
             'serverVersion': serverVersion, // 服务器版本号
             'timestamp': DateTime.now().millisecondsSinceEpoch,
@@ -985,8 +921,9 @@ class HttpServerService {
               break;
             case 'ping':
               // WebSocket ping（用于心跳检测）
-              // 优先使用传入的clientIp，如果没有则从channel映射中获取
-              final pingIp = clientIp ?? _webSocketChannelToIp[channel];
+              // 优先使用传入的clientIp，如果没有则从连接管理器中获取
+              final connection = _connectionManager.findByChannel(channel);
+              final pingIp = clientIp ?? connection?.ipAddress;
               if (pingIp != null && pingIp != 'unknown') {
                 _updateConnectedDevice(pingIp);
               }
@@ -1021,29 +958,15 @@ class HttpServerService {
     try {
       logger.log('客户端断开WebSocket连接${clientIp != null ? ' (IP: $clientIp)' : ''}', tag: 'WEBSOCKET');
       
-      // 从WebSocket连接列表中移除
-      _webSocketChannels.remove(channel);
+      // 从连接管理器中移除连接
+      final wasExclusive = _connectionManager.removeByChannel(channel);
       
-      // 从IP映射中移除
-      _webSocketChannelToIp.remove(channel);
-      
-      // 如果断开的是独占连接，清除独占状态
-      if (_exclusiveWebSocketChannel == channel) {
-        _exclusiveWebSocketChannel = null;
-        _exclusiveClientDeviceModel = null;
+      if (wasExclusive) {
         logger.log('独占WebSocket连接已断开，清除独占状态', tag: 'WEBSOCKET');
       }
       
-      // 如果有IP地址，从连接设备列表中移除
-      if (clientIp != null && clientIp.isNotEmpty && clientIp != 'unknown') {
-        if (_connectedDevices.containsKey(clientIp)) {
-          _connectedDevices.remove(clientIp);
-          logger.log('已从连接设备列表中移除: $clientIp', tag: 'CONNECTION');
-          
-          // 通知监听者连接状态变化
-          _notifyListeners();
-        }
-      }
+      // 通知监听者连接状态变化
+      _notifyListeners();
       
       // 清理该客户端对应的预览流连接
       if (clientIp != null && clientIp.isNotEmpty && clientIp != 'unknown') {
@@ -1467,8 +1390,10 @@ class HttpServerService {
       // 如果需要在registerDevice时再次验证，可以从channel的上下文中获取认证信息
       
       // 检查是否是当前独占连接的客户端
-      if (_exclusiveWebSocketChannel == channel) {
-        _exclusiveClientDeviceModel = deviceModel;
+      final connection = _connectionManager.findByChannel(channel);
+      if (connection != null && _connectionManager.exclusiveConnection == connection) {
+        // 更新设备型号
+        _connectionManager.setDeviceModel(connection, deviceModel);
         logger.log('注册独占连接设备: $deviceModel (客户端版本: ${clientVersion ?? "未知"})', tag: 'WEBSOCKET');
         return {
           'success': true,
