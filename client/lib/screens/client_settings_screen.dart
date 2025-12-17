@@ -40,6 +40,7 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   CaptureSource _captureSource = CaptureSource.remoteCamera;
   String _serverHost = '';
   int _serverPort = 8080;
+  bool _autoConnect = true;
 
   @override
   void initState() {
@@ -66,6 +67,7 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
       _captureSource = captureSource;
       _serverHost = connectionSettings['host'] as String;
       _serverPort = connectionSettings['port'] as int;
+      _autoConnect = connectionSettings['autoConnect'] as bool? ?? true;
       _isLoading = false;
     });
   }
@@ -430,72 +432,88 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   void _showServerSettingsDialog() {
     final hostController = TextEditingController(text: _serverHost);
     final portController = TextEditingController(text: _serverPort.toString());
+    bool autoConnect = _autoConnect;
     
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('远端服务器设置'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: hostController,
-              decoration: const InputDecoration(
-                labelText: '服务器IP地址',
-                hintText: '例如: 192.168.1.100',
-                prefixIcon: Icon(Icons.dns),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('远端服务器设置'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: hostController,
+                decoration: const InputDecoration(
+                  labelText: '服务器IP地址',
+                  hintText: '例如: 192.168.1.100',
+                  prefixIcon: Icon(Icons.dns),
+                ),
+                keyboardType: TextInputType.number,
               ),
-              keyboardType: TextInputType.number,
+              const SizedBox(height: 16),
+              TextField(
+                controller: portController,
+                decoration: const InputDecoration(
+                  labelText: '端口',
+                  prefixIcon: Icon(Icons.settings_ethernet),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 16),
+              SwitchListTile(
+                title: const Text('启动时自动连接'),
+                subtitle: const Text('应用启动后自动连接服务器'),
+                value: autoConnect,
+                onChanged: (value) {
+                  setDialogState(() {
+                    autoConnect = value;
+                  });
+                },
+                contentPadding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: portController,
-              decoration: const InputDecoration(
-                labelText: '端口',
-                prefixIcon: Icon(Icons.settings_ethernet),
-              ),
-              keyboardType: TextInputType.number,
+            ElevatedButton(
+              onPressed: () async {
+                final host = hostController.text.trim();
+                final port = int.tryParse(portController.text) ?? 8080;
+                
+                if (host.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('请输入服务器地址')),
+                  );
+                  return;
+                }
+                
+                await _connectionSettings.saveConnectionSettings(
+                  host: host,
+                  port: port,
+                  autoConnect: autoConnect,
+                );
+                
+                setState(() {
+                  _serverHost = host;
+                  _serverPort = port;
+                  _autoConnect = autoConnect;
+                });
+                
+                if (mounted) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('服务器设置已保存: $host:$port')),
+                  );
+                }
+              },
+              child: const Text('保存'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final host = hostController.text.trim();
-              final port = int.tryParse(portController.text) ?? 8080;
-              
-              if (host.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('请输入服务器地址')),
-                );
-                return;
-              }
-              
-              await _connectionSettings.saveConnectionSettings(
-                host: host,
-                port: port,
-                autoConnect: true,
-              );
-              
-              setState(() {
-                _serverHost = host;
-                _serverPort = port;
-              });
-              
-              if (mounted) {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('服务器设置已保存: $host:$port')),
-                );
-              }
-            },
-            child: const Text('保存'),
-          ),
-        ],
       ),
     );
   }

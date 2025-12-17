@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../services/api_service.dart';
 import '../services/api_service_manager.dart';
 import '../services/websocket_connection.dart' as ws;
 import '../services/logger_service.dart';
 import '../services/capture_settings_service.dart';
+import '../services/connection_settings_service.dart';
+import '../services/device_config_service.dart';
 import '../services/update_service.dart';
 import '../screens/library/library_screen.dart';
 import '../screens/capture/local_camera_screen.dart';
@@ -57,6 +60,7 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
     _checkRemoteConnection();
     _loadCaptureSource();
     _initUpdateCheck();
+    _tryAutoConnect();
   }
 
   @override
@@ -95,6 +99,44 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
       setState(() {
         _captureSource = source;
       });
+    }
+  }
+
+  /// 尝试自动连接（如果启用了自动连接且未跳过）
+  Future<void> _tryAutoConnect() async {
+    try {
+      final settings = await ConnectionSettingsService().getConnectionSettings();
+      final autoConnect = settings['autoConnect'] as bool? ?? true;
+      
+      if (!autoConnect) {
+        _logger.log('自动连接已禁用', tag: 'AUTO_CONNECT');
+        return;
+      }
+      
+      // 检查是否跳过本次自动连接（用户主动断开后）
+      final shouldSkip = await ConnectionSettingsService().shouldSkipAutoConnectOnce();
+      if (shouldSkip) {
+        _logger.log('跳过本次自动连接', tag: 'AUTO_CONNECT');
+        // 清除跳过标记
+        await ConnectionSettingsService().setSkipAutoConnectOnce(false);
+        return;
+      }
+      
+      // 检查是否已经连接
+      if (_isRemoteConnected) {
+        _logger.log('已连接，跳过自动连接', tag: 'AUTO_CONNECT');
+        return;
+      }
+      
+      // 延迟一小段时间再自动连接，让界面先显示出来
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      if (!mounted) return;
+      
+      _logger.log('启动自动连接...', tag: 'AUTO_CONNECT');
+      await _connectDirectly();
+    } catch (e) {
+      _logger.logError('自动连接失败', error: e);
     }
   }
 
@@ -263,6 +305,78 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
     });
   }
 
+  /// 直接连接（使用保存的设置）
+  Future<void> _connectDirectly() async {
+    try {
+      final settings = await ConnectionSettingsService().getConnectionSettings();
+      final host = settings['host'] as String;
+      final port = settings['port'] as int;
+      
+      _logger.log('直接连接到 $host:$port', tag: 'CONNECTION');
+      
+      // 显示连接中状态
+      setState(() {
+        _connectionState = ws.ConnectionState.connecting;
+      });
+      
+      final apiService = ApiService(host: host, port: port);
+      ApiServiceManager().setCurrentApiService(apiService);
+      
+      // 测试连接
+      final pingError = await apiService.ping();
+      
+      if (!mounted) return;
+      
+      if (pingError == null && apiService.isWebSocketConnected) {
+        // 连接成功，获取设备信息并注册
+        try {
+          final deviceInfoResult = await apiService.getDeviceInfo();
+          if (deviceInfoResult['success'] == true && deviceInfoResult['deviceInfo'] != null) {
+            final deviceInfo = deviceInfoResult['deviceInfo'] as Map<String, dynamic>;
+            final deviceModel = deviceInfo['model'] as String?;
+            if (deviceModel != null && deviceModel.isNotEmpty) {
+              await apiService.registerDevice(deviceModel);
+              
+              // 应用保存的设备配置
+              final savedConfig = await DeviceConfigService().getDeviceConfig(deviceModel);
+              if (savedConfig != null) {
+                await apiService.updateSettings(savedConfig);
+              }
+            }
+          }
+        } catch (e) {
+          _logger.logError('获取/应用设备配置失败', error: e);
+        }
+        
+        _logger.log('连接成功', tag: 'CONNECTION');
+        _checkRemoteConnection();
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('已连接到 $host'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        // 连接失败，显示对话框让用户修改设置
+        _logger.log('直接连接失败，打开设置对话框', tag: 'CONNECTION');
+        ApiServiceManager().setCurrentApiService(null);
+        setState(() {
+          _connectionState = ws.ConnectionState.disconnected;
+        });
+        _openConnectionDialog();
+      }
+    } catch (e) {
+      _logger.logError('直接连接失败', error: e);
+      setState(() {
+        _connectionState = ws.ConnectionState.disconnected;
+      });
+      _openConnectionDialog();
+    }
+  }
+
   /// 打开连接对话框
   void _openConnectionDialog() {
     ConnectionDialog.show(context, onConnected: () {
@@ -274,6 +388,9 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
   /// 断开连接
   Future<void> _disconnect() async {
     try {
+      // 设置跳过本次自动连接（避免断开后立即重连）
+      await ConnectionSettingsService().setSkipAutoConnectOnce(true);
+      
       await _apiManager.gracefulDisconnect();
       _apiManager.setCurrentApiService(null);
       if (mounted) {
@@ -375,39 +492,72 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
     );
   }
 
-  /// 移动端布局：内容 + 底部导航栏
+  /// 移动端布局：内容 + 底部导航栏（连接状态集成到导航栏）
   Widget _buildMobileLayout() {
     return Scaffold(
       body: _buildPageContent(),
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // 连接状态指示条（紧凑版）
-          _buildMobileConnectionBar(),
-          // 底部导航栏
-          NavigationBar(
-            selectedIndex: _currentIndex,
-            onDestinationSelected: _onNavigationChanged,
-            destinations: [
-              const NavigationDestination(
-                icon: Icon(Icons.photo_library_outlined),
-                selectedIcon: Icon(Icons.photo_library),
-                label: '媒体库',
-              ),
-              const NavigationDestination(
-                icon: Icon(Icons.camera_alt_outlined),
-                selectedIcon: Icon(Icons.camera_alt),
-                label: '拍摄',
-              ),
-              NavigationDestination(
-                icon: _buildSettingsIcon(false),
-                selectedIcon: _buildSettingsIcon(true),
-                label: '设置',
-              ),
-            ],
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _currentIndex,
+        onDestinationSelected: _onNavigationChanged,
+        destinations: [
+          const NavigationDestination(
+            icon: Icon(Icons.photo_library_outlined),
+            selectedIcon: Icon(Icons.photo_library),
+            label: '媒体库',
+          ),
+          NavigationDestination(
+            icon: _buildMobileConnectionIcon(false),
+            selectedIcon: _buildMobileConnectionIcon(true),
+            label: '拍摄',
+          ),
+          NavigationDestination(
+            icon: _buildSettingsIcon(false),
+            selectedIcon: _buildSettingsIcon(true),
+            label: '设置',
           ),
         ],
       ),
+    );
+  }
+  
+  /// 移动端拍摄图标（带连接状态指示）
+  Widget _buildMobileConnectionIcon(bool selected) {
+    final isReconnecting = _connectionState == ws.ConnectionState.reconnecting;
+    final statusColor = _isRemoteConnected 
+        ? Colors.green 
+        : (isReconnecting ? Colors.orange : Colors.grey);
+    
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Icon(selected ? Icons.camera_alt : Icons.camera_alt_outlined),
+        // 连接状态小圆点
+        Positioned(
+          right: -4,
+          top: -4,
+          child: isReconnecting
+              ? const SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.orange),
+                  ),
+                )
+              : Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: statusColor,
+                    border: Border.all(
+                      color: Colors.white,
+                      width: 1.5,
+                    ),
+                  ),
+                ),
+        ),
+      ],
     );
   }
 
@@ -459,6 +609,8 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
 
   /// 远端相机未连接时的占位页面
   Widget _buildRemoteCameraPlaceholder() {
+    final isConnecting = _connectionState == ws.ConnectionState.connecting;
+    
     return Scaffold(
       appBar: AppBar(
         title: const Text('远端相机'),
@@ -492,9 +644,15 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
             ),
             const SizedBox(height: 32),
             ElevatedButton.icon(
-              onPressed: _openConnectionDialog,
-              icon: const Icon(Icons.link),
-              label: const Text('连接远端相机'),
+              onPressed: isConnecting ? null : _connectDirectly,
+              icon: isConnecting 
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.link),
+              label: Text(isConnecting ? '连接中...' : '连接远端相机'),
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
               ),
@@ -508,12 +666,13 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
   /// 桌面端导航栏底部的连接状态指示器
   Widget _buildConnectionIndicator() {
     final isReconnecting = _connectionState == ws.ConnectionState.reconnecting;
+    final isConnecting = _connectionState == ws.ConnectionState.connecting;
     final statusColor = _isRemoteConnected 
         ? Colors.green 
-        : (isReconnecting ? Colors.orange : Colors.grey);
+        : (isReconnecting || isConnecting ? Colors.orange : Colors.grey);
     
     return GestureDetector(
-      onTap: _isRemoteConnected ? _disconnect : _openConnectionDialog,
+      onTap: _isRemoteConnected ? _disconnect : _connectDirectly,
       child: Tooltip(
         message: _getConnectionTooltip(),
         child: Container(
@@ -525,7 +684,7 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (isReconnecting)
+              if (isReconnecting || isConnecting)
                 const SizedBox(
                   width: 24,
                   height: 24,
@@ -545,6 +704,11 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
                 Text(
                   '$_reconnectAttempts/$_maxReconnectAttempts',
                   style: const TextStyle(fontSize: 10, color: Colors.orange),
+                )
+              else if (isConnecting)
+                const Text(
+                  '连接中',
+                  style: TextStyle(fontSize: 10, color: Colors.orange),
                 )
               else
                 Container(
@@ -570,73 +734,6 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
       return '正在重连 ($_reconnectAttempts/$_maxReconnectAttempts)...';
     } else {
       return '未连接\n点击连接';
-    }
-  }
-
-  /// 移动端紧凑连接状态条
-  Widget _buildMobileConnectionBar() {
-    final isReconnecting = _connectionState == ws.ConnectionState.reconnecting;
-    final statusColor = _isRemoteConnected 
-        ? Colors.green 
-        : (isReconnecting ? Colors.orange : Colors.grey);
-    
-    return GestureDetector(
-      onTap: _isRemoteConnected ? _disconnect : _openConnectionDialog,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        decoration: BoxDecoration(
-          color: statusColor.withOpacity(0.1),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (isReconnecting)
-              const SizedBox(
-                width: 12,
-                height: 12,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.orange),
-                ),
-              )
-            else
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: statusColor,
-                ),
-              ),
-            const SizedBox(width: 8),
-            Text(
-              _getConnectionStatusText(),
-              style: TextStyle(
-                fontSize: 12,
-                color: statusColor == Colors.green ? Colors.green[700] : statusColor,
-              ),
-            ),
-            const SizedBox(width: 8),
-            if (!isReconnecting)
-              Icon(
-                _isRemoteConnected ? Icons.link_off : Icons.link,
-                size: 16,
-                color: _isRemoteConnected ? Colors.red[400] : Colors.blue,
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-  
-  /// 获取连接状态文字
-  String _getConnectionStatusText() {
-    if (_isRemoteConnected) {
-      return '已连接 $_connectedHost';
-    } else if (_connectionState == ws.ConnectionState.reconnecting) {
-      return '重连中 ($_reconnectAttempts/$_maxReconnectAttempts)';
-    } else {
-      return '点击连接远端相机';
     }
   }
 }
