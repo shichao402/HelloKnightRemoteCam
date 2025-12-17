@@ -513,7 +513,7 @@ class ApiService {
   Future<String> getPreviewStreamUrl() async {
     try {
       final clientVersion = await _versionService.getVersion();
-      return '$baseUrl/preview/stream?clientVersion=$clientVersion';
+      return '$baseUrl/preview/stream?clientVersion=${Uri.encodeComponent(clientVersion)}';
     } catch (e) {
       logger.logError('获取预览流URL失败', error: e);
       return '$baseUrl/preview/stream';
@@ -529,7 +529,7 @@ class ApiService {
   Future<String> getThumbnailUrl(String remotePath, bool isVideo) async {
     try {
       final clientVersion = await _versionService.getVersion();
-      return '$baseUrl/file/thumbnail?path=${Uri.encodeComponent(remotePath)}&type=${isVideo ? 'video' : 'image'}&clientVersion=$clientVersion';
+      return '$baseUrl/file/thumbnail?path=${Uri.encodeComponent(remotePath)}&type=${isVideo ? 'video' : 'image'}&clientVersion=${Uri.encodeComponent(clientVersion)}';
     } catch (e) {
       logger.logError('获取缩略图URL失败', error: e);
       return '$baseUrl/file/thumbnail?path=${Uri.encodeComponent(remotePath)}&type=${isVideo ? 'video' : 'image'}';

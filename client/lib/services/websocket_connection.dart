@@ -23,6 +23,9 @@ enum ConnectionState {
 
   /// 正在断开连接
   disconnecting,
+  
+  /// 正在重连
+  reconnecting,
 }
 
 /// 连接状态变化事件
@@ -98,6 +101,21 @@ class WebSocketConnection {
   Timer? _heartbeatTimer;
   static const Duration _heartbeatInterval = Duration(seconds: 1);
   static const Duration _heartbeatTimeout = Duration(seconds: 5);
+
+  // 自动重连配置
+  bool _autoReconnect = true;
+  bool get autoReconnect => _autoReconnect;
+  set autoReconnect(bool value) => _autoReconnect = value;
+  
+  int _reconnectAttempts = 0;
+  int get reconnectAttempts => _reconnectAttempts;
+  static const int _maxReconnectAttempts = 20;
+  static const Duration _reconnectInterval = Duration(seconds: 3);
+  Timer? _reconnectTimer;
+  bool _isReconnecting = false;
+  
+  // 记录上次注册的设备型号（用于重连后自动注册）
+  String? _lastDeviceModel;
 
   // 服务器信息（连接成功后获取）
   String? _serverVersion;
@@ -175,10 +193,17 @@ class WebSocketConnection {
   }
 
   /// 断开连接
-  Future<void> disconnect() async {
+  /// 
+  /// [cancelAutoReconnect] 是否取消自动重连，默认为 true（主动断开时不重连）
+  Future<void> disconnect({bool cancelAutoReconnect = true}) async {
     if (_state == ConnectionState.disconnected ||
         _state == ConnectionState.disconnecting) {
       return;
+    }
+
+    // 主动断开时取消自动重连
+    if (cancelAutoReconnect) {
+      cancelReconnect();
     }
 
     _setState(ConnectionState.disconnecting);
@@ -262,6 +287,7 @@ class WebSocketConnection {
       });
 
       if (result['success'] == true) {
+        _lastDeviceModel = deviceModel; // 记录设备型号用于重连
         _setState(ConnectionState.registered);
         _logger.log('设备注册成功: $deviceModel', tag: 'CONNECTION');
         return null;
@@ -281,8 +307,18 @@ class WebSocketConnection {
     }
   }
 
+  /// 取消重连
+  void cancelReconnect() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _isReconnecting = false;
+    _reconnectAttempts = 0;
+    _logger.log('重连已取消', tag: 'RECONNECT');
+  }
+
   /// 释放资源
   void dispose() {
+    cancelReconnect();
     _stopHeartbeat();
     _failAllPendingRequests('连接已释放');
     _subscription?.cancel();
@@ -629,7 +665,129 @@ class WebSocketConnection {
     _failAllPendingRequests('连接已断开');
     _channel = null;
     _subscription = null;
-    _setState(ConnectionState.disconnected);
+    
+    // 检查是否需要自动重连
+    // 不重连的情况：
+    // 1. 禁用了自动重连
+    // 2. 认证失败（版本不兼容等）
+    // 3. 已经在重连中
+    final shouldReconnect = _autoReconnect && 
+        !_isAuthFailure(_lastError) &&
+        !_isReconnecting;
+    
+    if (shouldReconnect) {
+      _startReconnect();
+    } else {
+      _setState(ConnectionState.disconnected);
+    }
+  }
+  
+  /// 检查是否是认证失败错误（不应该重连）
+  bool _isAuthFailure(ConnectionError? error) {
+    if (error == null) return false;
+    return error.code == ConnectionErrorCode.versionIncompatible ||
+           error.code == ConnectionErrorCode.authenticationFailed ||
+           error.code == ConnectionErrorCode.serverVersionTooLow;
+  }
+  
+  /// 开始自动重连
+  void _startReconnect() {
+    if (_isReconnecting) return;
+    
+    _isReconnecting = true;
+    _reconnectAttempts = 0;
+    _setState(ConnectionState.reconnecting);
+    _logger.log('开始自动重连', tag: 'RECONNECT');
+    
+    _scheduleReconnect();
+  }
+  
+  /// 调度下一次重连
+  void _scheduleReconnect() {
+    if (!_isReconnecting) return;
+    
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(_reconnectInterval, _attemptReconnect);
+  }
+  
+  /// 尝试重连
+  Future<void> _attemptReconnect() async {
+    if (!_isReconnecting) return;
+    
+    _reconnectAttempts++;
+    _logger.log('尝试重连 (第 $_reconnectAttempts 次，最多 $_maxReconnectAttempts 次)', tag: 'RECONNECT');
+    
+    // 广播重连尝试事件
+    _stateController.add(ConnectionStateChange(
+      oldState: ConnectionState.reconnecting,
+      newState: ConnectionState.reconnecting,
+      data: {'attempt': _reconnectAttempts, 'maxAttempts': _maxReconnectAttempts},
+    ));
+    
+    try {
+      // 重置状态以便重新连接
+      _state = ConnectionState.disconnected;
+      
+      // 尝试连接
+      final error = await connect();
+      
+      if (error == null) {
+        // 连接成功
+        _logger.log('重连成功', tag: 'RECONNECT');
+        _isReconnecting = false;
+        _reconnectAttempts = 0;
+        
+        // 如果之前注册过设备，自动重新注册
+        if (_lastDeviceModel != null && _state == ConnectionState.connected) {
+          _logger.log('自动重新注册设备: $_lastDeviceModel', tag: 'RECONNECT');
+          final registerError = await registerDevice(_lastDeviceModel!);
+          if (registerError != null) {
+            _logger.log('重新注册设备失败: ${registerError.message}', tag: 'RECONNECT');
+          }
+        }
+        return;
+      }
+      
+      // 连接失败
+      _logger.log('重连失败: ${error.message}', tag: 'RECONNECT');
+      
+      // 检查是否是认证失败，如果是则停止重连
+      if (_isAuthFailure(error)) {
+        _logger.log('认证失败，停止重连', tag: 'RECONNECT');
+        _isReconnecting = false;
+        _reconnectAttempts = 0;
+        _setState(ConnectionState.disconnected);
+        return;
+      }
+      
+      // 检查是否达到最大重连次数
+      if (_reconnectAttempts >= _maxReconnectAttempts) {
+        _logger.log('达到最大重连次数，停止重连', tag: 'RECONNECT');
+        _isReconnecting = false;
+        _reconnectAttempts = 0;
+        _setState(ConnectionState.disconnected);
+        return;
+      }
+      
+      // 继续重连
+      _state = ConnectionState.reconnecting;
+      _scheduleReconnect();
+      
+    } catch (e) {
+      _logger.logError('重连异常', error: e);
+      
+      // 检查是否达到最大重连次数
+      if (_reconnectAttempts >= _maxReconnectAttempts) {
+        _logger.log('达到最大重连次数，停止重连', tag: 'RECONNECT');
+        _isReconnecting = false;
+        _reconnectAttempts = 0;
+        _setState(ConnectionState.disconnected);
+        return;
+      }
+      
+      // 继续重连
+      _scheduleReconnect();
+    }
   }
 
   /// 启动心跳

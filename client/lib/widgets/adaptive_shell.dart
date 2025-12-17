@@ -10,7 +10,6 @@ import '../screens/client_settings_screen.dart';
 import '../screens/camera_control_screen.dart';
 import '../core/core.dart';
 import 'connection_dialog.dart';
-import 'package:shared/shared.dart';
 
 /// 自适应导航外壳
 /// 
@@ -165,18 +164,6 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
     });
   }
 
-  /// 打开相机控制页面（已连接时）
-  void _openCameraControl() {
-    final apiService = _apiManager.getCurrentApiService();
-    if (apiService != null) {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => CameraControlScreen(apiService: apiService),
-        ),
-      );
-    }
-  }
-
   /// 断开连接
   Future<void> _disconnect() async {
     try {
@@ -225,90 +212,92 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
     );
   }
 
-  /// 桌面布局：左侧导航栏 + 右侧内容 + 底部连接状态栏
+  /// 桌面布局：左侧导航栏 + 右侧内容
   Widget _buildDesktopLayout() {
     return Scaffold(
-      body: Column(
+      body: Row(
         children: [
-          Expanded(
-            child: Row(
-              children: [
-                // 左侧导航栏
-                NavigationRail(
-                  selectedIndex: _currentIndex,
-                  onDestinationSelected: _onNavigationChanged,
-                  labelType: NavigationRailLabelType.all,
-                  leading: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Icon(
-                      Icons.camera_alt,
-                      size: 32,
-                      color: Theme.of(context).primaryColor,
-                    ),
-                  ),
-                  destinations: [
-                    const NavigationRailDestination(
-                      icon: Icon(Icons.photo_library_outlined),
-                      selectedIcon: Icon(Icons.photo_library),
-                      label: Text('媒体库'),
-                    ),
-                    const NavigationRailDestination(
-                      icon: Icon(Icons.camera_alt_outlined),
-                      selectedIcon: Icon(Icons.camera_alt),
-                      label: Text('拍摄'),
-                    ),
-                    NavigationRailDestination(
-                      icon: _buildSettingsIcon(false),
-                      selectedIcon: _buildSettingsIcon(true),
-                      label: const Text('设置'),
-                    ),
-                  ],
-                ),
-                const VerticalDivider(thickness: 1, width: 1),
-                // 右侧内容区域
-                Expanded(
-                  child: _buildPageContent(),
-                ),
-              ],
+          // 左侧导航栏
+          NavigationRail(
+            selectedIndex: _currentIndex,
+            onDestinationSelected: _onNavigationChanged,
+            labelType: NavigationRailLabelType.all,
+            leading: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Icon(
+                Icons.camera_alt,
+                size: 32,
+                color: Theme.of(context).primaryColor,
+              ),
             ),
+            trailing: Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  // 连接状态指示器
+                  _buildConnectionIndicator(),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            ),
+            destinations: [
+              const NavigationRailDestination(
+                icon: Icon(Icons.photo_library_outlined),
+                selectedIcon: Icon(Icons.photo_library),
+                label: Text('媒体库'),
+              ),
+              const NavigationRailDestination(
+                icon: Icon(Icons.camera_alt_outlined),
+                selectedIcon: Icon(Icons.camera_alt),
+                label: Text('拍摄'),
+              ),
+              NavigationRailDestination(
+                icon: _buildSettingsIcon(false),
+                selectedIcon: _buildSettingsIcon(true),
+                label: const Text('设置'),
+              ),
+            ],
           ),
-          // 底部连接状态栏
-          _buildConnectionStatusBar(),
+          const VerticalDivider(thickness: 1, width: 1),
+          // 右侧内容区域
+          Expanded(
+            child: _buildPageContent(),
+          ),
         ],
       ),
     );
   }
 
-  /// 移动端布局：内容 + 底部连接状态栏 + 底部导航栏
+  /// 移动端布局：内容 + 底部导航栏
   Widget _buildMobileLayout() {
     return Scaffold(
-      body: Column(
+      body: _buildPageContent(),
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            child: _buildPageContent(),
-          ),
-          // 底部连接状态栏
-          _buildConnectionStatusBar(),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: _onNavigationChanged,
-        destinations: [
-          const NavigationDestination(
-            icon: Icon(Icons.photo_library_outlined),
-            selectedIcon: Icon(Icons.photo_library),
-            label: '媒体库',
-          ),
-          const NavigationDestination(
-            icon: Icon(Icons.camera_alt_outlined),
-            selectedIcon: Icon(Icons.camera_alt),
-            label: '拍摄',
-          ),
-          NavigationDestination(
-            icon: _buildSettingsIcon(false),
-            selectedIcon: _buildSettingsIcon(true),
-            label: '设置',
+          // 连接状态指示条（紧凑版）
+          _buildMobileConnectionBar(),
+          // 底部导航栏
+          NavigationBar(
+            selectedIndex: _currentIndex,
+            onDestinationSelected: _onNavigationChanged,
+            destinations: [
+              const NavigationDestination(
+                icon: Icon(Icons.photo_library_outlined),
+                selectedIcon: Icon(Icons.photo_library),
+                label: '媒体库',
+              ),
+              const NavigationDestination(
+                icon: Icon(Icons.camera_alt_outlined),
+                selectedIcon: Icon(Icons.camera_alt),
+                label: '拍摄',
+              ),
+              NavigationDestination(
+                icon: _buildSettingsIcon(false),
+                selectedIcon: _buildSettingsIcon(true),
+                label: '设置',
+              ),
+            ],
           ),
         ],
       ),
@@ -409,80 +398,86 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
     );
   }
 
-  /// 底部连接状态栏
-  Widget _buildConnectionStatusBar() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: BoxDecoration(
-        color: _isRemoteConnected 
-            ? Colors.green.withOpacity(0.1) 
-            : Colors.grey.withOpacity(0.1),
-        border: Border(
-          top: BorderSide(
-            color: Colors.grey.withOpacity(0.3),
+  /// 桌面端导航栏底部的连接状态指示器
+  Widget _buildConnectionIndicator() {
+    return GestureDetector(
+      onTap: _isRemoteConnected ? _disconnect : _openConnectionDialog,
+      child: Tooltip(
+        message: _isRemoteConnected 
+            ? '已连接 $_connectedHost\n点击断开' 
+            : '未连接\n点击连接',
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: _isRemoteConnected 
+                ? Colors.green.withOpacity(0.1) 
+                : Colors.grey.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _isRemoteConnected ? Icons.link : Icons.link_off,
+                color: _isRemoteConnected ? Colors.green : Colors.grey,
+                size: 24,
+              ),
+              const SizedBox(height: 4),
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _isRemoteConnected ? Colors.green : Colors.grey,
+                ),
+              ),
+            ],
           ),
         ),
       ),
-      child: Row(
-        children: [
-          // 连接状态图标
-          Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _isRemoteConnected ? Colors.green : Colors.grey,
-            ),
-          ),
-          const SizedBox(width: 10),
-          // 状态文字
-          Expanded(
-            child: Text(
-              _isRemoteConnected 
-                  ? '已连接 $_connectedHost' 
-                  : '未连接远端服务',
-              style: TextStyle(
-                fontSize: 13,
-                color: _isRemoteConnected ? Colors.green[700] : Colors.grey[600],
-              ),
-            ),
-          ),
-          // 操作按钮
-          if (_isRemoteConnected) ...[
-            // 拍摄按钮
-            TextButton.icon(
-              onPressed: _openCameraControl,
-              icon: const Icon(Icons.camera_alt, size: 18),
-              label: const Text('拍摄'),
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.blue,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+    );
+  }
+
+  /// 移动端紧凑连接状态条
+  Widget _buildMobileConnectionBar() {
+    return GestureDetector(
+      onTap: _isRemoteConnected ? _disconnect : _openConnectionDialog,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        decoration: BoxDecoration(
+          color: _isRemoteConnected 
+              ? Colors.green.withOpacity(0.1) 
+              : Colors.grey.withOpacity(0.1),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _isRemoteConnected ? Colors.green : Colors.grey,
               ),
             ),
             const SizedBox(width: 8),
-            // 断开按钮
-            TextButton.icon(
-              onPressed: _disconnect,
-              icon: const Icon(Icons.link_off, size: 18),
-              label: const Text('断开'),
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.red,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+            Text(
+              _isRemoteConnected 
+                  ? '已连接 $_connectedHost' 
+                  : '点击连接远端相机',
+              style: TextStyle(
+                fontSize: 12,
+                color: _isRemoteConnected ? Colors.green[700] : Colors.grey[600],
               ),
             ),
-          ] else ...[
-            // 连接按钮
-            TextButton.icon(
-              onPressed: _openConnectionDialog,
-              icon: const Icon(Icons.link, size: 18),
-              label: const Text('连接'),
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.blue,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-              ),
+            const SizedBox(width: 8),
+            Icon(
+              _isRemoteConnected ? Icons.link_off : Icons.link,
+              size: 16,
+              color: _isRemoteConnected ? Colors.red[400] : Colors.blue,
             ),
           ],
-        ],
+        ),
       ),
     );
   }

@@ -2,11 +2,21 @@
 /// 提供版本号比较和解析的通用方法
 /// 客户端和服务端共享
 class VersionUtils {
+  /// 清理版本号字符串
+  /// 处理 URL 解码问题：+ 可能被解码为空格
+  static String _cleanVersionString(String version) {
+    // 移除构建号部分（+ 或空格后的内容）
+    return version.split(RegExp(r'[+ ]')).first.trim();
+  }
+
   /// 比较版本号
   /// 返回 true 如果 version1 > version2
   static bool compareVersions(String version1, String version2) {
-    final v1Parts = version1.split('.').map((e) => int.parse(e)).toList();
-    final v2Parts = version2.split('.').map((e) => int.parse(e)).toList();
+    final v1Clean = _cleanVersionString(version1);
+    final v2Clean = _cleanVersionString(version2);
+    
+    final v1Parts = v1Clean.split('.').map((e) => int.parse(e.trim())).toList();
+    final v2Parts = v2Clean.split('.').map((e) => int.parse(e.trim())).toList();
 
     // 确保两个版本号都有3个部分
     while (v1Parts.length < 3) {
@@ -27,8 +37,11 @@ class VersionUtils {
   /// 比较版本号（大于等于）
   /// 返回 true 如果 version1 >= version2
   static bool compareVersionsGreaterOrEqual(String version1, String version2) {
-    final v1Parts = version1.split('.').map((e) => int.parse(e)).toList();
-    final v2Parts = version2.split('.').map((e) => int.parse(e)).toList();
+    final v1Clean = _cleanVersionString(version1);
+    final v2Clean = _cleanVersionString(version2);
+    
+    final v1Parts = v1Clean.split('.').map((e) => int.parse(e.trim())).toList();
+    final v2Parts = v2Clean.split('.').map((e) => int.parse(e.trim())).toList();
 
     // 确保两个版本号都有3个部分
     while (v1Parts.length < 3) {
@@ -46,17 +59,17 @@ class VersionUtils {
     return true; // 相等
   }
 
-  /// 比较完整版本号（包含构建号，格式: x.y.z+build）
+  /// 比较完整版本号（包含构建号，格式: x.y.z+build 或 x.y.z build）
   /// 返回 true 如果 version1 >= version2
   static bool compareFullVersions(String version1, String version2) {
-    // 分离版本号和构建号
-    final v1Parts = version1.split('+');
-    final v2Parts = version2.split('+');
+    // 分离版本号和构建号（处理 + 或空格分隔）
+    final v1Parts = version1.split(RegExp(r'[+ ]'));
+    final v2Parts = version2.split(RegExp(r'[+ ]'));
 
-    final v1Version = v1Parts[0];
-    final v2Version = v2Parts[0];
-    final v1Build = v1Parts.length > 1 ? int.tryParse(v1Parts[1]) ?? 0 : 0;
-    final v2Build = v2Parts.length > 1 ? int.tryParse(v2Parts[1]) ?? 0 : 0;
+    final v1Version = v1Parts[0].trim();
+    final v2Version = v2Parts[0].trim();
+    final v1Build = v1Parts.length > 1 ? int.tryParse(v1Parts[1].trim()) ?? 0 : 0;
+    final v2Build = v2Parts.length > 1 ? int.tryParse(v2Parts[1].trim()) ?? 0 : 0;
 
     // 先比较版本号
     final versionCompare = compareVersions(v1Version, v2Version);

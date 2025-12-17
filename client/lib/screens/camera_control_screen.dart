@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'dart:io';
 import 'dart:async';
 import '../services/api_service.dart';
 import '../services/api_service_manager.dart';
 import '../services/download_manager.dart';
+import '../services/websocket_connection.dart' as ws;
 import '../models/file_info.dart';
 import '../models/download_task.dart';
 import '../widgets/transformed_preview_widget.dart';
@@ -15,9 +15,7 @@ import 'library/library_screen.dart';
 import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
-import '../services/connection_settings_service.dart';
 import '../models/connection_error.dart';
-import '../utils/retry_helper.dart';
 import '../core/core.dart';
 
 class CameraControlScreen extends StatefulWidget {
@@ -40,16 +38,14 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   final DownloadSettingsService _downloadSettings = DownloadSettingsService();
   final Map<String, bool> _downloadedStatusCache = {}; // 缓存下载状态
 
-  // 连接状态管理
-  bool _isConnected = true;
-  bool _isReconnecting = false;
-  int _reconnectAttempts = 0; // 当前重连次数
-  Timer? _connectionCheckTimer;
+  // 连接状态管理（监听 WebSocketConnection 的状态）
+  StreamSubscription<ws.ConnectionStateChange>? _connectionStateSubscription;
   StreamSubscription? _webSocketSubscription; // WebSocket通知消息订阅
-  RetryHelper? _reconnectHelper; // 重连助手
-  RetryHelper? _webSocketReconnectHelper; // WebSocket重连助手
   final ClientLoggerService _logger = ClientLoggerService();
-  bool _isAuthFailure = false; // 标记是否是认证失败（版本不兼容等）
+  
+  // 当前连接状态（从 WebSocketConnection 同步）
+  ws.ConnectionState _connectionState = ws.ConnectionState.disconnected;
+  int _reconnectAttempts = 0;
 
   // 设备方向（0=竖屏, 90=横屏右转, 180=倒置, 270=横屏左转）
   // 使用ValueNotifier，只更新预览部分，不影响文件列表
@@ -130,23 +126,141 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     _downloadManager = DownloadManager(baseUrl: widget.apiService.baseUrl);
     _downloadManager.initialize();
     _refreshFileList();
-    _startConnectionCheck();
-    _startFileListRefreshTimer(); // 启动WebSocket连接并监听通知
+    
+    // 监听连接状态变化
+    _startListeningConnectionState();
+    
+    // 启动WebSocket连接并监听通知
+    _startFileListRefreshTimer();
     // 连接WebSocket（用于API调用）
     widget.apiService.connectWebSocket();
     // 初始化方向锁定状态（默认锁定）
     _initializeOrientationLock();
     // 异步获取预览流URL（包含版本号）
     _loadPreviewStreamUrl();
+    
+    // 初始化连接状态
+    _connectionState = widget.apiService.connectionState;
+  }
+  
+  /// 开始监听连接状态变化
+  void _startListeningConnectionState() {
+    _connectionStateSubscription = widget.apiService.connectionStateStream.listen(
+      (stateChange) {
+        if (!mounted) return;
+        
+        final oldState = stateChange.oldState;
+        final newState = stateChange.newState;
+        
+        _logger.log('连接状态变化: $oldState -> $newState', tag: 'CONNECTION');
+        
+        setState(() {
+          _connectionState = newState;
+          // 更新重连次数
+          if (stateChange.data != null && stateChange.data!['attempt'] != null) {
+            _reconnectAttempts = stateChange.data!['attempt'] as int;
+          }
+        });
+        
+        // 处理状态变化
+        _handleConnectionStateChange(oldState, newState, stateChange.error);
+      },
+      onError: (error) {
+        _logger.logError('连接状态流错误', error: error);
+      },
+    );
+  }
+  
+  /// 处理连接状态变化
+  void _handleConnectionStateChange(
+    ws.ConnectionState oldState, 
+    ws.ConnectionState newState, 
+    ConnectionError? error,
+  ) {
+    // 从断开/重连状态恢复到已注册状态
+    if (newState == ws.ConnectionState.registered && 
+        (oldState == ws.ConnectionState.disconnected || 
+         oldState == ws.ConnectionState.reconnecting ||
+         oldState == ws.ConnectionState.connected)) {
+      _logger.log('连接已恢复，刷新数据', tag: 'CONNECTION');
+      _onConnectionRestored();
+    }
+    
+    // 认证失败，返回登录界面
+    if (error != null && _isAuthFailureError(error)) {
+      _logger.log('认证失败: ${error.message}', tag: 'CONNECTION');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error.getUserFriendlyMessage()),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 8),
+          ),
+        );
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            Navigator.of(context).pop();
+          }
+        });
+      }
+    }
+  }
+  
+  /// 检查是否是认证失败错误
+  bool _isAuthFailureError(ConnectionError error) {
+    return error.code == ConnectionErrorCode.versionIncompatible ||
+           error.code == ConnectionErrorCode.authenticationFailed ||
+           error.code == ConnectionErrorCode.serverVersionTooLow;
+  }
+  
+  /// 连接恢复后的处理
+  void _onConnectionRestored() {
+    _refreshFileList();
+    // 强制刷新预览组件
+    _loadPreviewStreamUrl(forceRefresh: true);
+    // 重新初始化方向状态
+    _initializeOrientationLock();
+    // 重新连接WebSocket通知流
+    _connectToWebSocketNotifications();
+  }
+  
+  /// 是否已连接（connected 或 registered 状态）
+  bool get _isConnected => 
+      _connectionState == ws.ConnectionState.connected ||
+      _connectionState == ws.ConnectionState.registered;
+  
+  /// 是否正在重连
+  bool get _isReconnecting => _connectionState == ws.ConnectionState.reconnecting;
+  
+  /// 手动触发重连
+  Future<void> _manualReconnect() async {
+    _logger.log('手动触发重连', tag: 'CONNECTION');
+    try {
+      // 调用 ApiService 的连接方法，它会触发 WebSocketConnection 的重连
+      await widget.apiService.connectWebSocket();
+      if (mounted) {
+        _showSuccess('重连成功');
+      }
+    } catch (e) {
+      if (mounted) {
+        final error = ConnectionError.fromException(e);
+        _showError(error.getUserFriendlyMessage());
+      }
+    }
   }
 
   /// 加载预览流URL（包含客户端版本号）
-  Future<void> _loadPreviewStreamUrl() async {
+  /// [forceRefresh] 为 true 时强制刷新预览组件（用于重连后）
+  Future<void> _loadPreviewStreamUrl({bool forceRefresh = false}) async {
     try {
       final url = await widget.apiService.getPreviewStreamUrl();
       if (mounted) {
         setState(() {
           _previewStreamUrl = url;
+          if (forceRefresh) {
+            _previewInitKey++; // 强制重建预览组件
+            _logger.log('强制刷新预览组件，新key: $_previewInitKey', tag: 'PREVIEW');
+          }
         });
       }
     } catch (e) {
@@ -155,6 +269,10 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       if (mounted) {
         setState(() {
           _previewStreamUrl = '${widget.apiService.baseUrl}/preview/stream';
+          if (forceRefresh) {
+            _previewInitKey++; // 强制重建预览组件
+            _logger.log('强制刷新预览组件（fallback URL），新key: $_previewInitKey', tag: 'PREVIEW');
+          }
         });
       }
     }
@@ -298,9 +416,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   @override
   void dispose() {
     _downloadSubscription?.cancel();
-    _reconnectHelper?.dispose();
-    _webSocketReconnectHelper?.dispose();
-    _connectionCheckTimer?.cancel();
+    _connectionStateSubscription?.cancel();
     _webSocketSubscription?.cancel();
     _deviceOrientationNotifier.dispose();
     _rotationAngleNotifier.dispose();
@@ -312,13 +428,12 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   /// 启动WebSocket连接（监听server的新文件通知）
   void _startFileListRefreshTimer() {
     _logger.log('准备启动WebSocket通知监听', tag: 'WEBSOCKET');
-    _connectToWebSocketNotificationsWithRetry();
+    _connectToWebSocketNotifications();
   }
 
   /// 连接到WebSocket通知流（监听服务器推送的通知）
-  /// 返回 true 表示连接成功，false 表示连接失败需要重试
-  Future<bool> _connectToWebSocketNotifications() async {
-    if (!mounted || !_isConnected) return false;
+  Future<void> _connectToWebSocketNotifications() async {
+    if (!mounted || !_isConnected) return;
 
     try {
       // 确保ApiService的WebSocket已连接
@@ -328,7 +443,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       final notificationStream = widget.apiService.webSocketNotifications;
       if (notificationStream == null) {
         _logger.log('WebSocket通知流不可用', tag: 'WEBSOCKET');
-        return false;
+        return;
       }
 
       // 取消之前的订阅
@@ -380,39 +495,19 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
             } else if (event == 'version_incompatible' || 
                        event == 'server_version_incompatible' ||
                        event == 'connection_failed') {
-              // 版本不兼容或连接失败通知
+              // 版本不兼容或连接失败通知 - 由 WebSocketConnection 处理，这里只显示错误
               final messageData = data as Map<String, dynamic>?;
               final message = messageData?['message'] as String? ?? '连接失败';
-              final reason = messageData?['reason'] as String?;
-              final isAuthFailure = messageData?['isAuthFailure'] as bool? ?? false;
               final minRequiredVersion = messageData?['minRequiredVersion'] as String?;
               
-              _logger.log('连接失败: $message (原因: $reason, 认证失败: $isAuthFailure)', tag: 'VERSION_COMPAT');
-              
-              // 如果是认证失败，停止重连
-              if (isAuthFailure) {
-                _isAuthFailure = true;
-                _reconnectHelper?.cancel();
-                _reconnectHelper = null;
-                _webSocketReconnectHelper?.cancel();
-                _webSocketReconnectHelper = null;
-                
-                if (mounted) {
-                  setState(() {
-                    _isReconnecting = false;
-                    _isConnected = false;
-                  });
-                }
-              }
+              _logger.log('连接失败通知: $message', tag: 'VERSION_COMPAT');
               
               if (mounted) {
-                // 构建详细的错误信息
                 String errorMessage = message;
                 if (minRequiredVersion != null) {
                   errorMessage = '$message\n\n要求最小版本: $minRequiredVersion';
                 }
                 
-                // 显示错误提示并返回连接页面
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(errorMessage),
@@ -420,15 +515,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                     duration: const Duration(seconds: 8),
                   ),
                 );
-                
-                // 如果是认证失败，立即返回连接页面
-                if (isAuthFailure && mounted) {
-                  Future.delayed(const Duration(milliseconds: 500), () {
-                    if (mounted) {
-                      Navigator.of(context).pop();
-                    }
-                  });
-                }
               }
             } else if (event == 'connected') {
               _logger.log('WebSocket连接确认', tag: 'WEBSOCKET');
@@ -444,353 +530,14 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         },
         onError: (error) {
           _logger.logError('WebSocket通知流错误', error: error);
-          // 触发重连
-          if (mounted && _isConnected) {
-            _webSocketReconnectHelper?.cancel();
-            _connectToWebSocketNotificationsWithRetry();
-          }
+          // WebSocketConnection 会自动处理重连，这里不需要手动重连
         },
         cancelOnError: false,
       );
-
-      return true; // 连接成功
+      
+      _logger.log('WebSocket通知流连接成功', tag: 'WEBSOCKET');
     } catch (e, stackTrace) {
       _logger.logError('连接WebSocket通知流失败', error: e, stackTrace: stackTrace);
-      return false; // 连接失败，需要重试
-    }
-  }
-
-  /// 连接到WebSocket通知流（使用重试助手）
-  void _connectToWebSocketNotificationsWithRetry() {
-    if (!mounted || !_isConnected) return;
-
-    // 取消之前的重连助手
-    _webSocketReconnectHelper?.cancel();
-    _webSocketReconnectHelper = RetryHelper();
-
-    _webSocketReconnectHelper!.executeWithRetry(
-      operation: _connectToWebSocketNotifications,
-      onSuccess: () {
-        _logger.log('WebSocket通知流连接成功', tag: 'WEBSOCKET');
-      },
-      onFailure: () {
-        _logger.log('WebSocket通知流连接失败，已达到最大重试次数', tag: 'WEBSOCKET');
-      },
-      maxAttempts: 20,
-      interval: const Duration(seconds: 5),
-      timeout: const Duration(seconds: 10),
-      tag: 'WEBSOCKET_RECONNECT',
-    );
-  }
-
-  // 开始连接检查
-  void _startConnectionCheck() {
-    // 心跳间隔：1秒
-    const heartbeatIntervalSeconds = 1;
-    _connectionCheckTimer = Timer.periodic(
-        const Duration(seconds: heartbeatIntervalSeconds), (timer) async {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-
-      try {
-        final pingError = await widget.apiService.ping();
-        if (!mounted) return;
-
-        // 只在连接状态实际变化时才调用 setState
-        if (pingError != null && _isConnected) {
-          // 连接断开或失败
-          // 检查是否是认证失败（版本不兼容等），如果是则停止重连
-          if (pingError.code == ConnectionErrorCode.versionIncompatible ||
-              pingError.code == ConnectionErrorCode.authenticationFailed) {
-            _isAuthFailure = true;
-            _reconnectHelper?.cancel();
-            _reconnectHelper = null;
-            setState(() {
-              _isConnected = false;
-              _isReconnecting = false;
-            });
-            _logger.log('检测到认证失败，停止重连: ${pingError.message}', tag: 'CONNECTION');
-            // 显示错误并返回登录界面
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(pingError.getUserFriendlyMessage()),
-                  backgroundColor: Colors.red,
-                  duration: const Duration(seconds: 8),
-                ),
-              );
-              Future.delayed(const Duration(milliseconds: 500), () {
-                if (mounted) {
-                  Navigator.of(context).pop();
-                }
-              });
-            }
-          } else {
-            setState(() {
-              _isConnected = false;
-            });
-            _logger.log('检测到连接断开: ${pingError.message}', tag: 'CONNECTION');
-            _startReconnect();
-          }
-        } else if (pingError == null && !_isConnected) {
-          // 连接恢复
-          setState(() {
-            _isConnected = true;
-            _isReconnecting = false;
-            _reconnectAttempts = 0; // 重置重连次数
-          });
-          _logger.log('连接已恢复', tag: 'CONNECTION');
-          _refreshFileList();
-          // 重新加载预览流URL（确保URL是最新的）
-          _loadPreviewStreamUrl();
-          // 重新初始化方向状态（确保方向信息是最新的）
-          _initializeOrientationLock();
-          // 重新连接WebSocket通知流
-          _connectToWebSocketNotificationsWithRetry();
-        }
-        // 如果连接状态没有变化（pingSuccess == _isConnected），不调用 setState
-      } catch (e) {
-        if (mounted && _isConnected) {
-          setState(() {
-            _isConnected = false;
-          });
-          _logger.logError('连接检查失败', error: e);
-          _startReconnect();
-        }
-      }
-    });
-  }
-
-  // 开始重连
-  void _startReconnect() {
-    // 如果已经标记为认证失败，不进行重连
-    if (_isAuthFailure) {
-      _logger.log('认证失败，停止重连', tag: 'CONNECTION');
-      return;
-    }
-    
-    if (_isReconnecting) {
-      _logger.log('已在重连中，跳过', tag: 'CONNECTION');
-      return;
-    }
-
-    _logger.log('开始重连流程', tag: 'CONNECTION');
-    if (mounted) {
-      setState(() {
-        _isReconnecting = true;
-        _reconnectAttempts = 0; // 重置重连次数
-      });
-    }
-
-    // 取消之前的重连助手
-    _reconnectHelper?.cancel();
-    _reconnectHelper = RetryHelper();
-
-    _reconnectHelper!.executeWithRetry(
-      operation: () async {
-        // 如果已经标记为认证失败，停止重连
-        if (_isAuthFailure) {
-          _logger.log('检测到认证失败，停止重连', tag: 'CONNECTION');
-          return false; // 不再重试
-        }
-        
-        if (!mounted) return false;
-
-        try {
-          // 更新重连次数
-          if (mounted) {
-            setState(() {
-              _reconnectAttempts = _reconnectHelper!.attempts;
-            });
-          }
-          _logger.log('尝试重连... (第${_reconnectHelper!.attempts}次)',
-              tag: 'CONNECTION');
-          final pingError = await widget.apiService.ping();
-
-          if (!mounted) return false;
-
-          if (pingError == null) {
-            // 重连成功，重置认证失败标记
-            _isAuthFailure = false;
-            
-            if (mounted) {
-              setState(() {
-                _isConnected = true;
-                _isReconnecting = false;
-                _reconnectAttempts = 0; // 重置重连次数
-              });
-            }
-            _logger.log('重连成功', tag: 'CONNECTION');
-            _refreshFileList();
-            // 重新加载预览流URL（确保URL是最新的）
-            _loadPreviewStreamUrl();
-            // 重新初始化方向状态（确保方向信息是最新的）
-            if (mounted) {
-              _initializeOrientationLock();
-            }
-            // 重新连接WebSocket通知流
-            if (mounted) {
-              _connectToWebSocketNotificationsWithRetry();
-            }
-            return true; // 重连成功
-          } else {
-            _logger.log('重连失败：ping返回false (第${_reconnectHelper!.attempts}次)',
-                tag: 'CONNECTION');
-            return false; // 需要重试
-          }
-        } catch (e) {
-          // 检查是否是认证失败错误
-          final errorStr = e.toString();
-          if (errorStr.contains('403') ||
-              errorStr.contains('Forbidden') ||
-              errorStr.contains('VERSION_INCOMPATIBLE') ||
-              errorStr.contains('版本不兼容')) {
-            _isAuthFailure = true;
-            _logger.log('重连时检测到认证失败，停止重连: $e', tag: 'CONNECTION');
-            return false; // 不再重试
-          }
-          
-          _logger.log('重连失败: $e (第${_reconnectHelper!.attempts}次)',
-              tag: 'CONNECTION');
-          return false; // 需要重试
-        }
-      },
-      onSuccess: () {
-        _logger.log('重连成功', tag: 'CONNECTION');
-      },
-      onFailure: () {
-        if (_isAuthFailure) {
-          _logger.log('重连失败：认证失败，已停止重连', tag: 'CONNECTION');
-        } else {
-          _logger.log('重连失败，已达到最大重试次数', tag: 'CONNECTION');
-        }
-        if (mounted) {
-          setState(() {
-            _isReconnecting = false;
-            _reconnectAttempts = 0; // 重置重连次数
-          });
-        }
-      },
-      maxAttempts: 20,
-      interval: const Duration(seconds: 3),
-      timeout: const Duration(seconds: 5),
-      tag: 'CONNECTION_RECONNECT',
-    );
-  }
-
-  // 手动重连
-  Future<void> _manualReconnect() async {
-    setState(() {
-      _isReconnecting = true;
-      _reconnectAttempts = 0; // 重置重连次数
-    });
-
-    try {
-      final pingError = await widget.apiService.ping();
-      if (mounted) {
-        setState(() {
-          _isConnected = pingError == null;
-          _isReconnecting = false;
-        });
-
-        if (pingError == null) {
-          _isAuthFailure = false; // 重置认证失败标记
-          setState(() {
-            _reconnectAttempts = 0; // 重置重连次数
-          });
-          _showSuccess('重连成功');
-          _refreshFileList();
-          // 重新加载预览流URL（确保URL是最新的）
-          _loadPreviewStreamUrl();
-          // 重新初始化方向状态（确保方向信息是最新的）
-          _initializeOrientationLock();
-          // 重新连接WebSocket通知流
-          _connectToWebSocketNotificationsWithRetry();
-        } else {
-          // 检查是否是认证失败
-          if (pingError.code == ConnectionErrorCode.versionIncompatible ||
-              pingError.code == ConnectionErrorCode.authenticationFailed) {
-            _isAuthFailure = true;
-            _showError(pingError.getUserFriendlyMessage());
-            // 返回登录界面
-            Future.delayed(const Duration(milliseconds: 500), () {
-              if (mounted) {
-                Navigator.of(context).pop();
-              }
-            });
-          } else {
-            _showError(pingError.getUserFriendlyMessage());
-          }
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isReconnecting = false;
-        });
-        final connectionError = ConnectionError.fromException(e);
-        _showError(connectionError.getUserFriendlyMessage());
-      }
-    }
-  }
-
-  // 主动断开连接
-  Future<void> _disconnect() async {
-    try {
-      _logger.log('主动断开连接', tag: 'CONNECTION');
-
-      // 设置跳过本次自动连接标志（用户主动断开后，本次不自动连接）
-      final connectionSettings = ConnectionSettingsService();
-      await connectionSettings.setSkipAutoConnectOnce(true);
-
-      // 停止连接检查定时器
-      _connectionCheckTimer?.cancel();
-      _connectionCheckTimer = null;
-
-      // 停止重连助手
-      _reconnectHelper?.cancel();
-      _reconnectHelper = null;
-
-      // 停止WebSocket重连助手
-      _webSocketReconnectHelper?.cancel();
-      _webSocketReconnectHelper = null;
-
-      // 取消WebSocket订阅
-      _webSocketSubscription?.cancel();
-      _webSocketSubscription = null;
-
-      // 优雅关闭WebSocket连接
-      await widget.apiService.gracefulDisconnect();
-
-      // 清除全局管理器中的ApiService（用户主动断开）
-      ApiServiceManager().setCurrentApiService(null);
-
-      // 更新连接状态
-      if (mounted) {
-        setState(() {
-          _isConnected = false;
-          _isReconnecting = false;
-        });
-      }
-
-      _logger.log('连接已断开', tag: 'CONNECTION');
-
-      // 返回连接页面
-      _returnToConnectionScreen();
-    } catch (e) {
-      _logger.logError('断开连接失败', error: e);
-      // 即使出错也清除全局管理器并返回连接页面
-      ApiServiceManager().setCurrentApiService(null);
-      _returnToConnectionScreen();
-    }
-  }
-
-  // 返回上一页面
-  void _returnToConnectionScreen() {
-    if (mounted) {
-      Navigator.of(context).pop();
     }
   }
 
@@ -1286,16 +1033,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     );
   }
 
-  void _showInfo(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.blue,
-      ),
-    );
-  }
-
   /// 更新预览旋转角度（客户端处理旋转）
   /// 预览旋转角度必须与拍照方向一致，确保预览和拍摄的画面状态一致
   void _updatePreviewRotation() {
@@ -1410,73 +1147,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: AppBar(
-          title: Row(
-            children: [
-              const Text('远程相机控制'),
-              const SizedBox(width: 8),
-              // 连接状态指示器
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: _isConnected ? Colors.green : Colors.red,
-                ),
-              ),
-              // 重连信息显示区域（在绿点右侧）
-              if (_isReconnecting && _reconnectAttempts > 0) ...[
-                const SizedBox(width: 12),
-                Text(
-                  '正在重连... ($_reconnectAttempts/20)',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
-                  ),
-                ),
-              ],
-              if (_isReconnecting) ...[
-                const SizedBox(width: 8),
-                const SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                  ),
-                ),
-              ],
-            ],
-          ),
-          actions: [
-            // 断开连接按钮（右上角第一个）
-            IconButton(
-              icon: const Icon(Icons.link_off),
-              onPressed: _disconnect,
-              tooltip: '断开连接',
-            ),
-            // 重连按钮
-            if (!_isConnected)
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: _isReconnecting ? null : _manualReconnect,
-                tooltip: '重连',
-              ),
-            IconButton(
-              icon: const Icon(Icons.settings),
-              onPressed: _navigateToSettings,
-              tooltip: '设置',
-            ),
-            IconButton(
-              icon: const Icon(Icons.download),
-              onPressed: () => _navigateToDownloadManager(),
-              tooltip: '下载管理',
-            ),
-          ],
-        ),
-      ),
       body: Column(
         children: [
           Expanded(
@@ -1577,6 +1247,64 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                                     ),
                                   ),
                                 ),
+                              // 重连状态指示器
+                              if (!_isConnected || _isReconnecting)
+                                Positioned(
+                                  top: 16,
+                                  left: 16,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: _isReconnecting ? Colors.orange : Colors.red,
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (_isReconnecting)
+                                          const SizedBox(
+                                            width: 12,
+                                            height: 12,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                            ),
+                                          )
+                                        else
+                                          const Icon(
+                                            Icons.link_off,
+                                            color: Colors.white,
+                                            size: 16,
+                                          ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          _isReconnecting 
+                                              ? '重连中 ($_reconnectAttempts/20)' 
+                                              : '已断开',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                        if (!_isConnected && !_isReconnecting) ...[
+                                          const SizedBox(width: 8),
+                                          GestureDetector(
+                                            onTap: _manualReconnect,
+                                            child: const Icon(
+                                              Icons.refresh,
+                                              color: Colors.white,
+                                              size: 16,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ),
                             ],
                           ),
                         ),
@@ -1593,6 +1321,28 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
+                          // 设置按钮
+                          IconButton(
+                            icon: const Icon(Icons.settings),
+                            color: Colors.white,
+                            onPressed: _navigateToSettings,
+                            tooltip: '相机设置',
+                            style: IconButton.styleFrom(
+                              backgroundColor: Colors.grey[700],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // 下载管理按钮
+                          IconButton(
+                            icon: const Icon(Icons.download),
+                            color: Colors.white,
+                            onPressed: _navigateToDownloadManager,
+                            tooltip: '下载管理',
+                            style: IconButton.styleFrom(
+                              backgroundColor: Colors.grey[700],
+                            ),
+                          ),
+                          const SizedBox(width: 16),
                           // 旋转按钮（只在锁定状态时显示）
                           if (_orientationLocked)
                             IconButton(
