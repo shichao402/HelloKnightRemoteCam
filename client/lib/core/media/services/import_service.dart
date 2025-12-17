@@ -292,4 +292,28 @@ class ImportService {
       rethrow;
     }
   }
+
+  /// 仅删除本地文件和缩略图，不删除数据库记录
+  /// 用于将已下载的云端文件退化为 pending 状态
+  Future<void> deleteLocalFileOnly(MediaItem item) async {
+    try {
+      // 删除原文件（仅当文件在媒体目录内时）
+      if (item.localPath.isNotEmpty && item.localPath.startsWith(_mediaDir ?? '')) {
+        final file = File(item.localPath);
+        if (await file.exists()) {
+          await file.delete();
+        }
+      }
+
+      // 删除缩略图
+      if (item.localPath.isNotEmpty) {
+        await _thumbnailService.delete(item.localPath);
+      }
+
+      debugPrint('[ImportService] Deleted local files only: ${item.name}');
+    } catch (e) {
+      debugPrint('[ImportService] Error deleting local files: $e');
+      rethrow;
+    }
+  }
 }

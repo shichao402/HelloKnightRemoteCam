@@ -5,6 +5,7 @@ import '../../core/media/models/media_type.dart';
 
 /// 媒体网格项组件
 /// 支持显示同步状态（Google Photos 风格）
+/// 统一使用本地缩略图（由 ThumbnailService 管理）
 class MediaGridItem extends StatelessWidget {
   final MediaItem item;
   final bool isSelected;
@@ -51,17 +52,24 @@ class MediaGridItem extends StatelessWidget {
   }
 
   Widget _buildThumbnail() {
-    if (item.thumbnailPath != null) {
+    // 优先使用已持久化的缩略图（无论是云端下载的还是本地生成的）
+    if (item.thumbnailPath != null && item.thumbnailPath!.isNotEmpty) {
       final file = File(item.thumbnailPath!);
       return Image.file(
         file,
         fit: BoxFit.cover,
+        cacheWidth: 256, // 限制解码尺寸，节省内存
         errorBuilder: (context, error, stackTrace) => _buildPlaceholder(),
       );
     }
 
-    // 尝试直接显示图片（如果是图片类型）
-    if (item.type == MediaType.photo) {
+    // 云端文件但缩略图还没下载完成
+    if (item.syncStatus == SyncStatus.pending && item.localPath.isEmpty) {
+      return _buildCloudPlaceholder();
+    }
+
+    // 本地文件但缩略图还没生成，尝试直接显示图片
+    if (item.type == MediaType.photo && item.localPath.isNotEmpty) {
       final file = File(item.localPath);
       return Image.file(
         file,
@@ -72,6 +80,31 @@ class MediaGridItem extends StatelessWidget {
     }
 
     return _buildPlaceholder();
+  }
+
+  /// 云端文件占位符（缩略图加载中或失败）
+  Widget _buildCloudPlaceholder() {
+    return Container(
+      color: Colors.grey[200],
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.cloud_queue,
+            size: 32,
+            color: Colors.blue[300],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '云端',
+            style: TextStyle(
+              fontSize: 10,
+              color: Colors.grey[600],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildPlaceholder() {
@@ -119,7 +152,7 @@ class MediaGridItem extends StatelessWidget {
     return Positioned.fill(
       child: Container(
         decoration: BoxDecoration(
-          color: isSelected ? Colors.blue.withOpacity(0.3) : Colors.transparent,
+          color: isSelected ? Colors.blue.withValues(alpha: 0.3) : Colors.transparent,
           border: isSelected
               ? Border.all(color: Colors.blue, width: 3)
               : null,
@@ -133,7 +166,7 @@ class MediaGridItem extends StatelessWidget {
               height: 24,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: isSelected ? Colors.blue : Colors.white.withOpacity(0.8),
+                color: isSelected ? Colors.blue : Colors.white.withValues(alpha: 0.8),
                 border: Border.all(
                   color: isSelected ? Colors.blue : Colors.grey,
                   width: 2,

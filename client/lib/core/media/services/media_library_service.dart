@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../models/media_item.dart';
@@ -9,6 +10,7 @@ import '../repositories/media_repository.dart';
 import '../repositories/album_repository.dart';
 import 'thumbnail_service.dart';
 import 'import_service.dart';
+import '../../../models/file_info.dart';
 
 /// 媒体库统计信息
 class MediaLibraryStats {
@@ -155,11 +157,33 @@ class MediaLibraryService {
   }
 
   /// 删除媒体项
+  /// - 云端文件（pending 状态）：从数据库删除，刷新后重新出现
+  /// - 本地文件有云端来源：删除本地文件，状态退化为 pending（云端文件）
+  /// - 纯本地文件：完全删除
   Future<void> deleteMedia(String id) async {
     _ensureInitialized();
     final item = await _mediaRepository.getById(id);
     if (item != null) {
-      await _importService.deleteMediaFile(item);
+      if (item.syncStatus == SyncStatus.pending) {
+        // 云端文件（未下载）：只从数据库删除，用户可通过刷新重新同步
+        await _mediaRepository.delete(id);
+        debugPrint('[MediaLibraryService] Removed remote file from library: ${item.name}');
+      } else if (item.sourceRef != null && item.sourceRef!.isNotEmpty) {
+        // 已下载的云端文件：删除本地文件，状态退化为 pending
+        await _importService.deleteLocalFileOnly(item);
+        // 更新状态为 pending（云端未下载）
+        final degradedItem = item.copyWith(
+          localPath: '',
+          thumbnailPath: null,
+          syncStatus: SyncStatus.pending,
+        );
+        await _mediaRepository.update(degradedItem);
+        debugPrint('[MediaLibraryService] Degraded to remote file: ${item.name}');
+      } else {
+        // 纯本地文件：完全删除
+        await _importService.deleteMediaFile(item);
+        debugPrint('[MediaLibraryService] Deleted local file: ${item.name}');
+      }
     }
   }
 
@@ -352,6 +376,156 @@ class MediaLibraryService {
   Future<String> getThumbnailCacheSize() async {
     _ensureInitialized();
     return _thumbnailService.getFormattedCacheSize();
+  }
+
+  // ==================== 云端同步 ====================
+
+  /// 同步云端文件到本地媒体库
+  /// - 新文件：添加到数据库并下载缩略图
+  /// - 已存在但无缩略图：补充下载缩略图
+  /// [remoteFiles] 云端文件列表
+  /// [baseUrl] 服务器基础URL，用于下载缩略图
+  /// 返回新增的云端文件数量
+  Future<int> syncRemoteFiles(
+    List<FileInfo> remoteFiles, {
+    String? baseUrl,
+  }) async {
+    _ensureInitialized();
+    
+    if (remoteFiles.isEmpty) {
+      debugPrint('[MediaLibraryService] No remote files to sync');
+      return 0;
+    }
+    
+    debugPrint('[MediaLibraryService] Syncing ${remoteFiles.length} remote files');
+    
+    // 获取本地所有媒体项，建立 sourceRef -> MediaItem 的映射
+    final localMedia = await _mediaRepository.getAll();
+    final Map<String, MediaItem> localBySourceRef = {};
+    final Map<String, MediaItem> localByName = {};
+    
+    for (final m in localMedia) {
+      if (m.sourceRef != null) {
+        localBySourceRef[m.sourceRef!] = m;
+      }
+      localByName[m.name] = m;
+    }
+    
+    int addedCount = 0;
+    int thumbnailUpdatedCount = 0;
+    
+    for (final remoteFile in remoteFiles) {
+      // 检查是否已存在
+      MediaItem? existingItem = localBySourceRef[remoteFile.path] ?? localByName[remoteFile.name];
+      
+      if (existingItem != null) {
+        // 已存在：检查是否需要补充缩略图
+        if (baseUrl != null && (existingItem.thumbnailPath == null || existingItem.thumbnailPath!.isEmpty)) {
+          final thumbnailFile = existingItem.thumbnailPath != null && existingItem.thumbnailPath!.isNotEmpty
+              ? File(existingItem.thumbnailPath!)
+              : null;
+          final thumbnailExists = thumbnailFile != null && await thumbnailFile.exists();
+          
+          if (!thumbnailExists) {
+            // 下载缩略图
+            final typeStr = remoteFile.isVideo ? 'video' : 'image';
+            final thumbnailUrl = '$baseUrl/file/thumbnail?path=${Uri.encodeComponent(remoteFile.path)}&type=$typeStr';
+            final thumbnailPath = await _thumbnailService.downloadAndCache(thumbnailUrl, remoteFile.path);
+            
+            if (thumbnailPath != null) {
+              final updatedItem = existingItem.copyWith(thumbnailPath: thumbnailPath);
+              await _mediaRepository.update(updatedItem);
+              thumbnailUpdatedCount++;
+              debugPrint('[MediaLibraryService] Updated thumbnail for: ${existingItem.name}');
+            }
+          }
+        }
+        continue;
+      }
+      
+      // 新文件：创建云端媒体项（pending 状态）
+      final type = remoteFile.isVideo ? MediaType.video : MediaType.photo;
+      final id = 'remote_${DateTime.now().millisecondsSinceEpoch}_${remoteFile.name.hashCode}';
+      
+      // 下载并持久化缩略图
+      String? thumbnailPath;
+      if (baseUrl != null) {
+        final typeStr = remoteFile.isVideo ? 'video' : 'image';
+        final thumbnailUrl = '$baseUrl/file/thumbnail?path=${Uri.encodeComponent(remoteFile.path)}&type=$typeStr';
+        thumbnailPath = await _thumbnailService.downloadAndCache(thumbnailUrl, remoteFile.path);
+      }
+      
+      final mediaItem = MediaItem(
+        id: id,
+        name: remoteFile.name,
+        localPath: '', // 云端文件没有本地路径
+        type: type,
+        size: remoteFile.size,
+        createdAt: remoteFile.createdTime,
+        modifiedAt: remoteFile.modifiedTime,
+        sourceRef: remoteFile.path, // 远程路径
+        thumbnailPath: thumbnailPath, // 持久化的缩略图路径
+        isStarred: remoteFile.isStarred,
+        syncStatus: SyncStatus.pending, // 标记为待下载
+      );
+      
+      await _mediaRepository.insert(mediaItem);
+      addedCount++;
+      
+      debugPrint('[MediaLibraryService] Added remote file: ${remoteFile.name}, thumbnail: ${thumbnailPath != null}');
+    }
+    
+    debugPrint('[MediaLibraryService] Sync completed, added $addedCount files, updated $thumbnailUpdatedCount thumbnails');
+    return addedCount;
+  }
+
+  /// 清除所有云端文件（pending 状态的文件）
+  /// 断开连接时调用
+  Future<int> clearRemoteFiles() async {
+    _ensureInitialized();
+    
+    final allMedia = await _mediaRepository.getAll();
+    final pendingMedia = allMedia.where((m) => m.syncStatus == SyncStatus.pending).toList();
+    
+    for (final item in pendingMedia) {
+      await _mediaRepository.delete(item.id);
+    }
+    
+    debugPrint('[MediaLibraryService] Cleared ${pendingMedia.length} remote files');
+    return pendingMedia.length;
+  }
+
+  /// 将云端文件标记为已下载（更新为 synced 状态）
+  /// 优先复用已有缩略图，没有时才从本地文件生成
+  Future<void> markAsDownloaded(String mediaId, String localPath) async {
+    _ensureInitialized();
+    
+    final item = await _mediaRepository.getById(mediaId);
+    if (item != null && item.syncStatus == SyncStatus.pending) {
+      String? thumbnailPath = item.thumbnailPath;
+      
+      // 检查已有缩略图是否有效
+      bool hasValidThumbnail = false;
+      if (thumbnailPath != null && thumbnailPath.isNotEmpty) {
+        hasValidThumbnail = await File(thumbnailPath).exists();
+      }
+      
+      // 只有没有有效缩略图时才生成
+      if (!hasValidThumbnail) {
+        thumbnailPath = await _thumbnailService.generate(localPath, item.type);
+        debugPrint('[MediaLibraryService] Generated thumbnail for: ${item.name}');
+      } else {
+        debugPrint('[MediaLibraryService] Reusing existing thumbnail for: ${item.name}');
+      }
+      
+      final updatedItem = item.copyWith(
+        localPath: localPath,
+        thumbnailPath: thumbnailPath,
+        syncStatus: SyncStatus.synced,
+      );
+      await _mediaRepository.update(updatedItem);
+      debugPrint('[MediaLibraryService] Marked as downloaded: ${item.name}');
+    }
   }
 
   // ==================== 清理 ====================

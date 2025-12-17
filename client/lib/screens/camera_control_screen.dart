@@ -795,7 +795,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         if (existingTask.status == DownloadStatus.completed) {
           // 已经下载完成
           if (mounted) {
-            _showDownloadSuccess(file.name, existingTask.localFilePath);
+            _showDownloadSuccess(file.name, existingTask.localFilePath, file.path);
             // 自动刷新文件列表
             _refreshFileList();
           }
@@ -822,7 +822,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           _downloadSubscription?.cancel();
           _downloadSubscription = null;
           if (mounted) {
-            _showDownloadSuccess(file.name, task.localFilePath);
+            _showDownloadSuccess(file.name, task.localFilePath, file.path);
             // 自动刷新文件列表
             _refreshFileList();
           }
@@ -840,11 +840,11 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     }
   }
 
-  Future<void> _showDownloadSuccess(String fileName, String filePath) async {
+  Future<void> _showDownloadSuccess(String fileName, String filePath, String remotePath) async {
     final downloadDir = await _downloadSettings.getDownloadPath();
 
-    // 自动导入到媒体库
-    await _importToMediaLibrary(filePath, fileName);
+    // 自动导入到媒体库（传入远端路径）
+    await _importToMediaLibrary(filePath, fileName, remotePath);
 
     if (!mounted) return;
 
@@ -874,17 +874,31 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   }
 
   /// 将下载的文件导入到媒体库
-  Future<void> _importToMediaLibrary(String filePath, String fileName) async {
+  Future<void> _importToMediaLibrary(String filePath, String fileName, String remotePath) async {
     try {
       final libraryService = MediaLibraryService.instance;
       // 确保媒体库服务已初始化
       await libraryService.init();
       
-      // 导入文件，使用 "phone_camera" 作为来源标识
+      // 先检查是否已经存在（通过远端路径查找）
+      final existingItems = await libraryService.getMedia(MediaFilter());
+      final existingItem = existingItems.where((item) => 
+        item.sourceRef == remotePath || item.name == fileName
+      ).firstOrNull;
+      
+      if (existingItem != null && existingItem.syncStatus == SyncStatus.pending) {
+        // 已存在的云端文件，更新为已下载状态
+        await libraryService.markAsDownloaded(existingItem.id, filePath);
+        _logger.log('云端文件已标记为已下载: $fileName', tag: 'MEDIA_IMPORT');
+        return;
+      }
+      
+      // 新文件：导入并标记为已同步
       // copyFile: false 表示不复制文件，只建立索引（文件已在下载目录）
       final result = await libraryService.importFile(
         filePath,
         sourceId: 'phone_camera',
+        sourceRef: remotePath,  // 使用远端路径
         copyFile: false,
       );
       
@@ -966,7 +980,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         if (existingTask.status == DownloadStatus.completed) {
           // 已经下载完成
           if (mounted) {
-            _showDownloadSuccess(file.name, existingTask.localFilePath);
+            _showDownloadSuccess(file.name, existingTask.localFilePath, file.path);
             // 自动刷新文件列表
             _refreshFileList();
           }
@@ -993,7 +1007,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
           _downloadSubscription?.cancel();
           _downloadSubscription = null;
           if (mounted) {
-            _showDownloadSuccess(file.name, task.localFilePath);
+            _showDownloadSuccess(file.name, task.localFilePath, file.path);
             // 自动刷新文件列表
             _refreshFileList();
           }

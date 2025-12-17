@@ -5,11 +5,14 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:crypto/crypto.dart';
 import 'dart:convert';
+import 'package:video_thumbnail/video_thumbnail.dart';
+import 'package:http/http.dart' as http;
 
 import '../models/media_type.dart';
 
 /// 缩略图服务
-/// 负责生成、缓存和管理媒体文件的缩略图
+/// 负责生成、下载、缓存和管理媒体文件的缩略图
+/// 统一管理本地和远端缩略图，所有缩略图都持久化存储在本地
 class ThumbnailService {
   static ThumbnailService? _instance;
   static ThumbnailService get instance {
@@ -21,6 +24,9 @@ class ThumbnailService {
 
   String? _thumbnailDir;
   final Map<String, String> _cache = {}; // mediaId -> thumbnailPath
+  
+  /// 缩略图最大缓存时间（30天）
+  static const Duration maxCacheAge = Duration(days: 30);
 
   /// 缩略图尺寸
   static const int thumbnailSize = 256;
@@ -30,6 +36,9 @@ class ThumbnailService {
     final appDir = await getApplicationDocumentsDirectory();
     _thumbnailDir = p.join(appDir.path, 'HelloKnightRemoteCam', 'thumbnails');
     await Directory(_thumbnailDir!).create(recursive: true);
+    
+    // 启动时清理过期缩略图
+    _cleanExpiredThumbnails();
   }
 
   /// 获取缩略图目录
@@ -40,7 +49,64 @@ class ThumbnailService {
     return _thumbnailDir!;
   }
 
-  /// 生成缩略图
+  /// 从远端URL下载缩略图并持久化存储
+  /// [remoteUrl] 远端缩略图URL
+  /// [cacheKey] 缓存键（通常是远端路径的hash）
+  /// 返回本地缩略图路径
+  Future<String?> downloadAndCache(String remoteUrl, String cacheKey) async {
+    try {
+      if (_thumbnailDir == null) await init();
+
+      final hash = _generateHash(cacheKey);
+      final thumbnailPath = p.join(_thumbnailDir!, '$hash.jpg');
+
+      // 如果已存在且未过期，直接返回
+      final file = File(thumbnailPath);
+      if (await file.exists()) {
+        final stat = await file.stat();
+        final age = DateTime.now().difference(stat.modified);
+        if (age < maxCacheAge) {
+          return thumbnailPath;
+        }
+      }
+
+      // 下载缩略图
+      debugPrint('[ThumbnailService] Downloading thumbnail: $remoteUrl');
+      final response = await http.get(Uri.parse(remoteUrl)).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => http.Response('Timeout', 408),
+      );
+
+      if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+        await file.writeAsBytes(response.bodyBytes);
+        debugPrint('[ThumbnailService] Thumbnail saved: $thumbnailPath');
+        return thumbnailPath;
+      } else {
+        debugPrint('[ThumbnailService] Failed to download thumbnail: ${response.statusCode}');
+        return null;
+      }
+    } catch (e) {
+      debugPrint('[ThumbnailService] Error downloading thumbnail: $e');
+      return null;
+    }
+  }
+
+  /// 获取缩略图路径（优先使用已缓存的）
+  /// [cacheKey] 缓存键
+  Future<String?> getCachedPath(String cacheKey) async {
+    if (_thumbnailDir == null) await init();
+    
+    final hash = _generateHash(cacheKey);
+    final thumbnailPath = p.join(_thumbnailDir!, '$hash.jpg');
+    
+    final file = File(thumbnailPath);
+    if (await file.exists()) {
+      return thumbnailPath;
+    }
+    return null;
+  }
+
+  /// 生成本地文件的缩略图
   /// 返回缩略图路径
   Future<String?> generate(String mediaPath, MediaType type) async {
     try {
@@ -91,17 +157,30 @@ class ThumbnailService {
   }
 
   /// 生成视频缩略图
-  /// 注意：需要 ffmpeg 或其他视频处理库
-  /// 这里提供一个占位实现，实际项目中可以使用 video_thumbnail 包
   Future<String?> _generateVideoThumbnail(String videoPath, String outputPath) async {
-    // TODO: 实现视频缩略图生成
-    // 可以使用 video_thumbnail 包或 ffmpeg
-    // 目前返回 null，表示无法生成
-    debugPrint('[ThumbnailService] Video thumbnail generation not implemented yet');
-    return null;
+    try {
+      final thumbnailPath = await VideoThumbnail.thumbnailFile(
+        video: videoPath,
+        thumbnailPath: outputPath,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: thumbnailSize,
+        quality: 75,
+      );
+      
+      if (thumbnailPath != null && await File(thumbnailPath).exists()) {
+        debugPrint('[ThumbnailService] Video thumbnail generated: $thumbnailPath');
+        return thumbnailPath;
+      }
+      
+      debugPrint('[ThumbnailService] Video thumbnail generation returned null');
+      return null;
+    } catch (e) {
+      debugPrint('[ThumbnailService] Error generating video thumbnail: $e');
+      return null;
+    }
   }
 
-  /// 获取缩略图路径
+  /// 获取缩略图路径（兼容旧接口）
   Future<String?> get(String mediaId, String mediaPath, MediaType type) async {
     // 先检查缓存
     if (_cache.containsKey(mediaId)) {
@@ -129,9 +208,9 @@ class ThumbnailService {
   }
 
   /// 删除缩略图
-  Future<void> delete(String mediaPath) async {
+  Future<void> delete(String cacheKey) async {
     try {
-      final hash = _generateHash(mediaPath);
+      final hash = _generateHash(cacheKey);
       final thumbnailPath = p.join(thumbnailDir, '$hash.jpg');
       final file = File(thumbnailPath);
       if (await file.exists()) {
@@ -141,6 +220,34 @@ class ThumbnailService {
       _cache.removeWhere((_, path) => path == thumbnailPath);
     } catch (e) {
       debugPrint('[ThumbnailService] Error deleting thumbnail: $e');
+    }
+  }
+
+  /// 清理过期缩略图
+  Future<void> _cleanExpiredThumbnails() async {
+    try {
+      final dir = Directory(thumbnailDir);
+      if (!await dir.exists()) return;
+
+      final now = DateTime.now();
+      int deletedCount = 0;
+
+      await for (final entity in dir.list()) {
+        if (entity is File) {
+          final stat = await entity.stat();
+          final age = now.difference(stat.modified);
+          if (age > maxCacheAge) {
+            await entity.delete();
+            deletedCount++;
+          }
+        }
+      }
+
+      if (deletedCount > 0) {
+        debugPrint('[ThumbnailService] Cleaned $deletedCount expired thumbnails');
+      }
+    } catch (e) {
+      debugPrint('[ThumbnailService] Error cleaning expired thumbnails: $e');
     }
   }
 

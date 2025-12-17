@@ -138,6 +138,11 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
       _connectedHost = apiService?.host;
     });
     
+    // 如果已连接，同步云端文件
+    if (_isRemoteConnected && apiService != null) {
+      _syncRemoteFilesToLibrary(apiService);
+    }
+    
     // 监听连接状态变化
     _connectionSubscription = _apiManager.connectionStateStream.listen((connected) {
       if (mounted) {
@@ -146,8 +151,61 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
           _isRemoteConnected = connected;
           _connectedHost = connected ? apiService?.host : null;
         });
+        
+        // 连接成功时同步云端文件，断开时清除云端文件
+        if (connected && apiService != null) {
+          _syncRemoteFilesToLibrary(apiService);
+        } else if (!connected) {
+          _clearRemoteFilesFromLibrary();
+        }
       }
     });
+  }
+
+  /// 同步云端文件到本地媒体库
+  Future<void> _syncRemoteFilesToLibrary(dynamic apiService) async {
+    try {
+      _logger.log('开始同步云端文件到媒体库...', tag: 'SYNC');
+      
+      // 获取云端文件列表
+      final result = await apiService.getFileList();
+      if (result['success'] != true) {
+        _logger.log('获取云端文件列表失败', tag: 'SYNC');
+        return;
+      }
+      
+      final pictures = result['pictures'] as List<dynamic>? ?? [];
+      final videos = result['videos'] as List<dynamic>? ?? [];
+      
+      // 合并所有文件
+      final allFiles = <dynamic>[...pictures, ...videos];
+      
+      if (allFiles.isEmpty) {
+        _logger.log('云端没有文件', tag: 'SYNC');
+        return;
+      }
+      
+      // 同步到媒体库（传入 baseUrl 以下载缩略图）
+      final addedCount = await _libraryService.syncRemoteFiles(
+        allFiles.cast(),
+        baseUrl: apiService.baseUrl,
+      );
+      
+      _logger.log('同步完成，新增 $addedCount 个云端文件', tag: 'SYNC');
+    } catch (e, stackTrace) {
+      _logger.logError('同步云端文件失败', error: e, stackTrace: stackTrace);
+    }
+  }
+
+  /// 清除媒体库中的云端文件
+  Future<void> _clearRemoteFilesFromLibrary() async {
+    try {
+      _logger.log('清除媒体库中的云端文件...', tag: 'SYNC');
+      final clearedCount = await _libraryService.clearRemoteFiles();
+      _logger.log('已清除 $clearedCount 个云端文件', tag: 'SYNC');
+    } catch (e, stackTrace) {
+      _logger.logError('清除云端文件失败', error: e, stackTrace: stackTrace);
+    }
   }
 
   void _onNavigationChanged(int index) {
