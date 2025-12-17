@@ -1,48 +1,38 @@
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'dart:io';
 
-/// 下载设置服务：管理下载路径等设置
+/// 下载设置服务：管理下载路径
+/// 下载目录作为临时缓存目录，固定在媒体库目录旁边
 class DownloadSettingsService {
-  static const String _keyDownloadPath = 'download_path';
+  String? _cachedDownloadPath;
   
-  /// 获取下载路径（如果未设置，返回默认路径）
+  /// 获取下载路径（固定在媒体库目录旁边的 downloads 文件夹）
+  /// 目录结构：
+  /// ~/Documents/HelloKnightRemoteCam/
+  ///   ├── media/        # 媒体库目录（按日期组织）
+  ///   └── downloads/    # 下载临时目录
   Future<String> getDownloadPath() async {
-    final prefs = await SharedPreferences.getInstance();
-    final customPath = prefs.getString(_keyDownloadPath);
-    
-    if (customPath != null && customPath.isNotEmpty) {
-      return customPath;
+    if (_cachedDownloadPath != null) {
+      return _cachedDownloadPath!;
     }
     
-    // 默认路径：使用系统临时目录下的应用专属子目录
-    // Downloads 目录用于存放用户下载的文件（与更新文件目录区分）
-    final tempDir = await getTemporaryDirectory();
-    return path.join(tempDir.path, 'com.example.remoteCamClient', 'Downloads');
+    final appDir = await getApplicationDocumentsDirectory();
+    final downloadPath = path.join(appDir.path, 'HelloKnightRemoteCam', 'downloads');
+    
+    // 确保目录存在
+    await Directory(downloadPath).create(recursive: true);
+    
+    _cachedDownloadPath = downloadPath;
+    return downloadPath;
   }
   
-  /// 设置下载路径
-  Future<void> setDownloadPath(String downloadPath) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_keyDownloadPath, downloadPath);
+  /// 清除缓存（用于测试或重新初始化）
+  void clearCache() {
+    _cachedDownloadPath = null;
   }
   
-  /// 重置为默认路径
-  Future<String> resetToDefaultPath() async {
-    final tempDir = await getTemporaryDirectory();
-    final defaultPath = path.join(tempDir.path, 'com.example.remoteCamClient', 'Downloads');
-    await setDownloadPath(defaultPath);
-    return defaultPath;
-  }
-  
-  /// 获取默认路径
-  Future<String> getDefaultPath() async {
-    final tempDir = await getTemporaryDirectory();
-    return path.join(tempDir.path, 'com.example.remoteCamClient', 'Downloads');
-  }
-  
-  /// 验证路径是否有效
+  /// 验证路径是否有效（保留用于兼容性）
   Future<bool> validatePath(String downloadPath) async {
     try {
       final dir = Directory(downloadPath);

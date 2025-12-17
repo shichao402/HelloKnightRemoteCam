@@ -2,13 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
 import '../services/logger_service.dart';
-import '../services/download_settings_service.dart';
 import '../services/version_service.dart';
 import '../services/capture_settings_service.dart';
 import '../services/connection_settings_service.dart';
 import 'package:shared/shared.dart';
 import '../services/update_service.dart';
-import 'package:file_picker/file_picker.dart';
+import '../core/media/services/media_library_service.dart';
 
 class ClientSettingsScreen extends StatefulWidget {
   /// 拍摄来源变更回调
@@ -28,7 +27,6 @@ class ClientSettingsScreen extends StatefulWidget {
 
 class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   final ClientLoggerService _logger = ClientLoggerService();
-  final DownloadSettingsService _downloadSettings = DownloadSettingsService();
   final VersionService _versionService = VersionService();
   final UpdateService _updateService = UpdateService();
   final CaptureSettingsService _captureSettings = CaptureSettingsService();
@@ -36,7 +34,6 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   
   bool _debugMode = false;
   bool _isLoading = true;
-  String _downloadPath = '';
   String _version = '加载中...';
   bool _isCheckingUpdate = false;
   UpdateInfo? _updateInfo;
@@ -51,7 +48,6 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
   }
 
   Future<void> _loadSettings() async {
-    final downloadPath = await _downloadSettings.getDownloadPath();
     final version = await _versionService.getVersion();
     final captureSource = await _captureSettings.getCaptureSource();
     final connectionSettings = await _connectionSettings.getConnectionSettings();
@@ -65,7 +61,6 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
 
     setState(() {
       _debugMode = _logger.debugEnabled;
-      _downloadPath = downloadPath;
       _version = version;
       _updateInfo = updateInfo;
       _captureSource = captureSource;
@@ -310,84 +305,6 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
         '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
   }
 
-  Future<void> _copyDownloadPath() async {
-    await Clipboard.setData(ClipboardData(text: _downloadPath));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('下载路径已复制到剪贴板')),
-      );
-    }
-  }
-
-  Future<void> _selectDownloadPath() async {
-    try {
-      String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
-
-      if (selectedDirectory != null && selectedDirectory.isNotEmpty) {
-        // 验证路径
-        final isValid = await _downloadSettings.validatePath(selectedDirectory);
-        if (!isValid) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('选择的路径无效或无法访问')),
-            );
-          }
-          return;
-        }
-
-        // 保存路径
-        await _downloadSettings.setDownloadPath(selectedDirectory);
-        setState(() {
-          _downloadPath = selectedDirectory;
-        });
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('下载路径已更新: $selectedDirectory')),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('选择路径失败: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _resetDownloadPath() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('重置下载路径'),
-        content: const Text('确定要重置为默认下载路径吗？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('重置'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true) {
-      final defaultPath = await _downloadSettings.resetToDefaultPath();
-      setState(() {
-        _downloadPath = defaultPath;
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已重置为默认路径: $defaultPath')),
-        );
-      }
-    }
-  }
-
   Future<void> _checkForUpdate() async {
     // 确保 URL 列表已初始化（从 VERSION.yaml 读取）
     await _updateService.initializeUpdateUrls();
@@ -583,6 +500,47 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
     );
   }
 
+  /// 重建媒体库数据库
+  Future<void> _rebuildMediaLibrary() async {
+    // 先确认
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('重建媒体库'),
+        content: const Text(
+          '此操作将清空媒体库数据库，并重新扫描媒体库目录中的所有文件。\n\n'
+          '注意：\n'
+          '• 文件本身不会被删除\n'
+          '• 星标、标签等信息会丢失\n'
+          '• 与服务器的关联需要重新建立\n\n'
+          '确定要继续吗？',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('重建'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    // 显示进度对话框
+    if (!mounted) return;
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _RebuildProgressDialog(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -648,10 +606,11 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                     onTap: _viewLogFiles,
                   ),
                 const Divider(),
+                // 媒体库设置
                 const Padding(
                   padding: EdgeInsets.all(16),
                   child: Text(
-                    '下载设置',
+                    '媒体库',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -659,35 +618,11 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                   ),
                 ),
                 ListTile(
-                  leading: const Icon(Icons.folder),
-                  title: const Text('下载保存路径'),
-                  subtitle: Text(
-                    _downloadPath,
-                    style: const TextStyle(fontSize: 12),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.folder_open),
-                        onPressed: () => _selectDownloadPath(),
-                        tooltip: '选择路径',
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.copy),
-                        onPressed: () => _copyDownloadPath(),
-                        tooltip: '复制路径',
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.refresh),
-                        onPressed: () => _resetDownloadPath(),
-                        tooltip: '重置为默认',
-                      ),
-                    ],
-                  ),
-                  onTap: () => _selectDownloadPath(),
+                  leading: const Icon(Icons.refresh),
+                  title: const Text('重建媒体库'),
+                  subtitle: const Text('清空数据库并重新扫描本地文件'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _rebuildMediaLibrary,
                 ),
                 const Divider(),
                 const Padding(
@@ -795,6 +730,108 @@ class _ClientSettingsScreenState extends State<ClientSettingsScreen> {
                 const SizedBox(height: 16),
               ],
             ),
+    );
+  }
+}
+
+/// 重建进度对话框
+class _RebuildProgressDialog extends StatefulWidget {
+  @override
+  State<_RebuildProgressDialog> createState() => _RebuildProgressDialogState();
+}
+
+class _RebuildProgressDialogState extends State<_RebuildProgressDialog> {
+  bool _isRebuilding = true;
+  int _current = 0;
+  int _total = 0;
+  String _currentFile = '';
+  RebuildResult? _result;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _startRebuild();
+  }
+
+  Future<void> _startRebuild() async {
+    try {
+      final libraryService = MediaLibraryService.instance;
+      await libraryService.init();
+      
+      final result = await libraryService.rebuildDatabase(
+        onProgress: (current, total, fileName) {
+          if (mounted) {
+            setState(() {
+              _current = current;
+              _total = total;
+              _currentFile = fileName;
+            });
+          }
+        },
+      );
+      
+      if (mounted) {
+        setState(() {
+          _isRebuilding = false;
+          _result = result;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isRebuilding = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(_isRebuilding ? '正在重建媒体库...' : '重建完成'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_isRebuilding) ...[
+            LinearProgressIndicator(
+              value: _total > 0 ? _current / _total : null,
+            ),
+            const SizedBox(height: 16),
+            Text('进度: $_current / $_total'),
+            const SizedBox(height: 8),
+            Text(
+              '当前文件: $_currentFile',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ] else if (_error != null) ...[
+            const Icon(Icons.error, color: Colors.red, size: 48),
+            const SizedBox(height: 16),
+            Text('重建失败: $_error'),
+          ] else if (_result != null) ...[
+            const Icon(Icons.check_circle, color: Colors.green, size: 48),
+            const SizedBox(height: 16),
+            Text('扫描文件: ${_result!.scannedCount}'),
+            Text('成功导入: ${_result!.importedCount}'),
+            if (_result!.failedCount > 0)
+              Text(
+                '导入失败: ${_result!.failedCount}',
+                style: const TextStyle(color: Colors.orange),
+              ),
+          ],
+        ],
+      ),
+      actions: [
+        if (!_isRebuilding)
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+      ],
     );
   }
 }

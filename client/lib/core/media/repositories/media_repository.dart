@@ -36,6 +36,11 @@ class MediaRepository {
     }
   }
 
+  /// 清空所有媒体项（用于重建数据库）
+  Future<void> clearAll() async {
+    await _db.clearAllMediaItems();
+  }
+
   /// 获取单个媒体项
   Future<MediaItem?> getById(String id) => _db.getMediaItem(id);
 

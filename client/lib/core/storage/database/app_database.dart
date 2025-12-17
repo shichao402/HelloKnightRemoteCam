@@ -161,6 +161,11 @@ class AppDatabase extends _$AppDatabase {
     return count;
   }
 
+  /// 清空所有媒体项（用于重建数据库）
+  Future<void> clearAllMediaItems() async {
+    await delete(mediaItems).go();
+  }
+
   /// 按来源获取媒体项
   Future<List<models.MediaItem>> getMediaItemsBySource(String sourceId) async {
     final rows = await (select(mediaItems)..where((t) => t.sourceId.equals(sourceId))).get();

@@ -15,7 +15,6 @@ import 'library/library_screen.dart';
 import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
-import '../models/connection_error.dart';
 import '../core/core.dart';
 
 class CameraControlScreen extends StatefulWidget {
@@ -42,10 +41,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   StreamSubscription<ws.ConnectionStateChange>? _connectionStateSubscription;
   StreamSubscription? _webSocketSubscription; // WebSocket通知消息订阅
   final ClientLoggerService _logger = ClientLoggerService();
-  
-  // 当前连接状态（从 WebSocketConnection 同步）
-  ws.ConnectionState _connectionState = ws.ConnectionState.disconnected;
-  int _reconnectAttempts = 0;
 
   // 设备方向（0=竖屏, 90=横屏右转, 180=倒置, 270=横屏左转）
   // 使用ValueNotifier，只更新预览部分，不影响文件列表
@@ -138,9 +133,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     _initializeOrientationLock();
     // 异步获取预览流URL（包含版本号）
     _loadPreviewStreamUrl();
-    
-    // 初始化连接状态
-    _connectionState = widget.apiService.connectionState;
   }
   
   /// 开始监听连接状态变化
@@ -154,63 +146,19 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
         
         _logger.log('连接状态变化: $oldState -> $newState', tag: 'CONNECTION');
         
-        setState(() {
-          _connectionState = newState;
-          // 更新重连次数
-          if (stateChange.data != null && stateChange.data!['attempt'] != null) {
-            _reconnectAttempts = stateChange.data!['attempt'] as int;
-          }
-        });
-        
-        // 处理状态变化
-        _handleConnectionStateChange(oldState, newState, stateChange.error);
+        // 连接恢复后刷新数据
+        if (newState == ws.ConnectionState.registered && 
+            (oldState == ws.ConnectionState.disconnected || 
+             oldState == ws.ConnectionState.reconnecting ||
+             oldState == ws.ConnectionState.connected)) {
+          _logger.log('连接已恢复，刷新数据', tag: 'CONNECTION');
+          _onConnectionRestored();
+        }
       },
       onError: (error) {
         _logger.logError('连接状态流错误', error: error);
       },
     );
-  }
-  
-  /// 处理连接状态变化
-  void _handleConnectionStateChange(
-    ws.ConnectionState oldState, 
-    ws.ConnectionState newState, 
-    ConnectionError? error,
-  ) {
-    // 从断开/重连状态恢复到已注册状态
-    if (newState == ws.ConnectionState.registered && 
-        (oldState == ws.ConnectionState.disconnected || 
-         oldState == ws.ConnectionState.reconnecting ||
-         oldState == ws.ConnectionState.connected)) {
-      _logger.log('连接已恢复，刷新数据', tag: 'CONNECTION');
-      _onConnectionRestored();
-    }
-    
-    // 认证失败，返回登录界面
-    if (error != null && _isAuthFailureError(error)) {
-      _logger.log('认证失败: ${error.message}', tag: 'CONNECTION');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(error.getUserFriendlyMessage()),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 8),
-          ),
-        );
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (mounted) {
-            Navigator.of(context).pop();
-          }
-        });
-      }
-    }
-  }
-  
-  /// 检查是否是认证失败错误
-  bool _isAuthFailureError(ConnectionError error) {
-    return error.code == ConnectionErrorCode.versionIncompatible ||
-           error.code == ConnectionErrorCode.authenticationFailed ||
-           error.code == ConnectionErrorCode.serverVersionTooLow;
   }
   
   /// 连接恢复后的处理
@@ -222,31 +170,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
     _initializeOrientationLock();
     // 重新连接WebSocket通知流
     _connectToWebSocketNotifications();
-  }
-  
-  /// 是否已连接（connected 或 registered 状态）
-  bool get _isConnected => 
-      _connectionState == ws.ConnectionState.connected ||
-      _connectionState == ws.ConnectionState.registered;
-  
-  /// 是否正在重连
-  bool get _isReconnecting => _connectionState == ws.ConnectionState.reconnecting;
-  
-  /// 手动触发重连
-  Future<void> _manualReconnect() async {
-    _logger.log('手动触发重连', tag: 'CONNECTION');
-    try {
-      // 调用 ApiService 的连接方法，它会触发 WebSocketConnection 的重连
-      await widget.apiService.connectWebSocket();
-      if (mounted) {
-        _showSuccess('重连成功');
-      }
-    } catch (e) {
-      if (mounted) {
-        final error = ConnectionError.fromException(e);
-        _showError(error.getUserFriendlyMessage());
-      }
-    }
   }
 
   /// 加载预览流URL（包含客户端版本号）
@@ -433,7 +356,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
 
   /// 连接到WebSocket通知流（监听服务器推送的通知）
   Future<void> _connectToWebSocketNotifications() async {
-    if (!mounted || !_isConnected) return;
+    if (!mounted || !widget.apiService.isWebSocketConnected) return;
 
     try {
       // 确保ApiService的WebSocket已连接
@@ -452,11 +375,11 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       _webSocketSubscription = notificationStream.listen(
         (notification) {
           _logger.log('收到WebSocket通知原始数据: $notification', tag: 'WEBSOCKET');
-          _logger.log('当前连接状态: mounted=$mounted, _isConnected=$_isConnected',
+          _logger.log('当前连接状态: mounted=$mounted, isConnected=${widget.apiService.isWebSocketConnected}',
               tag: 'WEBSOCKET');
 
-          if (!mounted || !_isConnected) {
-            _logger.log('跳过通知处理: mounted=$mounted, _isConnected=$_isConnected',
+          if (!mounted || !widget.apiService.isWebSocketConnected) {
+            _logger.log('跳过通知处理: mounted=$mounted, isConnected=${widget.apiService.isWebSocketConnected}',
                 tag: 'WEBSOCKET');
             return;
           }
@@ -874,6 +797,7 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
   }
 
   /// 将下载的文件导入到媒体库
+  /// 文件会被复制到媒体库目录（按日期组织），与本地导入的文件存储方式一致
   Future<void> _importToMediaLibrary(String filePath, String fileName, String remotePath) async {
     try {
       final libraryService = MediaLibraryService.instance;
@@ -887,19 +811,19 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
       ).firstOrNull;
       
       if (existingItem != null && existingItem.syncStatus == SyncStatus.pending) {
-        // 已存在的云端文件，更新为已下载状态
-        await libraryService.markAsDownloaded(existingItem.id, filePath);
-        _logger.log('云端文件已标记为已下载: $fileName', tag: 'MEDIA_IMPORT');
+        // 已存在的云端文件，复制到媒体库目录并更新状态
+        await libraryService.markAsDownloadedAndCopy(existingItem.id, filePath);
+        _logger.log('云端文件已复制到媒体库: $fileName', tag: 'MEDIA_IMPORT');
         return;
       }
       
-      // 新文件：导入并标记为已同步
-      // copyFile: false 表示不复制文件，只建立索引（文件已在下载目录）
+      // 新文件：导入并复制到媒体库目录（按日期组织）
+      // copyFile: true 表示复制文件到媒体库目录
       final result = await libraryService.importFile(
         filePath,
         sourceId: 'phone_camera',
         sourceRef: remotePath,  // 使用远端路径
-        copyFile: false,
+        copyFile: true,
       );
       
       if (result.success && result.mediaItem != null) {
@@ -1257,64 +1181,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                                             fontWeight: FontWeight.bold,
                                           ),
                                         ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              // 重连状态指示器
-                              if (!_isConnected || _isReconnecting)
-                                Positioned(
-                                  top: 16,
-                                  left: 16,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: _isReconnecting ? Colors.orange : Colors.red,
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        if (_isReconnecting)
-                                          const SizedBox(
-                                            width: 12,
-                                            height: 12,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                            ),
-                                          )
-                                        else
-                                          const Icon(
-                                            Icons.link_off,
-                                            color: Colors.white,
-                                            size: 16,
-                                          ),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          _isReconnecting 
-                                              ? '重连中 ($_reconnectAttempts/20)' 
-                                              : '已断开',
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                        if (!_isConnected && !_isReconnecting) ...[
-                                          const SizedBox(width: 8),
-                                          GestureDetector(
-                                            onTap: _manualReconnect,
-                                            child: const Icon(
-                                              Icons.refresh,
-                                              color: Colors.white,
-                                              size: 16,
-                                            ),
-                                          ),
-                                        ],
                                       ],
                                     ),
                                   ),

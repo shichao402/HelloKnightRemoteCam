@@ -717,7 +717,7 @@ class WebSocketConnection {
     _reconnectAttempts++;
     _logger.log('尝试重连 (第 $_reconnectAttempts 次，最多 $_maxReconnectAttempts 次)', tag: 'RECONNECT');
     
-    // 广播重连尝试事件
+    // 广播重连尝试事件（保持 reconnecting 状态，只更新尝试次数）
     _stateController.add(ConnectionStateChange(
       oldState: ConnectionState.reconnecting,
       newState: ConnectionState.reconnecting,
@@ -725,11 +725,8 @@ class WebSocketConnection {
     ));
     
     try {
-      // 重置状态以便重新连接
-      _state = ConnectionState.disconnected;
-      
-      // 尝试连接
-      final error = await connect();
+      // 尝试连接（内部连接，不改变外部状态）
+      final error = await _connectInternal();
       
       if (error == null) {
         // 连接成功
@@ -769,8 +766,7 @@ class WebSocketConnection {
         return;
       }
       
-      // 继续重连
-      _state = ConnectionState.reconnecting;
+      // 继续重连（保持 reconnecting 状态）
       _scheduleReconnect();
       
     } catch (e) {
@@ -787,6 +783,35 @@ class WebSocketConnection {
       
       // 继续重连
       _scheduleReconnect();
+    }
+  }
+  
+  /// 内部连接方法（用于重连，不改变外部状态）
+  Future<ConnectionError?> _connectInternal() async {
+    _lastError = null;
+
+    try {
+      // 1. 认证预检查
+      final precheckError = await _authenticatePrecheck();
+      if (precheckError != null) {
+        _setError(precheckError);
+        return precheckError;
+      }
+
+      // 2. 建立WebSocket连接
+      final wsError = await _connectWebSocket();
+      if (wsError != null) {
+        _setError(wsError);
+        return wsError;
+      }
+
+      // 连接成功，状态已在 _handleConnectedNotification 中更新
+      return null;
+    } catch (e, stackTrace) {
+      _logger.logError('连接失败', error: e, stackTrace: stackTrace);
+      final error = ConnectionError.fromException(e);
+      _setError(error);
+      return error;
     }
   }
 

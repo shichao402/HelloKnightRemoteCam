@@ -399,16 +399,20 @@ class MediaLibraryService {
     
     debugPrint('[MediaLibraryService] Syncing ${remoteFiles.length} remote files');
     
-    // 获取本地所有媒体项，建立 sourceRef -> MediaItem 的映射
+    // 获取本地所有媒体项，建立索引
     final localMedia = await _mediaRepository.getAll();
+    // sourceRef（远程路径）-> MediaItem 的映射
     final Map<String, MediaItem> localBySourceRef = {};
-    final Map<String, MediaItem> localByName = {};
+    // 文件名+大小 -> MediaItem 的映射（用于数据库重建后的匹配）
+    final Map<String, MediaItem> localByNameAndSize = {};
     
     for (final m in localMedia) {
       if (m.sourceRef != null) {
         localBySourceRef[m.sourceRef!] = m;
       }
-      localByName[m.name] = m;
+      // 使用文件名+大小作为组合键，避免单纯文件名重复的问题
+      final nameAndSizeKey = '${m.name}_${m.size}';
+      localByNameAndSize[nameAndSizeKey] = m;
     }
     
     int addedCount = 0;
@@ -416,10 +420,24 @@ class MediaLibraryService {
     
     for (final remoteFile in remoteFiles) {
       // 检查是否已存在
-      MediaItem? existingItem = localBySourceRef[remoteFile.path] ?? localByName[remoteFile.name];
+      // 优先通过 sourceRef（远程路径）匹配
+      // 其次通过 文件名+文件大小 匹配（处理数据库重建后的情况）
+      final nameAndSizeKey = '${remoteFile.name}_${remoteFile.size}';
+      MediaItem? existingItem = localBySourceRef[remoteFile.path] ?? localByNameAndSize[nameAndSizeKey];
       
       if (existingItem != null) {
-        // 已存在：检查是否需要补充缩略图
+        bool needsUpdate = false;
+        MediaItem updatedItem = existingItem;
+        
+        // 如果是通过文件名+大小匹配的（sourceRef 不是远程路径），更新 sourceRef
+        // 这处理了数据库重建后重新连接服务器的情况
+        if (existingItem.sourceRef != remoteFile.path) {
+          updatedItem = updatedItem.copyWith(sourceRef: remoteFile.path);
+          needsUpdate = true;
+          debugPrint('[MediaLibraryService] Updated sourceRef for: ${existingItem.name} (matched by name+size)');
+        }
+        
+        // 检查是否需要补充缩略图
         if (baseUrl != null && (existingItem.thumbnailPath == null || existingItem.thumbnailPath!.isEmpty)) {
           final thumbnailFile = existingItem.thumbnailPath != null && existingItem.thumbnailPath!.isNotEmpty
               ? File(existingItem.thumbnailPath!)
@@ -433,13 +451,19 @@ class MediaLibraryService {
             final thumbnailPath = await _thumbnailService.downloadAndCache(thumbnailUrl, remoteFile.path);
             
             if (thumbnailPath != null) {
-              final updatedItem = existingItem.copyWith(thumbnailPath: thumbnailPath);
-              await _mediaRepository.update(updatedItem);
+              updatedItem = updatedItem.copyWith(thumbnailPath: thumbnailPath);
+              needsUpdate = true;
               thumbnailUpdatedCount++;
               debugPrint('[MediaLibraryService] Updated thumbnail for: ${existingItem.name}');
             }
           }
         }
+        
+        // 如果有更新，保存到数据库
+        if (needsUpdate) {
+          await _mediaRepository.update(updatedItem);
+        }
+        
         continue;
       }
       
@@ -497,6 +521,7 @@ class MediaLibraryService {
 
   /// 将云端文件标记为已下载（更新为 synced 状态）
   /// 优先复用已有缩略图，没有时才从本地文件生成
+  /// 注意：此方法不会复制文件，文件保留在原位置
   Future<void> markAsDownloaded(String mediaId, String localPath) async {
     _ensureInitialized();
     
@@ -528,6 +553,138 @@ class MediaLibraryService {
     }
   }
 
+  /// 将云端文件标记为已下载，并复制到媒体库目录（按日期组织）
+  /// 这样可以与本地导入的文件存储方式保持一致
+  Future<void> markAsDownloadedAndCopy(String mediaId, String sourcePath) async {
+    _ensureInitialized();
+    
+    final item = await _mediaRepository.getById(mediaId);
+    if (item != null && item.syncStatus == SyncStatus.pending) {
+      // 复制文件到媒体库目录
+      final targetPath = await _importService.copyToMediaDir(sourcePath, item.type, item.createdAt);
+      
+      String? thumbnailPath = item.thumbnailPath;
+      
+      // 检查已有缩略图是否有效
+      bool hasValidThumbnail = false;
+      if (thumbnailPath != null && thumbnailPath.isNotEmpty) {
+        hasValidThumbnail = await File(thumbnailPath).exists();
+      }
+      
+      // 只有没有有效缩略图时才生成
+      if (!hasValidThumbnail) {
+        thumbnailPath = await _thumbnailService.generate(targetPath, item.type);
+        debugPrint('[MediaLibraryService] Generated thumbnail for: ${item.name}');
+      } else {
+        debugPrint('[MediaLibraryService] Reusing existing thumbnail for: ${item.name}');
+      }
+      
+      final updatedItem = item.copyWith(
+        localPath: targetPath,
+        thumbnailPath: thumbnailPath,
+        syncStatus: SyncStatus.synced,
+      );
+      await _mediaRepository.update(updatedItem);
+      debugPrint('[MediaLibraryService] Copied and marked as downloaded: ${item.name} -> $targetPath');
+    }
+  }
+
+  // ==================== 重建 ====================
+
+  /// 重建媒体库数据库
+  /// 清空数据库，重新扫描媒体库目录中的所有文件
+  /// [onProgress] 进度回调，参数为 (已处理数量, 总数量, 当前文件名)
+  Future<RebuildResult> rebuildDatabase({
+    void Function(int current, int total, String fileName)? onProgress,
+  }) async {
+    _ensureInitialized();
+    
+    debugPrint('[MediaLibraryService] Starting database rebuild...');
+    
+    // 1. 清空数据库中的所有媒体项
+    await _importService.init();
+    final mediaDir = _importService.mediaDirectory;
+    if (mediaDir == null) {
+      return RebuildResult(success: false, error: '媒体库目录未初始化');
+    }
+    
+    // 清空数据库
+    await _mediaRepository.clearAll();
+    debugPrint('[MediaLibraryService] Database cleared');
+    
+    // 2. 扫描媒体库目录
+    final dir = Directory(mediaDir);
+    if (!await dir.exists()) {
+      return RebuildResult(success: true, scannedCount: 0, importedCount: 0);
+    }
+    
+    // 收集所有媒体文件
+    final files = <File>[];
+    await for (final entity in dir.list(recursive: true)) {
+      if (entity is File) {
+        final ext = entity.path.split('.').last.toLowerCase();
+        if (_isSupportedExtension(ext)) {
+          files.add(entity);
+        }
+      }
+    }
+    
+    debugPrint('[MediaLibraryService] Found ${files.length} media files to import');
+    
+    // 3. 逐个导入文件
+    int importedCount = 0;
+    int failedCount = 0;
+    
+    for (int i = 0; i < files.length; i++) {
+      final file = files[i];
+      final fileName = file.path.split('/').last;
+      
+      onProgress?.call(i + 1, files.length, fileName);
+      
+      try {
+        // 导入文件，不复制（文件已在媒体库目录中）
+        final result = await _importService.importFile(
+          file.path,
+          copyFile: false,
+        );
+        
+        if (result.success) {
+          importedCount++;
+        } else {
+          failedCount++;
+          debugPrint('[MediaLibraryService] Failed to import: $fileName, error: ${result.error}');
+        }
+      } catch (e) {
+        failedCount++;
+        debugPrint('[MediaLibraryService] Error importing: $fileName, error: $e');
+      }
+    }
+    
+    // 4. 手动刷新媒体流（因为 watchAll 可能不会立即触发）
+    final allMedia = await _mediaRepository.getAll();
+    _mediaStreamController.add(allMedia);
+    
+    debugPrint('[MediaLibraryService] Rebuild completed: scanned=${files.length}, imported=$importedCount, failed=$failedCount');
+    
+    return RebuildResult(
+      success: true,
+      scannedCount: files.length,
+      importedCount: importedCount,
+      failedCount: failedCount,
+    );
+  }
+  
+  /// 检查是否是支持的媒体文件扩展名
+  bool _isSupportedExtension(String ext) {
+    const supportedExtensions = {
+      // 图片
+      'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'bmp', 'tiff', 'tif',
+      // 视频
+      'mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v', '3gp', 'wmv', 'flv',
+    };
+    return supportedExtensions.contains(ext.toLowerCase());
+  }
+
   // ==================== 清理 ====================
 
   /// 释放资源
@@ -535,4 +692,21 @@ class MediaLibraryService {
     _mediaStreamController.close();
     _albumStreamController.close();
   }
+}
+
+/// 重建结果
+class RebuildResult {
+  final bool success;
+  final String? error;
+  final int scannedCount;
+  final int importedCount;
+  final int failedCount;
+
+  RebuildResult({
+    required this.success,
+    this.error,
+    this.scannedCount = 0,
+    this.importedCount = 0,
+    this.failedCount = 0,
+  });
 }

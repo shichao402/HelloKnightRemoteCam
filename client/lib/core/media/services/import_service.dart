@@ -73,6 +73,9 @@ class ImportService {
     return _mediaDir!;
   }
 
+  /// 获取媒体存储目录（可空，用于检查是否已初始化）
+  String? get mediaDirectory => _mediaDir;
+
   /// 导入单个文件
   /// [sourcePath] 源文件路径
   /// [sourceId] 数据源ID（可选）
@@ -110,7 +113,7 @@ class ImportService {
       // 确定目标路径
       String localPath;
       if (copyFile) {
-        localPath = await _copyToMediaDir(sourceFile, type, stat.modified);
+        localPath = await _copyToMediaDirInternal(sourceFile, type, stat.modified);
       } else {
         localPath = sourcePath;
       }
@@ -215,8 +218,24 @@ class ImportService {
     yield* importFiles(files, sourceId: sourceId, copyFile: copyFile);
   }
 
-  /// 复制文件到媒体目录
-  Future<String> _copyToMediaDir(File sourceFile, MediaType type, DateTime date) async {
+  /// 复制文件到媒体目录（公开方法，供外部调用）
+  /// [sourcePath] 源文件路径
+  /// [type] 媒体类型
+  /// [date] 文件日期（用于按日期组织目录）
+  /// 返回目标文件路径
+  Future<String> copyToMediaDir(String sourcePath, MediaType type, DateTime date) async {
+    if (_mediaDir == null) await init();
+    
+    final sourceFile = File(sourcePath);
+    if (!await sourceFile.exists()) {
+      throw Exception('源文件不存在: $sourcePath');
+    }
+    
+    return _copyToMediaDirInternal(sourceFile, type, date);
+  }
+
+  /// 内部复制文件到媒体目录
+  Future<String> _copyToMediaDirInternal(File sourceFile, MediaType type, DateTime date) async {
     // 按日期组织目录结构
     final year = date.year.toString();
     final month = date.month.toString().padLeft(2, '0');

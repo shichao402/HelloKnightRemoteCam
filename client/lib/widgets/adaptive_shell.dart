@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/api_service_manager.dart';
+import '../services/websocket_connection.dart' as ws;
 import '../services/logger_service.dart';
 import '../services/capture_settings_service.dart';
 import '../services/update_service.dart';
@@ -35,9 +36,15 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
   bool _isRemoteConnected = false;
   String? _connectedHost;
   StreamSubscription? _connectionSubscription;
+  StreamSubscription<ws.ConnectionStateChange>? _detailedConnectionSubscription;
   CaptureSource _captureSource = CaptureSource.remoteCamera;
   bool _hasUpdate = false;
   Timer? _updateCheckTimer;
+  
+  // 详细连接状态
+  ws.ConnectionState _connectionState = ws.ConnectionState.disconnected;
+  int _reconnectAttempts = 0;
+  int _maxReconnectAttempts = 20;
   
   // 媒体库服务
   late final MediaLibraryService _libraryService;
@@ -55,6 +62,7 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
   @override
   void dispose() {
     _connectionSubscription?.cancel();
+    _detailedConnectionSubscription?.cancel();
     _updateCheckTimer?.cancel();
     super.dispose();
   }
@@ -134,32 +142,73 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
     // 检查当前连接状态
     final apiService = _apiManager.getCurrentApiService();
     setState(() {
-      _isRemoteConnected = apiService != null;
+      _isRemoteConnected = apiService != null && apiService.isWebSocketConnected;
       _connectedHost = apiService?.host;
+      _connectionState = _apiManager.connectionState ?? ws.ConnectionState.disconnected;
     });
     
-    // 如果已连接，同步云端文件
-    if (_isRemoteConnected && apiService != null) {
-      _syncRemoteFilesToLibrary(apiService);
+    // 如果已连接，同步云端文件并监听详细状态
+    if (apiService != null) {
+      _startListeningDetailedConnectionState(apiService);
+      if (_isRemoteConnected) {
+        _syncRemoteFilesToLibrary(apiService);
+      }
     }
     
-    // 监听连接状态变化
+    // 监听连接状态变化（ApiService 实例的变化）
     _connectionSubscription = _apiManager.connectionStateStream.listen((connected) {
       if (mounted) {
         final apiService = _apiManager.getCurrentApiService();
+        
+        // 取消之前的详细状态监听
+        _detailedConnectionSubscription?.cancel();
+        _detailedConnectionSubscription = null;
+        
         setState(() {
           _isRemoteConnected = connected;
           _connectedHost = connected ? apiService?.host : null;
+          _connectionState = connected ? ws.ConnectionState.registered : ws.ConnectionState.disconnected;
+          _reconnectAttempts = 0;
         });
         
-        // 连接成功时同步云端文件，断开时清除云端文件
+        // 连接成功时同步云端文件并监听详细状态
         if (connected && apiService != null) {
+          _startListeningDetailedConnectionState(apiService);
           _syncRemoteFilesToLibrary(apiService);
         } else if (!connected) {
           _clearRemoteFilesFromLibrary();
         }
       }
     });
+  }
+  
+  /// 开始监听详细的 WebSocket 连接状态
+  void _startListeningDetailedConnectionState(dynamic apiService) {
+    _detailedConnectionSubscription?.cancel();
+    _detailedConnectionSubscription = apiService.connectionStateStream.listen(
+      (ws.ConnectionStateChange stateChange) {
+        if (!mounted) return;
+        
+        final newState = stateChange.newState;
+        _logger.log('详细连接状态变化: ${stateChange.oldState} -> $newState', tag: 'SHELL');
+        
+        setState(() {
+          _connectionState = newState;
+          
+          // 更新重连次数
+          if (stateChange.data != null && stateChange.data!['attempt'] != null) {
+            _reconnectAttempts = stateChange.data!['attempt'] as int;
+          }
+          if (stateChange.data != null && stateChange.data!['maxAttempts'] != null) {
+            _maxReconnectAttempts = stateChange.data!['maxAttempts'] as int;
+          }
+          
+          // 更新连接状态
+          _isRemoteConnected = newState == ws.ConnectionState.connected || 
+                               newState == ws.ConnectionState.registered;
+        });
+      },
+    );
   }
 
   /// 同步云端文件到本地媒体库
@@ -458,85 +507,136 @@ class _AdaptiveShellState extends State<AdaptiveShell> {
 
   /// 桌面端导航栏底部的连接状态指示器
   Widget _buildConnectionIndicator() {
+    final isReconnecting = _connectionState == ws.ConnectionState.reconnecting;
+    final statusColor = _isRemoteConnected 
+        ? Colors.green 
+        : (isReconnecting ? Colors.orange : Colors.grey);
+    
     return GestureDetector(
       onTap: _isRemoteConnected ? _disconnect : _openConnectionDialog,
       child: Tooltip(
-        message: _isRemoteConnected 
-            ? '已连接 $_connectedHost\n点击断开' 
-            : '未连接\n点击连接',
+        message: _getConnectionTooltip(),
         child: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: _isRemoteConnected 
-                ? Colors.green.withOpacity(0.1) 
-                : Colors.grey.withOpacity(0.1),
+            color: statusColor.withOpacity(0.1),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                _isRemoteConnected ? Icons.link : Icons.link_off,
-                color: _isRemoteConnected ? Colors.green : Colors.grey,
-                size: 24,
-              ),
-              const SizedBox(height: 4),
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: _isRemoteConnected ? Colors.green : Colors.grey,
+              if (isReconnecting)
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.orange),
+                  ),
+                )
+              else
+                Icon(
+                  _isRemoteConnected ? Icons.link : Icons.link_off,
+                  color: statusColor,
+                  size: 24,
                 ),
-              ),
+              const SizedBox(height: 4),
+              if (isReconnecting)
+                Text(
+                  '$_reconnectAttempts/$_maxReconnectAttempts',
+                  style: const TextStyle(fontSize: 10, color: Colors.orange),
+                )
+              else
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: statusColor,
+                  ),
+                ),
             ],
           ),
         ),
       ),
     );
   }
+  
+  /// 获取连接状态提示文字
+  String _getConnectionTooltip() {
+    if (_isRemoteConnected) {
+      return '已连接 $_connectedHost\n点击断开';
+    } else if (_connectionState == ws.ConnectionState.reconnecting) {
+      return '正在重连 ($_reconnectAttempts/$_maxReconnectAttempts)...';
+    } else {
+      return '未连接\n点击连接';
+    }
+  }
 
   /// 移动端紧凑连接状态条
   Widget _buildMobileConnectionBar() {
+    final isReconnecting = _connectionState == ws.ConnectionState.reconnecting;
+    final statusColor = _isRemoteConnected 
+        ? Colors.green 
+        : (isReconnecting ? Colors.orange : Colors.grey);
+    
     return GestureDetector(
       onTap: _isRemoteConnected ? _disconnect : _openConnectionDialog,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         decoration: BoxDecoration(
-          color: _isRemoteConnected 
-              ? Colors.green.withOpacity(0.1) 
-              : Colors.grey.withOpacity(0.1),
+          color: statusColor.withOpacity(0.1),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: _isRemoteConnected ? Colors.green : Colors.grey,
+            if (isReconnecting)
+              const SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.orange),
+                ),
+              )
+            else
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: statusColor,
+                ),
               ),
-            ),
             const SizedBox(width: 8),
             Text(
-              _isRemoteConnected 
-                  ? '已连接 $_connectedHost' 
-                  : '点击连接远端相机',
+              _getConnectionStatusText(),
               style: TextStyle(
                 fontSize: 12,
-                color: _isRemoteConnected ? Colors.green[700] : Colors.grey[600],
+                color: statusColor == Colors.green ? Colors.green[700] : statusColor,
               ),
             ),
             const SizedBox(width: 8),
-            Icon(
-              _isRemoteConnected ? Icons.link_off : Icons.link,
-              size: 16,
-              color: _isRemoteConnected ? Colors.red[400] : Colors.blue,
-            ),
+            if (!isReconnecting)
+              Icon(
+                _isRemoteConnected ? Icons.link_off : Icons.link,
+                size: 16,
+                color: _isRemoteConnected ? Colors.red[400] : Colors.blue,
+              ),
           ],
         ),
       ),
     );
+  }
+  
+  /// 获取连接状态文字
+  String _getConnectionStatusText() {
+    if (_isRemoteConnected) {
+      return '已连接 $_connectedHost';
+    } else if (_connectionState == ws.ConnectionState.reconnecting) {
+      return '重连中 ($_reconnectAttempts/$_maxReconnectAttempts)';
+    } else {
+      return '点击连接远端相机';
+    }
   }
 }
