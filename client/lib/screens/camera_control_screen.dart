@@ -10,8 +10,6 @@ import '../models/download_task.dart';
 import '../widgets/transformed_preview_widget.dart';
 import '../services/orientation_preferences_service.dart';
 import 'settings_selection_screen.dart';
-import 'download_manager_screen.dart';
-import 'library/library_screen.dart';
 import 'package:path/path.dart' as path;
 import '../services/logger_service.dart';
 import '../services/download_settings_service.dart';
@@ -1211,17 +1209,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                               backgroundColor: Colors.grey[700],
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          // 下载管理按钮
-                          IconButton(
-                            icon: const Icon(Icons.download),
-                            color: Colors.white,
-                            onPressed: _navigateToDownloadManager,
-                            tooltip: '下载管理',
-                            style: IconButton.styleFrom(
-                              backgroundColor: Colors.grey[700],
-                            ),
-                          ),
                           const SizedBox(width: 16),
                           // 旋转按钮（只在锁定状态时显示）
                           if (_orientationLocked)
@@ -1286,17 +1273,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
                               ),
                             ),
                           ),
-                          const SizedBox(width: 24),
-                          // 媒体库入口
-                          IconButton(
-                            icon: const Icon(Icons.photo_library),
-                            color: Colors.white,
-                            onPressed: _navigateToMediaLibrary,
-                            tooltip: '媒体库',
-                            style: IconButton.styleFrom(
-                              backgroundColor: Colors.grey[700],
-                            ),
-                          ),
                         ],
                       ),
                     ),
@@ -1306,28 +1282,6 @@ class _CameraControlScreenState extends State<CameraControlScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  /// 导航到媒体库
-  void _navigateToMediaLibrary() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => const LibraryScreen(),
-      ),
-    );
-  }
-
-  /// 导航到下载管理
-  void _navigateToDownloadManager() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => DownloadManagerScreen(
-          apiService: widget.apiService,
-        ),
       ),
     );
   }

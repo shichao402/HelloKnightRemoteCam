@@ -21,6 +21,13 @@ class LibraryScreen extends StatefulWidget {
   State<LibraryScreen> createState() => _LibraryScreenState();
 }
 
+/// 分组模式
+enum GroupMode {
+  none,       // 不分组
+  byDay,      // 按天分组
+  byMonth,    // 按月分组
+}
+
 class _LibraryScreenState extends State<LibraryScreen> {
   MediaLibraryService? _libraryService;
   final ApiServiceManager _apiManager = ApiServiceManager();
@@ -35,6 +42,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
   // 筛选状态
   MediaType? _typeFilter;
   bool _starredOnly = false;
+
+  // 排序状态
+  MediaSortBy _sortBy = MediaSortBy.createdAt;
+  SortOrder _sortOrder = SortOrder.descending;
+
+  // 分组状态
+  GroupMode _groupMode = GroupMode.byDay;
 
   // 待同步数量
   int _pendingSyncCount = 0;
@@ -101,10 +115,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
     
     // 排序
-    filteredItems.sort((a, b) {
-      final result = b.createdAt.compareTo(a.createdAt); // 默认按时间降序
-      return result;
-    });
+    filteredItems = _sortItems(filteredItems);
     
     // 计算待同步数量
     final pending = filteredItems.where((item) => 
@@ -123,6 +134,32 @@ class _LibraryScreenState extends State<LibraryScreen> {
       _isLoading = false;
       _error = null;
     });
+  }
+
+  /// 排序媒体项
+  List<MediaItem> _sortItems(List<MediaItem> items) {
+    final sorted = List<MediaItem>.from(items);
+    sorted.sort((a, b) {
+      int result;
+      switch (_sortBy) {
+        case MediaSortBy.createdAt:
+          result = a.createdAt.compareTo(b.createdAt);
+          break;
+        case MediaSortBy.modifiedAt:
+          final aTime = a.modifiedAt ?? a.createdAt;
+          final bTime = b.modifiedAt ?? b.createdAt;
+          result = aTime.compareTo(bTime);
+          break;
+        case MediaSortBy.name:
+          result = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          break;
+        case MediaSortBy.size:
+          result = a.size.compareTo(b.size);
+          break;
+      }
+      return _sortOrder == SortOrder.ascending ? result : -result;
+    });
+    return sorted;
   }
 
   /// 比较两个媒体列表是否相等
@@ -210,8 +247,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     _filter = MediaFilter(
       type: _typeFilter,
       isStarred: _starredOnly ? true : null,
-      sortBy: MediaSortBy.createdAt,
-      sortOrder: SortOrder.descending,
+      sortBy: _sortBy,
+      sortOrder: _sortOrder,
     );
     _loadMedia();
   }
@@ -590,49 +627,235 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Widget _buildFilterBar() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Column(
+        children: [
+          // 第一行：类型筛选和星标
+          Row(
+            children: [
+              // 类型筛选
+              ChoiceChip(
+                label: const Text('全部'),
+                selected: _typeFilter == null,
+                onSelected: (selected) {
+                  setState(() => _typeFilter = null);
+                  _updateFilter();
+                },
+              ),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                label: const Text('照片'),
+                selected: _typeFilter == MediaType.photo,
+                onSelected: (selected) {
+                  setState(() => _typeFilter = selected ? MediaType.photo : null);
+                  _updateFilter();
+                },
+              ),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                label: const Text('视频'),
+                selected: _typeFilter == MediaType.video,
+                onSelected: (selected) {
+                  setState(() => _typeFilter = selected ? MediaType.video : null);
+                  _updateFilter();
+                },
+              ),
+              const Spacer(),
+              // 星标筛选
+              FilterChip(
+                label: const Text('星标'),
+                selected: _starredOnly,
+                onSelected: (selected) {
+                  setState(() => _starredOnly = selected);
+                  _updateFilter();
+                },
+                avatar: Icon(
+                  _starredOnly ? Icons.star : Icons.star_border,
+                  size: 18,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // 第二行：排序和分组
+          Row(
+            children: [
+              // 排序按钮
+              _buildSortButton(),
+              const SizedBox(width: 8),
+              // 分组按钮
+              _buildGroupButton(),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 构建排序按钮
+  Widget _buildSortButton() {
+    String sortLabel;
+    switch (_sortBy) {
+      case MediaSortBy.createdAt:
+        sortLabel = '时间';
+        break;
+      case MediaSortBy.modifiedAt:
+        sortLabel = '修改时间';
+        break;
+      case MediaSortBy.name:
+        sortLabel = '名称';
+        break;
+      case MediaSortBy.size:
+        sortLabel = '大小';
+        break;
+    }
+
+    return PopupMenuButton<MediaSortBy>(
+      onSelected: (value) {
+        setState(() {
+          if (_sortBy == value) {
+            // 点击相同的排序字段，切换排序方向
+            _sortOrder = _sortOrder == SortOrder.ascending
+                ? SortOrder.descending
+                : SortOrder.ascending;
+          } else {
+            _sortBy = value;
+            // 根据排序字段设置默认排序方向
+            _sortOrder = value == MediaSortBy.name
+                ? SortOrder.ascending
+                : SortOrder.descending;
+          }
+        });
+        _updateFilter();
+      },
+      itemBuilder: (context) => [
+        _buildSortMenuItem(MediaSortBy.createdAt, '时间', Icons.access_time),
+        _buildSortMenuItem(MediaSortBy.modifiedAt, '修改时间', Icons.update),
+        _buildSortMenuItem(MediaSortBy.name, '名称', Icons.sort_by_alpha),
+        _buildSortMenuItem(MediaSortBy.size, '大小', Icons.data_usage),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey.withOpacity(0.3)),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _sortOrder == SortOrder.ascending
+                  ? Icons.arrow_upward
+                  : Icons.arrow_downward,
+              size: 16,
+              color: Colors.grey[600],
+            ),
+            const SizedBox(width: 4),
+            Text(
+              sortLabel,
+              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.arrow_drop_down, size: 18, color: Colors.grey[600]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  PopupMenuItem<MediaSortBy> _buildSortMenuItem(
+    MediaSortBy value,
+    String label,
+    IconData icon,
+  ) {
+    final isSelected = _sortBy == value;
+    return PopupMenuItem(
+      value: value,
       child: Row(
         children: [
-          // 类型筛选
-          ChoiceChip(
-            label: const Text('全部'),
-            selected: _typeFilter == null,
-            onSelected: (selected) {
-              setState(() => _typeFilter = null);
-              _updateFilter();
-            },
-          ),
-          const SizedBox(width: 8),
-          ChoiceChip(
-            label: const Text('照片'),
-            selected: _typeFilter == MediaType.photo,
-            onSelected: (selected) {
-              setState(() => _typeFilter = selected ? MediaType.photo : null);
-              _updateFilter();
-            },
-          ),
-          const SizedBox(width: 8),
-          ChoiceChip(
-            label: const Text('视频'),
-            selected: _typeFilter == MediaType.video,
-            onSelected: (selected) {
-              setState(() => _typeFilter = selected ? MediaType.video : null);
-              _updateFilter();
-            },
-          ),
+          Icon(icon, size: 20, color: isSelected ? Theme.of(context).primaryColor : null),
+          const SizedBox(width: 12),
+          Text(label),
           const Spacer(),
-          // 星标筛选
-          FilterChip(
-            label: const Text('星标'),
-            selected: _starredOnly,
-            onSelected: (selected) {
-              setState(() => _starredOnly = selected);
-              _updateFilter();
-            },
-            avatar: Icon(
-              _starredOnly ? Icons.star : Icons.star_border,
-              size: 18,
+          if (isSelected)
+            Icon(
+              _sortOrder == SortOrder.ascending
+                  ? Icons.arrow_upward
+                  : Icons.arrow_downward,
+              size: 16,
+              color: Theme.of(context).primaryColor,
             ),
-          ),
+        ],
+      ),
+    );
+  }
+
+  /// 构建分组按钮
+  Widget _buildGroupButton() {
+    String groupLabel;
+    IconData groupIcon;
+    switch (_groupMode) {
+      case GroupMode.none:
+        groupLabel = '不分组';
+        groupIcon = Icons.grid_view;
+        break;
+      case GroupMode.byDay:
+        groupLabel = '按天';
+        groupIcon = Icons.calendar_today;
+        break;
+      case GroupMode.byMonth:
+        groupLabel = '按月';
+        groupIcon = Icons.calendar_month;
+        break;
+    }
+
+    return PopupMenuButton<GroupMode>(
+      onSelected: (value) {
+        setState(() => _groupMode = value);
+      },
+      itemBuilder: (context) => [
+        _buildGroupMenuItem(GroupMode.none, '不分组', Icons.grid_view),
+        _buildGroupMenuItem(GroupMode.byDay, '按天分组', Icons.calendar_today),
+        _buildGroupMenuItem(GroupMode.byMonth, '按月分组', Icons.calendar_month),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey.withOpacity(0.3)),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(groupIcon, size: 16, color: Colors.grey[600]),
+            const SizedBox(width: 4),
+            Text(
+              groupLabel,
+              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.arrow_drop_down, size: 18, color: Colors.grey[600]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  PopupMenuItem<GroupMode> _buildGroupMenuItem(
+    GroupMode value,
+    String label,
+    IconData icon,
+  ) {
+    final isSelected = _groupMode == value;
+    return PopupMenuItem(
+      value: value,
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: isSelected ? Theme.of(context).primaryColor : null),
+          const SizedBox(width: 12),
+          Text(label),
+          const Spacer(),
+          if (isSelected)
+            Icon(Icons.check, size: 16, color: Theme.of(context).primaryColor),
         ],
       ),
     );
@@ -682,6 +905,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
       );
     }
 
+    // 根据分组模式选择不同的显示方式
+    if (_groupMode == GroupMode.none) {
+      return _buildFlatGrid();
+    } else {
+      return _buildGroupedGrid();
+    }
+  }
+
+  /// 构建平铺网格（不分组）
+  Widget _buildFlatGrid() {
     return RefreshIndicator(
       onRefresh: _refreshWithSync,
       child: GridView.builder(
@@ -695,7 +928,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         itemBuilder: (context, index) {
           final item = _mediaItems[index];
           return MediaGridItem(
-            key: ValueKey(item.id), // 使用 id 作为 key，确保正确复用
+            key: ValueKey(item.id),
             item: item,
             isSelected: _selectedIds.contains(item.id),
             selectionMode: _selectionMode,
@@ -714,6 +947,162 @@ class _LibraryScreenState extends State<LibraryScreen> {
             },
           );
         },
+      ),
+    );
+  }
+
+  /// 构建分组网格
+  Widget _buildGroupedGrid() {
+    // 按日期分组
+    final groups = _groupMediaItems(_mediaItems);
+    
+    return RefreshIndicator(
+      onRefresh: _refreshWithSync,
+      child: CustomScrollView(
+        slivers: [
+          for (final entry in groups.entries) ...[
+            // 分组标题
+            SliverToBoxAdapter(
+              child: _buildGroupHeader(entry.key, entry.value.length),
+            ),
+            // 分组内容
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 4,
+                  crossAxisSpacing: 4,
+                  mainAxisSpacing: 4,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final item = entry.value[index];
+                    return MediaGridItem(
+                      key: ValueKey(item.id),
+                      item: item,
+                      isSelected: _selectedIds.contains(item.id),
+                      selectionMode: _selectionMode,
+                      onTap: () {
+                        if (_selectionMode) {
+                          _toggleSelection(item.id);
+                        } else {
+                          _openMediaDetail(item);
+                        }
+                      },
+                      onLongPress: () {
+                        if (!_selectionMode) {
+                          _toggleSelectionMode();
+                          _toggleSelection(item.id);
+                        }
+                      },
+                    );
+                  },
+                  childCount: entry.value.length,
+                ),
+              ),
+            ),
+            const SliverToBoxAdapter(child: SizedBox(height: 8)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// 分组媒体项
+  Map<String, List<MediaItem>> _groupMediaItems(List<MediaItem> items) {
+    final Map<String, List<MediaItem>> groups = {};
+    
+    for (final item in items) {
+      final key = _getGroupKey(item.createdAt);
+      groups.putIfAbsent(key, () => []).add(item);
+    }
+    
+    return groups;
+  }
+
+  /// 获取分组键
+  String _getGroupKey(DateTime date) {
+    switch (_groupMode) {
+      case GroupMode.none:
+        return '';
+      case GroupMode.byDay:
+        return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      case GroupMode.byMonth:
+        return '${date.year}-${date.month.toString().padLeft(2, '0')}';
+    }
+  }
+
+  /// 构建分组标题
+  Widget _buildGroupHeader(String groupKey, int count) {
+    String displayText;
+    
+    if (_groupMode == GroupMode.byDay) {
+      // 解析日期
+      final parts = groupKey.split('-');
+      if (parts.length == 3) {
+        final date = DateTime(
+          int.parse(parts[0]),
+          int.parse(parts[1]),
+          int.parse(parts[2]),
+        );
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        final yesterday = today.subtract(const Duration(days: 1));
+        final dateOnly = DateTime(date.year, date.month, date.day);
+        
+        if (dateOnly == today) {
+          displayText = '今天';
+        } else if (dateOnly == yesterday) {
+          displayText = '昨天';
+        } else if (date.year == now.year) {
+          displayText = '${date.month}月${date.day}日';
+        } else {
+          displayText = '${date.year}年${date.month}月${date.day}日';
+        }
+      } else {
+        displayText = groupKey;
+      }
+    } else if (_groupMode == GroupMode.byMonth) {
+      final parts = groupKey.split('-');
+      if (parts.length == 2) {
+        final year = int.parse(parts[0]);
+        final month = int.parse(parts[1]);
+        final now = DateTime.now();
+        
+        if (year == now.year && month == now.month) {
+          displayText = '本月';
+        } else if (year == now.year) {
+          displayText = '$month月';
+        } else {
+          displayText = '$year年$month月';
+        }
+      } else {
+        displayText = groupKey;
+      }
+    } else {
+      displayText = groupKey;
+    }
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Text(
+            displayText,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$count 项',
+            style: TextStyle(
+              fontSize: 13,
+              color: Colors.grey[500],
+            ),
+          ),
+        ],
       ),
     );
   }
