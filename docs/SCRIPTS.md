@@ -1,185 +1,183 @@
-# 构建脚本说明
+# 脚本说明
 
-## 脚本架构
+本文档说明仓库内现有脚本的职责边界与常见用法。**脚本是工程事实来源之一**；遇到流程问题时，请优先检查脚本实际实现。
 
-项目采用模块化脚本设计，将构建流程拆分为独立的模块，便于复用和维护。
+## 一、脚本分层
 
-## Client 脚本（macOS/Windows）
+### 1. 根目录 `scripts/`
 
-### 模块化脚本
+负责跨子项目的公共能力：
 
-#### `kill_process.sh`
-终止已有进程
+- 版本管理
+- 构建标签创建
+- Release 创建
+- 更新配置生成
+- 日志收集
+- Gitee 相关同步辅助
+
+当前常用脚本：
+
+- `scripts/version.sh`
+- `scripts/create_build_tags.sh`
+- `scripts/create_release.sh`
+- `scripts/collect_all_logs.sh`
+- `scripts/generate_update_config.py`
+
+### 2. `client/scripts/`
+
+负责桌面客户端的构建、部署、启动与清理：
+
+- `build.sh`
+- `deploy.sh`
+- `deploy_mac.sh`
+- `deploy_windows.bat`
+- `start.sh`
+- `kill_process.sh`
+
+### 3. `server/scripts/`
+
+负责 Android 服务端的构建、安装、启动与日志收集：
+
+- `build.sh`
+- `deploy.sh`
+- `deploy_android.sh`
+- `install.sh`
+- `start.sh`
+- `kill_process.sh`
+- `collect_adb_logs.sh`
+
+## 二、最常用脚本
+
+### `scripts/version.sh`
+
+统一管理 `VERSION.yaml`：
+
 ```bash
-./client/scripts/kill_process.sh
+./scripts/version.sh get
+./scripts/version.sh set client 1.0.8+13
+./scripts/version.sh set server 1.0.8+13
+./scripts/version.sh bump client patch
+./scripts/version.sh sync
 ```
 
-#### `build.sh`
-构建应用
+### `scripts/create_build_tags.sh`
+
+从 `VERSION.yaml` 读取版本号，创建并推送 `build<x.y.z>` 标签，触发 `build.yml`：
+
 ```bash
-# macOS Debug 构建
-./client/scripts/build.sh --debug --macos
-
-# macOS Release 构建
-./client/scripts/build.sh --release --macos
-
-# Windows Debug 构建
-./client/scripts/build.sh --debug --windows
-
-# Windows Release 构建
-./client/scripts/build.sh --release --windows
+./scripts/create_build_tags.sh
+./scripts/create_build_tags.sh --remote
+./scripts/create_build_tags.sh --no-push
 ```
 
-#### `start.sh`
-启动应用
+说明：
+
+- 标签格式示例：`build1.0.8`
+- 推送后会触发 GitHub Actions 构建三个平台
+- 如果标签已存在，脚本当前会提示是否覆盖
+
+### `scripts/create_release.sh`
+
+检查构建标签、构建状态与 artifacts，然后触发 `release.yml`：
+
 ```bash
-# macOS
-./client/scripts/start.sh debug macos
-
-# Windows
-./client/scripts/start.sh debug windows
+./scripts/create_release.sh 1.0.8
 ```
 
-#### `deploy.sh`
-完整部署流程（组合调用上述模块）
+说明：
+
+- 传入参数是主版本号 `x.y.z`
+- 依赖 `gh auth login` 或环境变量 `GITHUB_TOKEN` / `GH_TOKEN`
+- 如果对应 Release 已存在，脚本当前会提示是否覆盖
+
+### `scripts/collect_all_logs.sh`
+
+收集客户端与服务端日志：
+
 ```bash
-# macOS Debug 部署
-./client/scripts/deploy.sh --debug --macos
-
-# macOS Release 部署（自动启动）
-./client/scripts/deploy.sh -y --release --macos
-
-# Windows Release 部署
-./client/scripts/deploy.sh --release --windows
+./scripts/collect_all_logs.sh
 ```
 
-### 向后兼容脚本
+## 三、客户端脚本
 
-#### `deploy_mac.sh`
-macOS 部署脚本（调用新的模块化脚本）
+### 构建
+
 ```bash
-./client/scripts/deploy_mac.sh        # Debug 构建
-./client/scripts/deploy_mac.sh -y     # Debug 构建并自动启动
+cd client
+./scripts/build.sh --debug --macos
+./scripts/build.sh --release --macos
+bash ./scripts/build.sh --debug --windows
+bash ./scripts/build.sh --release --windows
 ```
 
-## Server 脚本（Android）
+### 部署
 
-### 模块化脚本
-
-#### `kill_process.sh`
-终止已有进程（通过 adb）
 ```bash
-./server/scripts/kill_process.sh
+cd client
+./scripts/deploy.sh --debug --macos
+./scripts/deploy.sh --release --macos
+bash ./scripts/deploy.sh --debug --windows
+bash ./scripts/deploy.sh --release --windows
 ```
 
-#### `build.sh`
-构建 APK
+### 兼容入口
+
 ```bash
-# Debug 构建
-./server/scripts/build.sh --debug
-
-# Release 构建
-./server/scripts/build.sh --release
+cd client
+./scripts/deploy_mac.sh
+scripts\deploy_windows.bat
 ```
 
-#### `install.sh`
-安装 APK 到设备
+## 四、服务端脚本
+
+### 构建
+
 ```bash
-# 安装 Debug APK
-./server/scripts/install.sh debug
-
-# 安装 Release APK
-./server/scripts/install.sh release
+cd server
+./scripts/build.sh --debug
+./scripts/build.sh --release
 ```
 
-#### `start.sh`
-启动应用（通过 adb）
+### 部署
+
 ```bash
-./server/scripts/start.sh
+cd server
+./scripts/deploy.sh --debug
+./scripts/deploy.sh --release
 ```
 
-#### `deploy.sh`
-完整部署流程（组合调用上述模块）
+### 兼容入口
+
 ```bash
-# Debug 部署
-./server/scripts/deploy.sh --debug
-
-# Release 部署（自动启动）
-./server/scripts/deploy.sh -y --release
+cd server
+./scripts/deploy_android.sh
 ```
 
-### 向后兼容脚本
+## 五、构建与发布关系
 
-#### `deploy_android.sh`
-Android 部署脚本（调用新的模块化脚本）
-```bash
-./server/scripts/deploy_android.sh        # Debug 构建、安装
-./server/scripts/deploy_android.sh -y     # Debug 构建、安装并自动启动
-```
+当前推荐链路：
 
-## GitHub Actions 使用
+1. `./scripts/version.sh ...`
+2. `./scripts/create_build_tags.sh`
+3. 等待 `.github/workflows/build.yml`
+4. `./scripts/create_release.sh <x.y.z>`
 
-GitHub Actions 工作流直接使用模块化的构建脚本：
+也就是说：
 
-```yaml
-# macOS 构建
-- name: Build macOS app
-  run: |
-    cd client
-    ./scripts/build.sh --release --macos
+- **构建入口**在 `create_build_tags.sh`
+- **正式发版入口**在 `create_release.sh`
+- **版本事实来源**在 `VERSION.yaml`
 
-# Windows 构建
-- name: Build Windows app
-  run: |
-    cd client
-    bash scripts/build.sh --release --windows
+## 六、与 GitHub Actions 的关系
 
-# Android 构建
-- name: Build Android APK
-  run: |
-    cd server
-    ./scripts/build.sh --release
-```
+GitHub Actions 复用仓库内脚本，而不是另起一套逻辑：
 
-## 脚本优势
+- 各平台构建工作流会调用对应的 `build.sh`
+- `release.yml` 会调用 `scripts/generate_update_config.py`
+- 版本信息通过 `scripts/lib/version_manager.py` 从 `VERSION.yaml` 读取
 
-1. **模块化**：每个脚本只负责一个功能，便于维护和测试
-2. **可复用**：GitHub Actions 和本地开发使用相同的构建脚本
-3. **向后兼容**：保留原有脚本，通过包装器调用新脚本
-4. **灵活性**：可以单独调用任意模块，也可以使用组合脚本
+## 七、当前注意事项
 
-## 使用示例
-
-### 仅构建（不安装、不启动）
-```bash
-# Client macOS
-cd client && ./scripts/build.sh --release --macos
-
-# Server Android
-cd server && ./scripts/build.sh --release
-```
-
-### 完整部署流程
-```bash
-# Client macOS（自动启动）
-cd client && ./scripts/deploy.sh -y --release --macos
-
-# Server Android（自动启动）
-cd server && ./scripts/deploy.sh -y --release
-```
-
-### 手动步骤
-```bash
-# 1. 终止进程
-./server/scripts/kill_process.sh
-
-# 2. 构建
-./server/scripts/build.sh --release
-
-# 3. 安装
-./server/scripts/install.sh release
-
-# 4. 启动
-./server/scripts/start.sh
-```
-
+- `create_build_tags.sh` / `create_release.sh` 在少数场景下仍有交互提示；使用前请确认本地标签和远端 Release 状态。
+- `VERSION.yaml` 是单一数据源，不应手工维护多套版本号。
+- 需要发布时，请同时参考 [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) 与 [`CI_CD_SETUP.md`](CI_CD_SETUP.md)。

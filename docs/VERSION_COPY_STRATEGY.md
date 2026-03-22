@@ -1,163 +1,90 @@
-# VERSION.yaml 拷贝策略和版本号读取统一逻辑
+# VERSION.yaml 拷贝策略
 
-## 设计原则
+本文档说明 `VERSION.yaml` 如何从仓库根目录进入构建产物，以及应用在运行时如何读取版本信息。
 
-### 1. 单一数据源原则
-所有 VERSION.yaml 的拷贝逻辑都应该在构建脚本中完成，确保本地部署和 CI/CD 流水线使用相同的逻辑。
+## 一、设计目标
 
-### 2. 统一的版本号读取逻辑
-**客户端和服务器端都应该使用相同的版本号读取逻辑**：
+### 1. 单一数据源
 
-1. **优先从 VERSION.yaml 读取**（从 `assets/VERSION.yaml`）
-2. **如果读不到，回退到 pubspec.yaml**（通过 `package_info_plus`）
-3. **如果还是失败，使用默认版本号**
+- 版本事实来源只有一个：根目录 `VERSION.yaml`
+- 不在工作流、多个脚本、多个配置文件中重复维护版本号
 
-这样可以确保版本号始终与根目录的 VERSION.yaml 保持一致。
+### 2. 本地构建与 CI/CD 统一
 
-## 当前实现
+- 本地脚本与 GitHub Actions 使用同一套版本提取逻辑
+- 版本文件的拷贝由构建脚本与版本管理工具负责
 
-### 构建脚本（单一数据源）
+### 3. 运行时优先读取版本文件
 
-所有平台的构建脚本都负责拷贝 VERSION.yaml 到构建输出目录：
+应用运行时采用以下优先级：
 
-1. **客户端 macOS** (`client/scripts/build.sh`)
-   - 拷贝到：`app bundle/Contents/Resources/VERSION.yaml`
-   - 位置：构建完成后，在 app bundle 创建之后
+1. 构建产物中的 `VERSION.yaml`
+2. `package_info_plus` 对应的 `pubspec.yaml` 版本信息
+3. 默认回退值
 
-2. **客户端 Windows** (`client/scripts/build.sh`)
-   - 拷贝到：`build/windows/x64/runner/Debug/VERSION.yaml`（或 Release）
-   - 位置：构建完成后，在构建输出目录创建之后
+## 二、当前落位策略
 
-3. **服务器 Android** (`server/scripts/build.sh`)
-   - 拷贝到：`server/assets/VERSION.yaml`
-   - 使用：`version_manager.py copy-to-assets` 命令
-   - 位置：构建之前，确保 assets 目录存在
+### 客户端（macOS / Windows）
 
-### CI/CD 流水线
+客户端构建完成后，会把版本文件带入桌面产物，保证更新检查、版本显示与兼容性判断可以直接使用打包时的版本信息。
 
-**重要**：CI/CD 流水线完全依赖构建脚本，不包含独立的拷贝逻辑。
+### 服务端（Android）
 
-#### 构建工作流调用方式
+服务端构建前会把根目录 `VERSION.yaml` 同步到 `server/assets/VERSION.yaml`，再随 APK 一起打包。
 
-```yaml
-# macOS
-- name: Build macOS app
-  run: |
-    cd client
-    ./scripts/build.sh --release --macos
+## 三、CI/CD 中的版本读取
 
-# Windows
-- name: Build Windows app
-  run: |
-    cd client
-    bash scripts/build.sh --release --windows
+GitHub Actions 并不依赖 README 或手工输入版本号，而是通过：
 
-# Android
-- name: Build Android APK
-  run: |
-    cd server
-    ./scripts/build.sh --release
-```
+- `scripts/lib/version_manager.py`
+- `VERSION.yaml`
+- 构建标签对应提交中的 `VERSION.yaml`
 
-#### 版本号同步
+来提取真实版本信息。
 
-流水线在构建前会同步版本号到 pubspec.yaml：
+特别是在 `release.yml` 中：
 
-```yaml
-# 使用统一的版本管理模块提取和同步版本号
-python3 scripts/lib/version_manager.py extract client --sync client/pubspec.yaml
-python3 scripts/lib/version_manager.py extract server --sync server/pubspec.yaml
-```
+- 会先根据 `build<x.y.z>` 找到成功构建
+- 再从该 build tag 对应提交里的 `VERSION.yaml` 提取完整版本号
+- 最终生成 Release 资产文件名与更新配置
 
-**注意**：`extract --sync` 对于 server 会自动调用 `copy_to_assets()`，但这与构建脚本中的拷贝是重复的（无害）。为了统一，建议：
+## 四、为什么不能只依赖 `pubspec.yaml`
 
-1. **保持现状**：构建脚本中的拷贝逻辑是主要逻辑
-2. **或者**：移除 `extract --sync` 中的自动拷贝，只保留构建脚本中的拷贝
+`pubspec.yaml` 更适合作为 Flutter 打包元数据，而不是项目级版本事实来源，因为：
 
-## 修改指南
+- 项目有 `client` / `server` 双端版本
+- 还需要携带最小兼容版本和更新地址
+- 发布流程需要同时消费多项版本元信息
 
-### ✅ 正确的做法
+因此当前策略是：
 
-**所有 VERSION.yaml 拷贝逻辑都应该在构建脚本中**：
+- `VERSION.yaml` 负责**管理**
+- `pubspec.yaml` 负责**被同步与被 Flutter 读取**
 
-1. 修改 `client/scripts/build.sh` 或 `server/scripts/build.sh`
-2. 确保拷贝逻辑在构建完成后执行
-3. 测试本地部署和 CI/CD 流水线
+## 五、推荐修改点
 
-### ❌ 错误的做法
+如果未来需要调整版本文件拷贝策略，请优先检查：
 
-**不要在以下位置添加独立的拷贝逻辑**：
+- `scripts/lib/version_manager.py`
+- `client/scripts/build.sh`
+- `server/scripts/build.sh`
+- `.github/workflows/build-client-macos.yml`
+- `.github/workflows/build-client-windows.yml`
+- `.github/workflows/build-server-android.yml`
+- `.github/workflows/release.yml`
 
-1. ❌ GitHub Actions workflow 文件中
-2. ❌ 独立的脚本文件（除非被构建脚本调用）
-3. ❌ 其他部署脚本中
+## 六、验证清单
 
-## 验证清单
+修改版本策略后，至少验证：
 
-修改拷贝逻辑后，确保：
+- [ ] 本地 `client` 构建后版本显示正确
+- [ ] 本地 `server` 构建后可读取 `assets/VERSION.yaml`
+- [ ] GitHub Actions 构建成功
+- [ ] `release.yml` 可从 build tag 的 `VERSION.yaml` 正确生成 Release
+- [ ] `update_config_github.json` / `update_config_gitee.json` 中版本号正确
 
-- [ ] 本地部署（`./scripts/deploy.sh`）正常工作
-- [ ] CI/CD 流水线构建成功
-- [ ] 构建输出中包含 VERSION.yaml
-- [ ] 应用可以正确读取版本信息
+## 七、相关文档
 
-## 版本号读取统一逻辑
-
-### 客户端和服务器端实现
-
-**客户端** (`client/lib/services/version_service.dart`):
-- 使用 `VersionFileProvider` 从 `assets/VERSION.yaml` 读取
-- 失败时回退到 `package_info_plus`（从 `pubspec.yaml` 读取）
-
-**服务器端** (`server/lib/services/version_service.dart`):
-- 使用 `VersionFileProvider` 从 `assets/VERSION.yaml` 读取
-- 失败时回退到 `package_info_plus`（从 `pubspec.yaml` 读取）
-
-### 读取优先级
-
-1. ✅ **assets/VERSION.yaml**（优先）
-   - 从根目录的 VERSION.yaml 同步而来
-   - 确保版本号与根目录保持一致
-
-2. ⚠️ **pubspec.yaml**（回退）
-   - 通过 `package_info_plus` 读取
-   - 仅在 assets/VERSION.yaml 不存在时使用
-
-3. 🔄 **默认版本号**（最后回退）
-   - `1.0.0+1`
-   - 仅在所有读取方式都失败时使用
-
-### 相关服务文件
-
-**客户端**:
-- `client/lib/services/version_file_provider.dart`: 版本文件提供者
-- `client/lib/services/version_parser.dart`: 版本解析器
-- `client/lib/services/version_fallback_service.dart`: 回退服务
-
-**服务器端**:
-- `server/lib/services/version_file_provider.dart`: 版本文件提供者
-- `server/lib/services/version_parser.dart`: 版本解析器
-- `server/lib/services/version_fallback_service.dart`: 回退服务
-
-**共享**:
-- `shared/lib/services/version_parser_service.dart`: 版本解析服务（客户端和服务器端共享）
-
-## 相关文件
-
-- `client/scripts/build.sh`: 客户端构建脚本
-- `server/scripts/build.sh`: 服务器构建脚本
-- `scripts/lib/version_manager.py`: 版本管理模块（提供 `copy-to-assets` 命令）
-- `.github/workflows/build-client-macos.yml`: macOS 构建工作流
-- `.github/workflows/build-client-windows.yml`: Windows 构建工作流
-- `.github/workflows/build-server-android.yml`: Android 构建工作流
-
-## 历史问题
-
-- **问题 1**：之前只在 CI/CD 流水线中拷贝 VERSION.yaml，本地部署时没有拷贝
-- **问题 2**：客户端和服务器端使用不同的版本号读取逻辑
-- **问题 3**：服务器端直接从 pubspec.yaml 读取，没有优先从 VERSION.yaml 读取
-- **原因**：拷贝逻辑分散在多个地方，版本号读取逻辑不统一
-- **解决方案**：
-  1. 将所有拷贝逻辑集中到构建脚本中，确保本地和 CI/CD 使用相同的逻辑
-  2. 统一客户端和服务器端的版本号读取逻辑，都优先从 VERSION.yaml 读取
-
+- [`VERSION_MANAGEMENT.md`](VERSION_MANAGEMENT.md)
+- [`CI_CD_SETUP.md`](CI_CD_SETUP.md)
+- [`AUTO_UPDATE.md`](AUTO_UPDATE.md)

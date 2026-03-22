@@ -1,147 +1,110 @@
 # Gitee Release 同步配置
 
-## 概述
+本项目当前使用 GitHub 作为主要构建与 Release 来源，Gitee 作为可选的同步分发源。
 
-本项目使用 GitHub Actions 构建所有平台的应用，然后自动同步 Release 到 Gitee。这样既利用了 GitHub Actions 的强大构建能力，又能在 Gitee 上提供下载。
+## 一、同步工作流
 
-## 工作流程
+使用的工作流文件：
 
-1. **GitHub Actions 构建**（`.github/workflows/build.yml`）
-   - 构建 macOS 客户端
-   - 构建 Windows 客户端
-   - 构建 Android 服务器
-   - 创建 GitHub Release
-   - 生成更新配置文件
+- `.github/workflows/sync-to-gitee.yml`
 
-2. **自动同步到 Gitee**（`.github/workflows/sync-to-gitee.yml`）
-   - 当 GitHub Release 发布时自动触发
-   - 下载 GitHub Release 文件
-   - 创建 Gitee Release
-   - 上传文件到 Gitee Release
-   - 同步更新配置文件到 Gitee
+支持三种触发方式：
 
-## 配置步骤
+- GitHub Release 发布后自动触发
+- 手动 `workflow_dispatch`
+- 被其他 workflow 调用
 
-### 1. 配置 GitHub Secrets
+## 二、同步内容
 
-在 GitHub 仓库设置中添加以下 Secrets：
+工作流会执行以下动作：
 
-| Secret 名称 | 说明 | 如何获取 |
-|------------|------|----------|
-| `GITEE_TOKEN` | Gitee 个人访问令牌 | Gitee 设置 → 安全设置 → 私人令牌 |
-| `GITEE_REPO_OWNER` | Gitee 用户名 | 例如：`your-username` |
-| `GITEE_REPO_NAME` | 仓库名称 | 例如：`HelloKnightRemoteCam` |
+1. 获取要同步的 GitHub Release
+2. 下载该 Release 的资产文件
+3. 在 Gitee 创建 / 覆盖对应版本的 Release
+4. 上传发布文件到 Gitee Release
+5. 生成 `update_config_gitee.json`
+6. 将更新配置上传到固定的 `config` Release
 
-### 2. 获取 Gitee Token
+## 三、需要配置的 Secrets
 
-1. 登录 Gitee
-2. 进入 设置 → 安全设置 → 私人令牌
-3. 生成新令牌
-4. 权限选择：`projects`、`pull_requests`、`issues`、`notes`、`repository`
-5. 复制令牌并添加到 GitHub Secrets
+在 GitHub 仓库设置中配置：
 
-### 3. 验证配置
+- `GITEE_TOKEN`
+- `GITEE_REPO_OWNER`
+- `GITEE_REPO_NAME`
 
-创建测试 Release：
+### 含义
 
-```bash
-# 创建标签并推送
-git tag v1.0.0-test
-git push origin v1.0.0-test
+- **`GITEE_TOKEN`**：Gitee API 访问令牌
+- **`GITEE_REPO_OWNER`**：Gitee 用户名或组织名
+- **`GITEE_REPO_NAME`**：Gitee 仓库名
 
-# 在 GitHub 创建 Release（或使用脚本）
-./scripts/create_release.sh 1.0.0-test
+## 四、更新配置文件位置
+
+Gitee 更新配置并不是放在仓库 raw 文件地址，而是固定放在：
+
+```text
+config/update_config_gitee.json
 ```
 
-检查：
-1. GitHub Actions 是否成功构建
-2. GitHub Release 是否创建
-3. Gitee Release 是否自动同步
-4. Gitee 仓库的 `update_config_gitee.json` 是否更新
+URL 形态：
 
-## 使用方式
-
-### 创建 Release（完全无感知）
-
-```bash
-# 创建 Release（会自动同步到 Gitee）
-./scripts/create_release.sh 1.0.0
+```text
+https://gitee.com/<owner>/<repo>/releases/download/config/update_config_gitee.json
 ```
 
-流程：
-1. 创建标签并推送到 GitHub
-2. GitHub Actions 自动构建
-3. 创建 GitHub Release
-4. **自动同步到 Gitee Release**（如果配置了 Secrets）
-5. 更新配置文件到 Gitee
+## 五、手动触发方式
 
-### 手动触发同步
+如果自动同步失败，或需要重新同步某个历史版本，可以手动运行 `sync-to-gitee.yml`：
 
-如果需要手动触发同步（例如修复同步失败）：
+- 输入版本号 `x.y.z`
+- 工作流会自动补成 `v<x.y.z>` 或使用最新 Release
 
-1. 在 GitHub Actions 页面
-2. 找到 "Sync Release to Gitee" workflow
-3. 点击 "Run workflow"
-4. 选择已发布的 Release
+## 六、验证方式
 
-## 更新配置文件
+### 同步成功后检查
 
-同步后会自动生成两个更新配置文件：
+- [ ] Gitee 对应版本 Release 已创建
+- [ ] 资产文件数量与 GitHub Release 基本一致
+- [ ] `config` Release 已存在
+- [ ] `update_config_gitee.json` 已上传
+- [ ] 配置中的下载地址指向 Gitee Release
 
-- **GitHub**: `update_config_github.json`
-  - URL: `https://raw.githubusercontent.com/owner/repo/main/update_config_github.json`
-  - 下载链接指向 GitHub Releases
+## 七、常见失败点
 
-- **Gitee**: `update_config_gitee.json`
-  - URL: `https://gitee.com/owner/repo/raw/main/update_config_gitee.json`
-  - 下载链接指向 Gitee Releases
+### Secret 配置错误
 
-## 故障排除
+表现：
 
-### 同步失败
+- 无法访问 Gitee API
+- 仓库不存在或权限不足
 
-**问题：** Gitee Release 未创建
+### Release 标签不一致
 
-**检查：**
-1. GitHub Secrets 是否正确配置
-2. GITEE_TOKEN 是否有足够权限
-3. GITEE_REPO_OWNER 和 GITEE_REPO_NAME 是否正确
-4. 查看 GitHub Actions 日志中的错误信息
+表现：
+
+- GitHub Release 已存在，但 Gitee 查找不到对应标签
 
 ### 文件上传失败
 
-**问题：** Release 创建了但文件未上传
+表现：
 
-**解决：**
-1. 检查 Gitee API 调用是否成功
-2. 文件可能已存在（Gitee 不允许重复上传）
-3. 查看 Actions 日志中的详细错误
+- Release 创建成功，但部分大文件未上传完成
 
-### 配置文件未同步
+### 配置文件未更新
 
-**问题：** `update_config_gitee.json` 未更新
+表现：
 
-**检查：**
-1. 确认 `update_config_github.json` 已生成
-2. 检查 Git push 权限
-3. 查看 Actions 日志
+- `config` Release 存在，但 `update_config_gitee.json` 内容仍是旧版本
 
-## 优势
+## 八、当前关键事实
 
-✅ **简单可靠**
-- 利用 GitHub Actions 的强大构建能力
-- 自动同步，无需手动操作
+- Gitee 同步是**后置同步流程**，不是主构建流程。
+- 真实版本信息仍来自 build tag 对应的 `VERSION.yaml`。
+- 固定配置 Release 标签是 `config`，而不是 `UpdateConfig`。
 
-✅ **GitHub 构建，Gitee 同步**
-- GitHub：完整的 CI/CD 流程
-- Gitee：Release 同步和下载（可选）
+## 九、相关文档
 
-✅ **无感知使用**
-- 创建 Release 时自动同步
-- 用户无需额外操作
-
-## 相关文档
-
-- [GitHub Actions 配置文档](./GITHUB_ACTIONS_SETUP.md)
-- [CI/CD 配置文档](./CI_CD_SETUP.md)
-
+- [`CI_CD_SETUP.md`](CI_CD_SETUP.md)
+- [`AUTO_UPDATE.md`](AUTO_UPDATE.md)
+- [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md)

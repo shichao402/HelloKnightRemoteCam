@@ -1,98 +1,152 @@
 # CI/CD 配置文档
 
-## 概述
+本文档描述仓库当前的 GitHub Actions 流程。当前流程分为 **构建**、**正式发布**、**Gitee 同步** 三段，而不是一个标签完成全部事情。
 
-本项目使用 GitHub Actions 实现自动化的 CI/CD 流程，包括构建、发布和更新配置生成。
+## 一、工作流总览
 
-## 工作流程
+### 1. 构建工作流：`build.yml`
 
-### 1. 代码推送阶段
+触发方式：
 
-当你推送代码到 GitHub 时：
+- 推送 `build*` 标签
+- 手动触发 `workflow_dispatch`
 
-- 触发 GitHub Actions workflow (`.github/workflows/build.yml`)
-- 构建 macOS、Windows 客户端和 Android 服务器
-- 构建产物上传到 GitHub Actions artifacts（临时存储）
+职责：
 
-### 2. 发布阶段
+- 构建 macOS 客户端
+- 构建 Windows 客户端
+- 构建 Android 服务端
+- 构建完成后回写 `VERSION.yaml` 中的 build number
 
-当你推送版本标签（如 `v1.0.5`）时：
+### 2. 发布工作流：`release.yml`
 
-1. 从构建 artifacts 下载所有构建产物
-2. 创建 GitHub Release，**仅上传zip文件**（不包含dmg、exe等其他格式）
-3. 生成 `update_config_github.json` 配置文件（**仅包含zip包的下载链接**）
-4. 将配置文件提交并推送到 GitHub 仓库的 `main` 分支
+触发方式：
 
-**重要说明：** 发布后，更新列表中**仅包含zip包**，其他格式的文件不会出现在更新列表中。
+- 手动 `workflow_dispatch`
+- 通常由 `scripts/create_release.sh <x.y.z>` 触发
 
-## 配置文件说明
+职责：
 
-### GitHub 更新配置
+- 查找对应 `build<x.y.z>` 标签的成功构建
+- 下载并整理 artifacts
+- 生成 `file_hashes.json`
+- 生成 `update_config_github.json`
+- 创建正式 GitHub Release `v<x.y.z>`
+- 更新固定的 `UpdateConfig` Release
 
-**文件路径:** `update_config_github.json`  
-**访问 URL:** `https://raw.githubusercontent.com/shichao402/HelloKnightRemoteCam/main/update_config_github.json`
+### 3. Gitee 同步工作流：`sync-to-gitee.yml`
 
-**下载链接格式:**
+触发方式：
+
+- GitHub Release 发布事件
+- 手动触发
+- 被其他 workflow 调用
+
+职责：
+
+- 下载 GitHub Release 资产
+- 在 Gitee 创建 / 覆盖同版本 Release
+- 生成并上传 `update_config_gitee.json` 到固定 `config` Release
+
+## 二、推荐发布链路
+
+```text
+修改代码 / VERSION.yaml
+    ↓
+create_build_tags.sh
+    ↓
+push build<x.y.z>
+    ↓
+build.yml
+    ↓
+构建成功 + artifacts 可用
+    ↓
+create_release.sh <x.y.z>
+    ↓
+release.yml
+    ↓
+GitHub Release + UpdateConfig
+    ↓
+sync-to-gitee.yml（可选 / 自动）
 ```
-https://github.com/shichao402/HelloKnightRemoteCam/releases/download/v1.0.5/HelloKnightRCC_macos_1.0.5+1.zip
+
+## 三、构建阶段细节
+
+### build tag 规则
+
+构建标签格式：
+
+```text
+build<x.y.z>
 ```
 
-**注意：** 更新配置中**仅包含zip包的下载链接**，不包含其他格式的文件（如dmg、exe等）。
+例如：
 
-**macOS zip包结构：**
-- zip包内包含dmg文件
-- 用户需要解压zip得到dmg文件
-- 打开dmg文件后，将应用拖动到Applications文件夹覆盖现有程序
-
-## 客户端配置
-
-客户端和服务端应用默认使用 GitHub 的更新检查 URL：
-
-**默认 URL:** `https://raw.githubusercontent.com/shichao402/HelloKnightRemoteCam/main/update_config_github.json`
-
-用户可以在应用设置中修改更新检查 URL。
-
-## 发布流程
-
-### 1. 准备发布
-
-1. 更新版本号（在 `client/pubspec.yaml` 和 `server/pubspec.yaml` 中）
-2. 提交代码更改
-3. 推送到 GitHub
-
-### 2. 创建发布标签
-
-```bash
-# 创建并推送标签
-git tag v1.0.5
-git push origin v1.0.5
+```text
+build1.0.8
 ```
 
-### 3. 等待 CI/CD 完成
+### 构建输出
 
-在 GitHub Actions 中查看构建和发布状态。
+构建产物由三个复用工作流生成：
 
-### 4. 验证发布
+- `build-client-macos.yml`
+- `build-client-windows.yml`
+- `build-server-android.yml`
 
-- 检查 GitHub Release 页面
-- 检查 `update_config_github.json` 文件是否已更新
+这些工作流会调用项目里的构建脚本，并从 `VERSION.yaml` 提取版本号。
 
-## 故障排除
+### build number 回写
 
-### GitHub Actions 失败
+`build.yml` 结束时会递增并提交 `VERSION.yaml` 中的 build number。这是当前仓库的自动行为，发布文档应以此为前提理解版本变化。
 
-1. 检查 GitHub Actions 日志
-2. 确认构建产物是否成功生成
-3. 检查版本号是否正确
+## 四、正式发布阶段细节
 
-### 更新配置未生成
+### 真实版本来源
 
-1. 检查是否推送了版本标签（格式：`v*`）
-2. 检查 CI/CD 日志中的错误信息
-3. 确认有写入仓库的权限
+`release.yml` 会从 **build tag 对应提交里的 `VERSION.yaml`** 读取版本信息，而不是依赖 README 或手工拼接版本号。
 
-## 注意事项
+### Release 资产
 
-1. **版本号一致性**: 确保标签版本号与 `pubspec.yaml` 中的版本号一致（或使用标签版本号）
-2. **构建产物命名**: 构建产物的文件名必须与更新配置中的文件名匹配
-3. **权限要求**: CI/CD 需要写入仓库的权限（GitHub: `contents: write`）
+当前 GitHub Release 资产以 zip 包为主：
+
+- macOS：zip 中包含 dmg
+- Windows：zip 中包含 exe 安装程序
+- Android：zip 中包含 apk
+
+### 更新配置文件
+
+GitHub 更新配置文件不再发布在仓库原始文件地址，而是发布在固定的 `UpdateConfig` Release：
+
+- `update_config_github.json`
+- URL 形态：`https://github.com/<owner>/<repo>/releases/download/UpdateConfig/update_config_github.json`
+
+## 五、Gitee 同步阶段细节
+
+Gitee 同步不是构建阶段的一部分，而是**基于已发布 GitHub Release 的后处理**：
+
+- 读取 GitHub Release 资产
+- 在 Gitee 创建对应 Release
+- 更新固定 `config` Release 中的 `update_config_gitee.json`
+
+## 六、不要再沿用的旧认知
+
+以下说法已经不再准确：
+
+- “推 `v*` 标签就会自动构建并发版”
+- “GitHub 更新配置文件在 `raw.githubusercontent.com/.../main/update_config_github.json`”
+- “版本主要从 `pubspec.yaml` 读取”
+
+当前准确说法是：
+
+- **构建入口**：`build*` 标签
+- **发版入口**：`release.yml` / `create_release.sh`
+- **版本来源**：`VERSION.yaml`
+- **GitHub 更新配置位置**：`UpdateConfig` Release
+
+## 七、相关文档
+
+- [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md)
+- [`GITHUB_ACTIONS_SETUP.md`](GITHUB_ACTIONS_SETUP.md)
+- [`AUTO_UPDATE.md`](AUTO_UPDATE.md)
+- [`GITEE_SYNC_SETUP.md`](GITEE_SYNC_SETUP.md)

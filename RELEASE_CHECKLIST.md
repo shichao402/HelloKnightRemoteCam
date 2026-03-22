@@ -1,45 +1,19 @@
-# 发布检查清单
+# 发布检查清单（入口）
 
-## 发布前检查
+详细发布说明已经收敛到 [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md)。
 
-- [ ] 版本号已更新（使用 `./scripts/version.sh bump`）
-- [ ] 版本号已同步到 pubspec.yaml（使用 `./scripts/version.sh sync`）
-- [ ] 代码已测试通过
-- [ ] 所有更改已提交
+## 快速入口
 
-## 发布步骤
+- **详细步骤**：[`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md)
+- **CI/CD 流程**：[`docs/CI_CD_SETUP.md`](docs/CI_CD_SETUP.md)
+- **版本管理**：[`docs/VERSION_MANAGEMENT.md`](docs/VERSION_MANAGEMENT.md)
 
-1. **提交代码更改**
-   ```bash
-   git add .
-   git commit -m "准备发布版本 X.X.X"
-   git push origin main
-   ```
+## 当前发布流程速记
 
-2. **创建并推送版本标签**
-   ```bash
-   git tag v1.0.5  # 替换为实际版本号
-   git push origin v1.0.5
-   ```
+1. 先确认 `VERSION.yaml`
+2. 执行 `./scripts/create_build_tags.sh`
+3. 等待 `build.yml` 构建完成
+4. 执行 `./scripts/create_release.sh <x.y.z>`
+5. 验证 GitHub Release 与 `UpdateConfig` Release
 
-3. **等待 GitHub Actions 完成**
-   - 查看 Actions 页面：https://github.com/shichao402/HelloKnightRemoteCam/actions
-   - 等待所有构建完成（约 10-20 分钟）
-
-4. **验证发布结果**
-   - [ ] GitHub Release 已创建
-   - [ ] 所有平台的构建产物已上传
-   - [ ] 更新配置文件已更新到 GitHub 仓库
-
-## 发布后验证
-
-- [ ] 在客户端测试更新检查功能
-- [ ] 验证下载链接可访问
-- [ ] 检查版本号是否正确
-
-## 故障排除
-
-如果发布失败：
-1. 查看 GitHub Actions 日志
-2. 检查版本号是否正确
-3. 检查网络连接
+> 注意：当前仓库不是“直接推 `v*` 标签自动发版”的流程，而是“先 `build*` 构建，再手动触发 `release.yml` 创建正式 Release”。
