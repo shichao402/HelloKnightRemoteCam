@@ -1,6 +1,6 @@
 # HelloKnightRemoteCam 项目推进板
 
-> 更新日期：2026-03-22 (架构改造方案确认)
+> 更新日期：2026-03-22 (Core Service 骨架落地)
 > 定位：**全项目唯一推进入口**。当用户只说"继续推进 / 找下一个点 / 按项目往前做"时，先读这份文档，再决定读哪个专题文档。
 
 ## 这份文档解决什么问题
@@ -68,7 +68,7 @@
 
 | 顺位 | 主题 | 状态 | 这轮应该做什么 | 做到什么就停 | 先读什么 |
 |---|---|---|---|---|---|
-| A | Core Service 项目骨架 | `可开工` | 初始化 `core/` 目录：TypeScript 项目 + SQLite 持久化 + 任务数据模型 + REST API | API 能 CRUD 任务、能跑起来、有基础测试 | [架构改造方案](./ARCHITECTURE_REDESIGN.md) |
+| A | Core Service 项目骨架 | `执行中` | 初始化 `core/` 目录：TypeScript 项目 + SQLite 持久化 + 任务数据模型 + REST API | API 能 CRUD 任务、能跑起来、有基础测试 | [架构改造方案](./ARCHITECTURE_REDESIGN.md) |
 | B | Core Service 事件推送 | `可开工` | Core Service 增加 SSE/WebSocket 事件推送，任务状态变更时通知订阅者 | Flutter 客户端能实时收到任务变更通知 | [架构改造方案](./ARCHITECTURE_REDESIGN.md) |
 | C | Flutter 端任务模块 | `可开工` | 客户端新增任务模块：调 Core REST API + 任务列表/详情 UI + 拍摄产物关联任务 | 能在客户端浏览任务、关联拍摄产物、状态流转 | [架构改造方案](./ARCHITECTURE_REDESIGN.md) |
 | D | Core Service MCP Server | `可开工` | Core Service 增加 MCP Server 层，暴露任务 CRUD + 媒体关联等工具 | MCP 工具可被外部 MCP Client 正常调用 | [架构改造方案](./ARCHITECTURE_REDESIGN.md) |
@@ -78,14 +78,27 @@
 
 ## 当前默认开工项
 
-顺位 A（Core Service 项目骨架）是下一个应该推进的条目。
+顺位 A（Core Service 项目骨架）正在执行中。
 
-下次推进时应：
-- 确定 Core Service 技术栈细节（TypeScript + 具体框架选型）
-- 初始化 `core/` 项目骨架
-- 实现任务数据模型 + SQLite 持久化
-- 实现 REST API 端点
-- 基础测试
+### 已完成
+
+- ✅ 确定 Core Service 技术栈：TypeScript + Fastify + better-sqlite3 + Zod
+- ✅ 初始化 `core/` 项目骨架（package.json + tsconfig + 目录结构）
+- ✅ 实现任务数据模型（Task + Attachment + Submission）+ Zod 校验 schema
+- ✅ 实现 SQLite 持久化层（database.ts + task-repository.ts）
+- ✅ 实现 REST API 路由（任务 CRUD + 提交物管理 7 个端点）
+- ✅ 实现 SSE 事件推送（/api/events 端点 + EventBus）
+- ✅ 实现健康检查端点（/api/health）
+- ✅ 编写 TaskRepository 单元测试（8 个测试用例）
+- ✅ 创建构建/启动脚本（build_core.sh/bat + start_core.sh/bat）
+
+### 下次推进
+
+- 安装依赖（`cd core && npm install`）
+- 运行测试验证（`npm test`）
+- 启动服务试运行（`npm run dev`）
+- 用 curl 验证各 API 端点可用
+- 确认通过后将状态改为 `已完成`，开始推进顺位 B
 
 ## 明确不应该默认做的事
 
