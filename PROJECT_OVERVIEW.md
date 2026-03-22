@@ -1,276 +1,188 @@
-## HelloKnightRemoteCam 项目总览（精简版）
+# HelloKnightRemoteCam 项目总览
 
-一个基于 **Flutter** 的局域网远程相机控制系统：手机端作为相机服务器，桌面客户端（macOS / Windows）负责连接、预览、拍照/录像与文件管理，并且配有统一版本管理、自动更新和独立日志系统。
+本文档面向开发者，帮助你在较短时间内理解项目的**角色划分、代码布局、关键流程和常用文档入口**。
 
----
+如果你第一次接触本仓库，建议按下面顺序阅读：
 
-## 1. 整体架构与目录
+1. `README.md`
+2. `PROJECT_OVERVIEW.md`（当前文档）
+3. `docs/README.md`
 
-### 1.1 角色划分
+## 1. 系统角色
 
-- **Server（Android 手机端）**
-  - 使用 Flutter 构建的 Android 应用。
-  - 负责相机控制、HTTP API、WebSocket 实时通知、MJPEG 预览流输出。
-- **Client（macOS / Windows 客户端）**
-  - 使用 Flutter 构建的桌面应用。
-  - 负责设备连接、相机控制 UI、文件管理与下载、更新检查。
-- **Shared**
-  - 共享模型与部分服务逻辑，保证 Client 与 Server 行为一致。
-- **根目录脚本与配置**
-  - `VERSION.yaml`：统一版本配置（客户端/服务端版本号、兼容性要求、更新配置地址）。
-  - `scripts/`：版本管理、发布、日志收集等项目级脚本。
+### `server/`：Android 手机端
 
-### 1.2 主要目录结构
+- 负责相机控制
+- 暴露 HTTP API
+- 推送 WebSocket 实时通知
+- 输出 MJPEG 预览流
+- 提供文件列表、下载、删除等能力
+
+### `client/`：桌面主控端
+
+- 运行于 macOS / Windows
+- 负责连接手机端、展示预览、触发拍照/录像
+- 提供文件管理、下载与更新检查 UI
+
+### `shared/`：共享能力层
+
+当前已经落地为独立包，主要承载：
+
+- 更新检查相关模型与服务
+- 版本解析与版本比较工具
+- 归档、文件校验等共用能力
+
+这意味着“更新模块共享”已经不是设计设想，而是**当前现实结构的一部分**。
+
+## 2. 仓库布局
 
 ```text
 HelloKnightRemoteCam/
-├── client/                 # 主控端（macOS / Windows）
-│   ├── lib/                # Flutter 客户端代码（UI / services / models 等）
-│   └── scripts/            # 客户端构建 & 部署脚本
-├── server/                 # 手机端（Android Server）
-│   ├── lib/                # Flutter 服务端代码
-│   └── scripts/            # 服务端构建 & 部署脚本
-├── shared/                 # Client & Server 共享 Dart 包（模型 / 服务 / 工具）
-├── docs/                   # 专题设计文档（认证、预览、版本、CI/CD 等）
-├── scripts/                # 项目级脚本（版本、发布、日志收集）
-└── VERSION.yaml            # 统一版本配置（单一数据源）
+├── client/
+│   ├── lib/               # 客户端 Flutter 代码
+│   └── scripts/           # 客户端构建 / 部署脚本
+├── server/
+│   ├── lib/               # 服务端 Flutter 代码
+│   └── scripts/           # 服务端构建 / 部署脚本
+├── shared/
+│   └── lib/               # 共享模型、服务、工具
+├── docs/                  # 专题文档
+├── scripts/               # 根目录脚本
+├── VERSION.yaml           # 版本与更新配置的单一数据源
+├── README.md              # 项目入口
+└── PROJECT_OVERVIEW.md    # 开发者总览
 ```
 
----
+## 3. 核心运行链路
 
-## 2. 关键能力概览
+### 3.1 连接与控制
 
-- **远程控制**
-  - 拍照、开始/停止录像。
-  - 录像期间锁定设置，避免误操作。
-- **实时预览**
-  - 基于 `mjpeg_stream` 的 MJPEG 预览流。
-  - 支持方向锁定、手动旋转（0/90/180/270）、窗口自适应缩放（contain 逻辑，不裁剪）。
-  - 预览尺寸从 Server 通过 WebSocket / HTTP 状态统一下发，Client 统一更新。
-- **文件管理与下载**
-  - 浏览照片/视频，支持星标。
-  - 下载支持 HTTP Range 断点续传，最多 2 个并发任务。
-  - 下载进度持久化到 SQLite，应用重启后可恢复。
-- **版本管理与兼容性**
-  - 根目录 `VERSION.yaml` 作为唯一版本数据源（client/server 独立版本号 + 最小兼容版本）。
-  - 构建脚本自动同步版本号到各自 `pubspec.yaml` 与 assets 中的 `VERSION.yaml`。
-  - 连接时双向版本检查：Server 校验 Client，Client 校验 Server。
-- **自动更新**
-  - 基于 GitHub Releases / Gitee Releases。
-  - CI/CD 自动生成 `update_config_github.json` / `update_config_gitee.json`。
-  - Client 从配置 URL 读取可用版本与下载地址，提示用户更新。
-- **统一日志体系**
-  - Server：`LoggerService`，日志写入 `/data/data/.../logs/debug_*.log`。
-  - Client：`ClientLoggerService`，日志写入用户目录下的 `client_debug_*.log`。
-  - 根目录脚本 `scripts/collect_all_logs.sh` 一次性收集手机端与客户端日志。
+1. 用户在 Android 端启动服务。
+2. 桌面端输入 IP / 端口并发起连接。
+3. 双方进行版本兼容检查。
+4. 连接成功后，桌面端可进行：
+   - 拍照
+   - 开始 / 停止录像
+   - 获取相机状态
+   - 浏览与下载文件
+   - 拉取 MJPEG 预览流
 
----
+### 3.2 预览
 
-## 3. 开发与部署规范（必须遵守）
+- 预览流使用 MJPEG。
+- 预览方向支持锁定与手动旋转。
+- 预览区域按窗口大小自适应，优先保证不裁剪画面。
 
-> **强制：所有构建 / 部署 / 调试都必须通过脚本完成，禁止直接执行 `flutter`、`adb`、手动访问日志文件或使用 `tail`。**
+相关专题：
 
-### 3.1 环境准备
+- [`docs/PREVIEW_ROTATION.md`](docs/PREVIEW_ROTATION.md)
+- [`docs/PREVIEW_SIZE_OPTIMIZATION.md`](docs/PREVIEW_SIZE_OPTIMIZATION.md)
 
-1. 安装 Flutter 3.x。
-2. 配置 Android SDK（用于构建 Android 服务端）。
-3. 在 macOS 安装 Xcode（macOS 客户端）。
-4. 在 Windows 安装 Visual Studio（Windows 客户端）。
+### 3.3 文件下载
 
-### 3.2 安装依赖
+- 支持 HTTP Range 断点续传。
+- 下载任务支持失败重试。
+- 下载状态在客户端持久化。
 
-```bash
-# 客户端依赖
-cd client
-flutter pub get
+相关专题：
 
-# 服务端依赖
-cd ../server
-flutter pub get
-```
+- [`docs/FILE_STATE_UPDATE.md`](docs/FILE_STATE_UPDATE.md)
 
-### 3.3 构建与部署（必须用脚本）
+## 4. 版本、构建与发布
 
-**手机端（Server / Android）：**
+### 4.1 版本来源
 
-```bash
-cd server
+项目采用**单一数据源**原则：
 
-# 推荐：统一部署脚本（会自动同步版本号）
-./scripts/deploy.sh --debug
+- 版本号与更新地址统一存放在根目录 `VERSION.yaml`
+- `client/pubspec.yaml` 与 `server/pubspec.yaml` 由脚本同步
+- 自动更新地址也以 `VERSION.yaml` / 发布流程生成结果为准
 
-# 向后兼容脚本
-./scripts/deploy_android.sh
-```
+### 4.2 构建触发方式
 
-**桌面客户端（Client）：**
+当前流程不是直接推 `v*` 标签构建，而是：
 
-```bash
-cd client
+1. 用 `./scripts/create_build_tags.sh` 创建并推送 `build<x.y.z>` 标签
+2. GitHub Actions 的 `build.yml` 被触发，构建三个平台
+3. 构建成功后，流水线会自动回写 `VERSION.yaml` 中的 build number
+4. 再用 `./scripts/create_release.sh <x.y.z>` 触发 `release.yml` 创建正式 GitHub Release
 
-# macOS
-./scripts/deploy.sh --debug --macos
-# 或
-./scripts/deploy_mac.sh
+### 4.3 自动更新
 
-# Windows（Git Bash / WSL）
-bash scripts/deploy.sh --debug --windows
-# 或
-scripts\deploy_windows.bat
-```
+- GitHub 更新配置文件：固定发布到 `UpdateConfig` Release
+- Gitee 更新配置文件：固定发布到 `config` Release
+- 客户端通过更新配置 URL 拉取版本、文件名、下载地址与哈希
 
-更多参数与组合方式请参考 `docs/SCRIPTS.md`。
+相关文档：
 
----
+- [`docs/VERSION_MANAGEMENT.md`](docs/VERSION_MANAGEMENT.md)
+- [`docs/CI_CD_SETUP.md`](docs/CI_CD_SETUP.md)
+- [`docs/AUTO_UPDATE.md`](docs/AUTO_UPDATE.md)
+- [`docs/GITEE_SYNC_SETUP.md`](docs/GITEE_SYNC_SETUP.md)
 
-## 4. 使用流程（从零到跑通）
+## 5. 开发与调试约束
 
-### 4.1 启动手机端
+### 必须遵守
 
-1. 在 Android 手机上安装并启动 Server 应用。
-2. 授予相机、麦克风、存储权限。
-3. 点击“启动服务器”，记下应用界面显示的 IP 与端口（默认 `8080`）。
-4. 如需排错，在设置中开启“调试模式”（会写更详细的日志）。
+- 使用脚本完成部署与发布，不要手动拼流程。
+- 版本信息以 `VERSION.yaml` 为准，不要手改多个地方。
+- 出现问题先收集日志，再分析原因。
 
-### 4.2 启动客户端并连接
-
-1. 启动桌面客户端应用。
-2. 在连接界面输入：
-   - 服务器 IP（如 `192.168.1.100`）
-   - 端口（默认 `8080`）
-3. 点击“连接”。
-4. 如果版本不兼容，客户端会根据 `VERSION.yaml` 的兼容配置给出错误提示。
-
-### 4.3 基本操作
-
-- **相机控制**
-  - 拍照：点击“拍照”按钮。
-  - 录像：点击“开始录像”开始，再次点击停止。
-  - 录像时禁止修改录像相关设置，保证稳定性。
-- **实时预览**
-  - 会自动拉取 MJPEG 预览流。
-  - 可以锁定方向或手动旋转画面。
-  - 预览窗口大小可调，画面自动等比缩放（不裁剪）。
-- **文件管理与下载**
-  - 切换到文件管理页面浏览照片/视频。
-  - 支持星标、删除。
-  - 下载会进入下载队列，支持暂停/继续，失败自动重试。
-
----
-
-## 5. 版本管理与自动更新（关键流程）
-
-### 5.1 版本号与兼容性
-
-- 唯一版本数据源：根目录 `VERSION.yaml`。
-  - `client.version` / `server.version`
-  - `compatibility.min_client_version` / `compatibility.min_server_version`
-- 管理脚本：`scripts/version.sh`
-
-常用命令：
+### 常用命令
 
 ```bash
-# 查看当前版本
+# 查看版本
 ./scripts/version.sh get
 
-# 设置版本
-./scripts/version.sh set client 1.0.8+13
-./scripts/version.sh set server 1.0.8+13
+# 触发构建
+./scripts/create_build_tags.sh
 
-# 递增版本（语义化）
-./scripts/version.sh bump client minor
-./scripts/version.sh bump server patch
+# 创建 Release
+./scripts/create_release.sh 1.0.8
 
-# 同步版本号到各自 pubspec.yaml
-./scripts/version.sh sync
-```
-
-详细规则与代码集成方式参见：`docs/VERSION_MANAGEMENT.md` 与 `docs/VERSION_COPY_STRATEGY.md`。
-
-### 5.2 CI/CD 与自动更新
-
-- 基于 **GitHub Actions** 进行构建与发布：
-  - 构建 macOS / Windows 客户端与 Android 服务端。
-  - 创建 GitHub Release，仅上传 zip 包（内部包含 dmg / exe / apk）。
-  - 生成 `update_config_github.json` 并推送到仓库。
-- 可选：通过工作流同步 Release 至 Gitee，并生成 `update_config_gitee.json`。
-- 客户端默认从 GitHub 的配置 URL 检查更新，用户可在设置中切换为 Gitee。
-
-相关详细文档：
-
-- `docs/CI_CD_SETUP.md`
-- `docs/GITHUB_ACTIONS_SETUP.md`
-- `docs/AUTO_UPDATE.md`
-- `docs/GITEE_SYNC_SETUP.md`
-
----
-
-## 6. 日志与调试流程（必看）
-
-### 6.1 日志位置
-
-- **手机端（Server）**：`/data/data/com.firoyang.helloknightrcc_server/files/logs/debug_*.log`
-- **客户端（Client，macOS）**：`~/Library/Application Support/com.example.helloKnightRCC/logs/client_debug_*.log`
-- （其他平台路径以具体实现为准）
-
-### 6.2 收集所有日志（强制使用脚本）
-
-```bash
+# 收集日志
 ./scripts/collect_all_logs.sh
 ```
 
-脚本会自动：
+## 6. 项目推进与规划
 
-- 检测 Android 设备。
-- 收集手机端与客户端日志文件。
-- 汇总到统一目录，便于分析。
+`docs/plans/requirements-board.md` 是全项目唯一推进入口。当请求是泛化的（如"继续推进"、"找下一个点"、"按项目往前做"），先读该文件，选第一个非观察态的高优先级条目开工。
 
-> **禁止：**
-> - 手动执行 `adb`。
-> - 手动访问日志目录。
-> - 使用 `tail` 跟日志（可能漏关键信息）。
+专题级别的 checklist 只在对应专题内有效，不作为全项目优先级来源。
 
-### 6.3 日志使用规范（代码层）
+## 7. 推荐阅读地图
 
-- 禁止使用 `print()` / `debugPrint()`。
-- 客户端必须使用 `ClientLoggerService`。
-- 服务端必须使用 `LoggerService`。
-- 所有日志需要带有有意义的 tag（如：`PREVIEW`、`DOWNLOAD`、`AUTH` 等）。
+### 规划与推进
 
-更多细节可参考根目录规则说明与现有服务实现。
+- [`docs/plans/requirements-board.md`](docs/plans/requirements-board.md)：项目推进板（唯一推进入口）
+- [`docs/plans/ARCHITECTURE_REDESIGN.md`](docs/plans/ARCHITECTURE_REDESIGN.md)：架构改造方案
 
----
+### 入门入口
 
-## 7. 进阶设计文档导航
+- `README.md`
+- [`docs/README.md`](docs/README.md)
 
-当需要深入了解具体子系统实现细节时，可查阅 `docs/` 下的专题文档：
+### 架构与机制
 
-- **认证与版本兼容**
-  - `docs/AUTH_ARCHITECTURE.md`
-  - `docs/VERSION_MANAGEMENT.md`
-  - `docs/VERSION_COPY_STRATEGY.md`
-- **预览与 UI 优化**
-  - `docs/PREVIEW_ROTATION.md`              （预览旋转与转置）
-  - `docs/PREVIEW_SIZE_OPTIMIZATION.md`     （预览尺寸数据流优化）
-  - `docs/FILE_STATE_UPDATE.md`            （文件状态更新最佳实践）
-- **更新模块与自动发布**
-  - `docs/UPDATE_MODULE_ARCHITECTURE.md`
-  - `docs/AUTO_UPDATE.md`
-  - `docs/CI_CD_SETUP.md`
-  - `docs/GITHUB_ACTIONS_SETUP.md`
-  - `docs/GITEE_SYNC_SETUP.md`
-- **其他辅助说明**
-  - `docs/SCRIPTS.md`                  （脚本说明）
-  - `docs/CURSOR_GIT_SYNC.md`         （仅与开发工具 Cursor 的 git 行为相关，可按需参考）
+- [`docs/AUTH_ARCHITECTURE.md`](docs/AUTH_ARCHITECTURE.md)
+- [`docs/UPDATE_MODULE_ARCHITECTURE.md`](docs/UPDATE_MODULE_ARCHITECTURE.md)
+- [`docs/VERSION_COPY_STRATEGY.md`](docs/VERSION_COPY_STRATEGY.md)
 
----
+### 工程与发布
 
-## 8. 建议阅读顺序
+- [`docs/SCRIPTS.md`](docs/SCRIPTS.md)
+- [`docs/VERSION_MANAGEMENT.md`](docs/VERSION_MANAGEMENT.md)
+- [`docs/CI_CD_SETUP.md`](docs/CI_CD_SETUP.md)
+- [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md)
 
-1. 本文档：`PROJECT_OVERVIEW.md`（整体认知与关键流程）。
-2. 根目录 `README.md`（更详细的功能与 API 说明）。
-3. 视需求选择性阅读 `docs/` 下的专题设计文档。
+### 预览与 UI 专题
 
-本总览文档的目标是：**让新同学在 10 分钟内搞清楚项目做什么、怎么跑起来、关键脚本和日志/版本/更新的核心流程。**
+- [`docs/PREVIEW_ROTATION.md`](docs/PREVIEW_ROTATION.md)
+- [`docs/PREVIEW_SIZE_OPTIMIZATION.md`](docs/PREVIEW_SIZE_OPTIMIZATION.md)
+- [`docs/FILE_STATE_UPDATE.md`](docs/FILE_STATE_UPDATE.md)
 
+## 8. 这份文档的定位
 
+- `README.md`：对外入口，强调项目是什么、怎么开始。
+- `PROJECT_OVERVIEW.md`：对内总览，强调仓库如何组织、关键流程如何串起来。
+- `docs/README.md`：专题文档索引，告诉你“该去哪里看细节”。
